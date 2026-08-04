@@ -132,6 +132,9 @@ func validateCmd(args []string) {
 		if err != nil {
 			fatal(err)
 		}
+		if err := topology.ValidateSemantics(ir, registry.Default); err != nil {
+			fatal(err)
+		}
 		for _, w := range ir.DeprecationWarnings {
 			fmt.Fprintf(os.Stderr, "warning: %s\n", w)
 		}

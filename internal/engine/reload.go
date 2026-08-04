@@ -246,6 +246,14 @@ func (e *Engine) swapPipeline(ctx context.Context, name string, ir *topology.Top
 		return fmt.Errorf("pipeline %q not found", name)
 	}
 
+	// Build the replacement before touching the running pipeline: a config
+	// that cannot be instantiated must never take the live pipeline down
+	// (design §6.6 — 校验失败 → 保留旧 Pipeline).
+	newPipe, err := NewPipeline(ctx, e.reg, ir, e.metrics)
+	if err != nil {
+		return fmt.Errorf("build pipeline %q: %w", name, err)
+	}
+
 	drainTimeout := 30 * time.Second
 	if ir.Engine.DrainTimeout != "" {
 		if d, err := time.ParseDuration(ir.Engine.DrainTimeout); err == nil {
@@ -253,18 +261,25 @@ func (e *Engine) swapPipeline(ctx context.Context, name string, ir *topology.Top
 		}
 	}
 	stopCtx, cancel := context.WithTimeout(ctx, drainTimeout)
-	err := old.Stop(stopCtx)
+	err = old.Stop(stopCtx)
 	cancel()
 	if err != nil {
 		return fmt.Errorf("stop pipeline %q: %w", name, err)
 	}
 
-	newPipe, err := NewPipeline(ctx, e.reg, ir, e.metrics)
-	if err != nil {
-		return fmt.Errorf("build pipeline %q: %w", name, err)
-	}
 	if err := newPipe.Start(ctx); err != nil {
-		return fmt.Errorf("start pipeline %q: %w", name, err)
+		// The old pipeline is already stopped; try to bring the previous
+		// config back up instead of leaving the pipeline dead.
+		startErr := err
+		if restored, rerr := NewPipeline(ctx, e.reg, old.ir, e.metrics); rerr == nil {
+			if serr := restored.Start(ctx); serr == nil {
+				e.mu.Lock()
+				e.pipelines[name] = restored
+				e.mu.Unlock()
+				return fmt.Errorf("start pipeline %q: %w (restored previous config)", name, startErr)
+			}
+		}
+		return fmt.Errorf("start pipeline %q: %w", name, startErr)
 	}
 
 	e.mu.Lock()

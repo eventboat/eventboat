@@ -74,7 +74,6 @@ source:
   config:
     address: ":8081"
     path: /webhook
-    method: POST
 ```
 
 ## Transform plugins
@@ -98,7 +97,6 @@ transform:
 transform:
   type: route
   config:
-    action: move
     routes:
       high: "payload.priority == 'high'"
       _default: "true"

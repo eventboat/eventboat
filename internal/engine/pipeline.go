@@ -2,8 +2,11 @@ package engine
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
+	"log/slog"
 	"math"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -26,12 +29,12 @@ type Pipeline struct {
 	stageErrorMode map[string]string
 	inflight       atomic.Int32
 	graph          *runtimeGraph
-	decoders map[string]codec.Codec // stage ID → decoder
-	encoders map[string]codec.Codec // stage ID → encoder
-	cancel   context.CancelFunc
-	wg       sync.WaitGroup
-	stageWG  sync.WaitGroup
-	started  atomic.Bool
+	decoders       map[string]codec.Codec // stage ID → decoder
+	encoders       map[string]codec.Codec // stage ID → encoder
+	cancel         context.CancelFunc
+	wg             sync.WaitGroup
+	stageWG        sync.WaitGroup
+	started        atomic.Bool
 }
 
 func NewPipeline(ctx context.Context, reg *registry.Registry, ir *topology.TopologyIR, metrics *observability.Metrics) (*Pipeline, error) {
@@ -327,33 +330,70 @@ func (p *Pipeline) runSource(ctx context.Context, id string, node *runtimeNode) 
 			if err != nil && ctx.Err() == nil {
 				_ = err
 			}
+			// Consume already returned, so nothing more is sent to out — but
+			// messages it already produced may still be buffered there. The
+			// select above can pick errCh while out is also ready; drain the
+			// remainder instead of stranding it.
+			p.drainSourceOut(ctx, id, src, out)
 			return
 		case msg, ok := <-out:
 			if !ok {
 				return
 			}
-			if msg.ID == "" {
-				msg.ID = uuid.NewString()
-			}
-			if dec, ok := p.decoders[id]; ok {
-				if msg.ParsedCodec() == "" {
-					msg.SetParsedCodec(dec.Name())
-				}
-				if msg.DecoderStageID() == "" {
-					msg.SetDecoderStageID(id)
-				}
-			}
-			if acking, ok := src.(stage.AckingSource); ok {
-				msg.SetAckFn(func(err error) {
-					acking.OnAck(msg, err)
-				})
-			}
-			if err := p.beginMessageLifecycle(ctx, msg); err != nil {
+			if !p.handleSourceMessage(ctx, id, src, msg) {
 				return
 			}
-			p.dispatchFrom(ctx, id, msg)
 		}
 	}
+}
+
+// drainSourceOut flushes messages a source handed to out before Consume
+// returned. Consume has exited, so a non-blocking read sees everything left.
+func (p *Pipeline) drainSourceOut(ctx context.Context, id string, src stage.Source, out chan *message.Message) {
+	for {
+		select {
+		case msg, ok := <-out:
+			if !ok {
+				return
+			}
+			if !p.handleSourceMessage(ctx, id, src, msg) {
+				return
+			}
+		default:
+			return
+		}
+	}
+}
+
+// handleSourceMessage runs the normal per-message source pipeline. It returns
+// false when the lifecycle could not be started (shutdown backpressure), in
+// which case the message is nacked so sources see a terminal ack.
+func (p *Pipeline) handleSourceMessage(ctx context.Context, id string, src stage.Source, msg *message.Message) bool {
+	if msg.ID == "" {
+		msg.ID = uuid.NewString()
+	}
+	msg.SetSourceStageID(id)
+	if dec, ok := p.decoders[id]; ok {
+		if msg.ParsedCodec() == "" {
+			msg.SetParsedCodec(dec.Name())
+		}
+		if msg.DecoderStageID() == "" {
+			msg.SetDecoderStageID(id)
+		}
+	}
+	if acking, ok := src.(stage.AckingSource); ok {
+		// Wrap, not Set: an ackFn attached earlier (by the source
+		// itself or a buffer layer) must stay on the chain.
+		msg.WrapAckFn(func(err error) {
+			acking.OnAck(msg, err)
+		})
+	}
+	if err := p.beginMessageLifecycle(ctx, msg); err != nil {
+		msg.Ack(err)
+		return false
+	}
+	p.dispatchFrom(ctx, id, msg)
+	return true
 }
 
 func (p *Pipeline) ensureParsed(msg *message.Message) error {
@@ -463,7 +503,16 @@ func (p *Pipeline) runTransform(ctx context.Context, id string, node *runtimeNod
 	for {
 		select {
 		case <-ctx.Done():
-			return
+			// Nack batches still queued so upstream sources are not left
+			// hanging after shutdown.
+			for {
+				select {
+				case batch := <-node.batchIn:
+					p.ackBatchError(id, batch, ctx.Err())
+				default:
+					return
+				}
+			}
 		case batch := <-node.batchIn:
 			var filtered []*message.Message
 			var passThrough []*message.Message
@@ -558,20 +607,33 @@ func (p *Pipeline) runSink(ctx context.Context, id string, node *runtimeNode) {
 	}
 	writeCh := make(chan writeJob, maxInFlight)
 
+	// Once the pipeline context is cancelled, in-flight writes switch to an
+	// independent drain context (engine.drain_timeout) so the final batches
+	// still get a live deadline instead of failing immediately.
+	var drainCtx atomic.Value // stores *drainWriteCtx
+	writeCtx := func() context.Context {
+		if ctx.Err() == nil {
+			return ctx
+		}
+		if d := drainCtx.Load(); d != nil {
+			return d.(*drainWriteCtx).ctx
+		}
+		d := p.newDrainWriteCtx()
+		drainCtx.Store(d)
+		return d.ctx
+	}
+
+	var writerWG sync.WaitGroup
 	for i := 0; i < maxInFlight; i++ {
 		p.stageWG.Add(1)
+		writerWG.Add(1)
 		go func() {
 			defer p.stageWG.Done()
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				case job, ok := <-writeCh:
-					if !ok {
-						return
-					}
-					p.flushSinkBatch(ctx, sk, id, delivery, job.batch)
-				}
+			defer writerWG.Done()
+			// Drain writeCh until it is closed: jobs queued at shutdown must
+			// still be written and acked, not abandoned.
+			for job := range writeCh {
+				p.flushSinkBatch(writeCtx(), sk, id, delivery, job.batch)
 			}
 		}()
 	}
@@ -591,7 +653,7 @@ func (p *Pipeline) runSink(ctx context.Context, id string, node *runtimeNode) {
 		copy(cp, toFlush)
 		select {
 		case <-ctx.Done():
-			p.flushSinkBatch(ctx, sk, id, delivery, cp)
+			p.flushSinkBatch(writeCtx(), sk, id, delivery, cp)
 		case writeCh <- writeJob{batch: cp}:
 		}
 	}
@@ -619,6 +681,12 @@ func (p *Pipeline) runSink(ctx context.Context, id string, node *runtimeNode) {
 			}
 			flush()
 			close(writeCh)
+			// Wait for writers to finish the queued jobs, then release the
+			// drain context if one was created.
+			writerWG.Wait()
+			if d := drainCtx.Load(); d != nil {
+				d.(*drainWriteCtx).cancel()
+			}
 			return
 		case <-timerC:
 			flush()
@@ -631,23 +699,50 @@ func (p *Pipeline) runSink(ctx context.Context, id string, node *runtimeNode) {
 	}
 }
 
+// drainWriteCtx bounds writes that outlive the cancelled pipeline context.
+type drainWriteCtx struct {
+	ctx    context.Context
+	cancel context.CancelFunc
+}
+
+// newDrainWriteCtx returns a fresh context bounded by engine.drain_timeout
+// (default 30s) for writes that outlive the cancelled pipeline context.
+func (p *Pipeline) newDrainWriteCtx() *drainWriteCtx {
+	d := 30 * time.Second
+	if p.ir != nil && p.ir.Engine.DrainTimeout != "" {
+		if parsed, err := time.ParseDuration(p.ir.Engine.DrainTimeout); err == nil && parsed > 0 {
+			d = parsed
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), d)
+	return &drainWriteCtx{ctx: ctx, cancel: cancel}
+}
+
 func (p *Pipeline) flushSinkBatch(ctx context.Context, sk stage.Sink, id string, delivery *config.DeliverySpec, batch []*message.Message) {
 	start := time.Now()
 	for _, m := range batch {
 		_ = p.reserializeIfDirty(m, id)
 	}
-	err := p.writeWithRetry(ctx, sk, batch, delivery)
+	retries, err := p.writeWithRetry(ctx, sk, batch, delivery)
+	var dlqDelivered []bool
 	if err != nil {
 		if p.metrics != nil {
 			p.metrics.IncStageError(p.ir.Name, id, "write")
 		}
-		p.deliverToDLQ(batch, err, id)
+		dlqDelivered = p.deliverToDLQ(batch, err, id, delivery, retries)
 	}
 	if p.metrics != nil {
 		p.metrics.ObserveStage(p.ir.Name, id, topology.KindSink, time.Since(start))
 	}
-	for _, m := range batch {
-		m.Ack(err)
+	for i, m := range batch {
+		ackErr := err
+		if dlqDelivered != nil && dlqDelivered[i] {
+			// The failure reached its terminal disposition (DLQ): ack with
+			// nil so the source commits instead of redelivering — Kafka
+			// Connect DLQ semantics.
+			ackErr = nil
+		}
+		m.Ack(ackErr)
 	}
 }
 
@@ -660,7 +755,9 @@ func (p *Pipeline) findDeliveryForStage(stageID string) *config.DeliverySpec {
 	return nil
 }
 
-func (p *Pipeline) writeWithRetry(ctx context.Context, sk stage.Sink, batch []*message.Message, delivery *config.DeliverySpec) error {
+// writeWithRetry returns the number of retries actually performed (0 on
+// first-attempt success) alongside the error.
+func (p *Pipeline) writeWithRetry(ctx context.Context, sk stage.Sink, batch []*message.Message, delivery *config.DeliverySpec) (int, error) {
 	maxRetries := 0
 	backoff := "exponential"
 	if delivery != nil && delivery.Retry != nil {
@@ -673,18 +770,18 @@ func (p *Pipeline) writeWithRetry(ctx context.Context, sk stage.Sink, batch []*m
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		lastErr = sk.Write(ctx, batch)
 		if lastErr == nil {
-			return nil
+			return attempt, nil
 		}
 		if attempt < maxRetries {
 			delay := retryDelay(attempt, backoff)
 			select {
 			case <-ctx.Done():
-				return ctx.Err()
+				return attempt, ctx.Err()
 			case <-time.After(delay):
 			}
 		}
 	}
-	return fmt.Errorf("retries exhausted (%d attempts): %w", maxRetries+1, lastErr)
+	return maxRetries, fmt.Errorf("retries exhausted (%d attempts): %w", maxRetries+1, lastErr)
 }
 
 func retryDelay(attempt int, backoff string) time.Duration {
@@ -699,38 +796,92 @@ func retryDelay(attempt int, backoff string) time.Duration {
 	}
 }
 
-func (p *Pipeline) deliverToDLQ(batch []*message.Message, err error, sourceStageID string) {
-	dlqSinkID := ""
-	if p.ir.DLQ != nil {
-		dlqSinkID = p.ir.DLQ.Sink
-	}
-	if dlqSinkID == "" {
-		// No DLQ configured — messages are dropped (already acked with error)
-		return
+// deliverToDLQ routes a failed batch along the DLQ fallback chain (design
+// §6.5): inbound edge delivery.dlq → pipeline-level dlq.sink → drop.
+//
+// It returns one entry per message: true when the message reached a DLQ sink
+// (the failure is disposed of, so the original message must be acked with
+// nil — Kafka Connect semantics), false when it was dropped (no DLQ
+// configured) or the DLQ write itself failed (keep the nack so the source
+// can redeliver). Nil is returned when no DLQ stage was usable at all.
+func (p *Pipeline) deliverToDLQ(batch []*message.Message, err error, sourceStageID string, delivery *config.DeliverySpec, retries int) []bool {
+	dlqSink, dlqSinkID := p.resolveDLQSink(delivery)
+	if dlqSink == nil {
+		// No DLQ configured (or none of the referenced stages is a usable
+		// sink) — messages are dropped (already acked with error)
+		return nil
 	}
 	if p.metrics != nil {
-		p.metrics.IncDLQ(p.ir.Name, dlqSinkID, "sink_error")
+		p.metrics.IncDLQ(p.ir.Name, dlqSinkID, "sink_write_error")
 	}
-	dlqStage, ok := p.stages[dlqSinkID]
-	if !ok {
-		return
-	}
-	dlqSink, ok := dlqStage.(stage.Sink)
-	if !ok {
-		return
-	}
+	// DLQ writes run under a bounded context and failures are logged, never
+	// silently swallowed.
+	d := p.newDrainWriteCtx()
+	defer d.cancel()
 	now := time.Now().UTC().Format(time.RFC3339)
-	for _, m := range batch {
-		dlqMsg := message.New(m.OriginalPayload(), map[string]any{
-			"er-error-reason":   err.Error(),
-			"er-error-stage":    sourceStageID,
-			"er-error-timestamp": now,
+	delivered := make([]bool, len(batch))
+	for i, m := range batch {
+		meta := map[string]any{
+			"er-error-reason":      err.Error(),
+			"er-error-type":        "sink_write_error",
+			"er-error-stage":       sourceStageID,
+			"er-error-timestamp":   now,
 			"er-original-pipeline": p.ir.Name,
-			"er-retry-count":    "0",
-		})
+			"er-retry-count":       strconv.Itoa(retries),
+		}
+		if src := m.SourceStageID(); src != "" {
+			meta["er-original-source"] = src
+		}
+		// kafka provenance, when the source recorded it (§6.5 — 如适用)
+		if v, ok := m.Metadata["kafka.topic"]; ok {
+			meta["er-original-topic"] = v
+		}
+		if v, ok := m.Metadata["kafka.partition"]; ok {
+			meta["er-original-partition"] = v
+		}
+		if v, ok := m.Metadata["kafka.offset"]; ok {
+			meta["er-original-offset"] = v
+		}
+		if p.ir.DLQ != nil && p.ir.DLQ.IncludeCurrentPayload {
+			meta["er-current-payload"] = base64.StdEncoding.EncodeToString(m.Payload)
+		}
+		dlqMsg := message.New(m.OriginalPayload(), meta)
 		dlqMsg.ID = uuid.NewString()
-		_ = dlqSink.Write(context.Background(), []*message.Message{dlqMsg})
+		if werr := dlqSink.Write(d.ctx, []*message.Message{dlqMsg}); werr != nil {
+			slog.Warn("dlq write failed, message dropped",
+				"pipeline", p.ir.Name, "dlq_sink", dlqSinkID, "msg", m.ID, "err", werr)
+			continue
+		}
+		delivered[i] = true
 	}
+	return delivered
+}
+
+// resolveDLQSink walks the fallback chain and returns the first configured
+// DLQ reference that points at a usable sink stage.
+func (p *Pipeline) resolveDLQSink(delivery *config.DeliverySpec) (stage.Sink, string) {
+	candidates := [2]string{}
+	if delivery != nil {
+		candidates[0] = delivery.DLQ
+	}
+	if p.ir.DLQ != nil {
+		candidates[1] = p.ir.DLQ.Sink
+	}
+	for _, id := range candidates {
+		if id == "" {
+			continue
+		}
+		st, ok := p.stages[id]
+		if !ok {
+			slog.Warn("dlq sink stage not found, trying next fallback",
+				"pipeline", p.ir.Name, "dlq_sink", id)
+			continue
+		}
+		if sink, ok := st.(stage.Sink); ok {
+			return sink, id
+		}
+	}
+	return nil, ""
 }
 
 func (p *Pipeline) Name() string {

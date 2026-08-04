@@ -250,6 +250,7 @@ source:
 |--------|------|--------|------|
 | `address` | string | `:8080` | 监听地址；也可用 `listen` 别名 |
 | `path` | string | `/` | 接收路径 |
+| `max_body_bytes` | int | `10485760` | 请求 body 上限（字节）；超限返回 413 |
 
 写入 metadata：`http.method`、`http.path`。
 
@@ -398,6 +399,7 @@ sink:
 |--------|------|--------|------|
 | `url` | string | — | **必填。** 目标 URL |
 | `method` | string | `POST` | HTTP 方法 |
+| `timeout` | duration | `30s` | 单次请求超时（如 `5s`、`1m`） |
 
 ```yaml
 sink:
@@ -704,14 +706,16 @@ pipeline:
 
 | 语法 | 说明 |
 |------|------|
-| `${VAR}` | 替换为环境变量值；未设置时保留字面量（YAML）或空（HOCON） |
-| `${?VAR}` | 可选替换；未设置时省略 |
+| `${VAR}` | 替换为环境变量值；YAML 未设置时保留字面量，HOCON 未设置时解析报错 |
+| `${?VAR}` | 可选替换；未设置时替换为空字符串 |
 
 ```yaml
 config:
   brokers: ["${KAFKA_BROKERS}"]
   optional_tag: ${?OPTIONAL_TAG}
 ```
+
+**替换范围：** 当前实现仅替换 `metadata` 中的字符串值，以及 `steps.*.{source,transform,sink}.config` / 平坦 `pipeline[].config` 内的字符串值（递归处理嵌套 map / 数组）。顶层 `engine`、`edgeDefaults`、`dlq`、`observability`、`codecs` 等字段暂不进行环境变量替换。
 
 ```hocon
 config {
@@ -811,7 +815,7 @@ K8s Operator **仅接受 YAML CRD**；HOCON 用于集群外本地配置。
 | `filesystem` | — | v2.1+ 规划 |
 | `jdbc` | — | v2.1+ 规划 |
 | — | `cron` | `schedule`, `payload` |
-| — | `http_server` | `address`, `path` |
+| — | `http_server` | `address`, `path`, `max_body_bytes` |
 
 ### Sink 插件对照
 

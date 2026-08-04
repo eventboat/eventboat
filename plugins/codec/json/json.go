@@ -2,6 +2,7 @@ package jsoncodec
 
 import (
 	"encoding/json"
+	"fmt"
 
 	"github.com/edgesets/edgestream/internal/codec"
 	"github.com/edgesets/edgestream/internal/registry"
@@ -10,7 +11,11 @@ import (
 
 func init() {
 	registry.RegisterCodec("json", func(cfg map[string]any) (codec.Codec, error) {
-		return &JSON{}, nil
+		j := &JSON{}
+		if err := j.ValidateConfig(cfg); err != nil {
+			return nil, err
+		}
+		return j, nil
 	})
 }
 
@@ -34,4 +39,11 @@ func (j *JSON) OutputType() *cel.Type {
 	return cel.MapType(cel.StringType, cel.DynType)
 }
 
-func (j *JSON) ValidateConfig(map[string]any) error { return nil }
+// ValidateConfig rejects unknown fields: the json codec takes no config, so a
+// non-empty config almost certainly means a user typo that would be ignored.
+func (j *JSON) ValidateConfig(cfg map[string]any) error {
+	for k := range cfg {
+		return fmt.Errorf("json codec: unknown config field %q", k)
+	}
+	return nil
+}

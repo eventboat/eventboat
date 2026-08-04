@@ -92,13 +92,10 @@ func (t *Transform) Process(ctx context.Context, batch []*message.Message) ([]*m
 	out := make([]*message.Message, 0, len(batch))
 	for _, msg := range batch {
 		cp := msg.ShallowCopy()
-		payload := map[string]any{}
-		if cp.ParsedData() != nil {
-			if m, ok := cp.ParsedData().(map[string]any); ok {
-				payload = m
-			}
-		} else if len(cp.Payload) > 0 {
-			_ = json.Unmarshal(cp.Payload, &payload)
+		cp.EnsureWritable()
+		payload, err := routePayload(cp)
+		if err != nil {
+			return nil, err
 		}
 		evalCtx := &eql.EvalContext{
 			Msg:     eql.NewMsgAdapter(cp),
@@ -128,5 +125,19 @@ func (t *Transform) Process(ctx context.Context, batch []*message.Message) ([]*m
 		out = append(out, cp)
 	}
 	return out, nil
+}
+
+func routePayload(msg *message.Message) (map[string]any, error) {
+	payload := map[string]any{}
+	if msg.ParsedData() != nil {
+		if m, ok := msg.ParsedData().(map[string]any); ok {
+			payload = m
+		}
+	} else if len(msg.Payload) > 0 {
+		if err := json.Unmarshal(msg.Payload, &payload); err != nil {
+			return nil, err
+		}
+	}
+	return payload, nil
 }
 

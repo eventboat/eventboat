@@ -1,6 +1,8 @@
 package rawcodec
 
 import (
+	"fmt"
+
 	"github.com/edgesets/edgestream/internal/codec"
 	"github.com/edgesets/edgestream/internal/registry"
 	cel "github.com/google/cel-go/cel"
@@ -8,7 +10,11 @@ import (
 
 func init() {
 	registry.RegisterCodec("raw", func(cfg map[string]any) (codec.Codec, error) {
-		return &Raw{}, nil
+		r := &Raw{}
+		if err := r.ValidateConfig(cfg); err != nil {
+			return nil, err
+		}
+		return r, nil
 	})
 }
 
@@ -27,7 +33,7 @@ func (r *Raw) Encode(data any) ([]byte, error) {
 	case string:
 		return []byte(v), nil
 	default:
-		return nil, nil
+		return nil, fmt.Errorf("raw codec: cannot encode %T", data)
 	}
 }
 
@@ -35,4 +41,11 @@ func (r *Raw) OutputType() *cel.Type {
 	return cel.BytesType
 }
 
-func (r *Raw) ValidateConfig(map[string]any) error { return nil }
+// ValidateConfig rejects unknown fields: the raw codec takes no config, so a
+// non-empty config almost certainly means a user typo that would be ignored.
+func (r *Raw) ValidateConfig(cfg map[string]any) error {
+	for k := range cfg {
+		return fmt.Errorf("raw codec: unknown config field %q", k)
+	}
+	return nil
+}

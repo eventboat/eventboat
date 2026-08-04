@@ -15,12 +15,13 @@ type Message struct {
 	parsedDirty     bool
 	parsedCodec     string
 	decoderStageID  string
+	sourceStageID   string
 	readOnly        atomic.Bool
 	cowMu           sync.Mutex
 	originalPayload []byte
 	ctx             context.Context
 	ackFn           func(error)
-	errCount        int
+	acked           atomic.Bool
 }
 
 func New(payload []byte, metadata map[string]any) *Message {
@@ -48,6 +49,12 @@ func (m *Message) SetAckFn(fn func(error)) {
 	m.ackFn = fn
 }
 
+// AckFn returns the current ack handler, or nil. Buffer layers use it to
+// carry the chain across serialization boundaries (e.g. the disk WAL).
+func (m *Message) AckFn() func(error) {
+	return m.ackFn
+}
+
 // WrapAckFn chains an additional ack handler before any existing handler.
 func (m *Message) WrapAckFn(extra func(error)) {
 	prev := m.ackFn
@@ -61,7 +68,12 @@ func (m *Message) WrapAckFn(extra func(error)) {
 	}
 }
 
+// Ack completes the message exactly once: the first call invokes the ack
+// handler and later calls are ignored, so a first error ack is preserved.
 func (m *Message) Ack(err error) {
+	if !m.acked.CompareAndSwap(false, true) {
+		return
+	}
 	if m.ackFn != nil {
 		m.ackFn(err)
 	}
@@ -76,9 +88,9 @@ func (m *Message) ShallowCopy() *Message {
 		parsedDirty:     m.parsedDirty,
 		parsedCodec:     m.parsedCodec,
 		decoderStageID:  m.decoderStageID,
+		sourceStageID:   m.sourceStageID,
 		originalPayload: m.originalPayload,
 		ctx:             m.ctx,
-		errCount:        m.errCount,
 	}
 	cp.readOnly.Store(true)
 	return cp
@@ -109,6 +121,16 @@ func (m *Message) DecoderStageID() string {
 
 func (m *Message) SetDecoderStageID(id string) {
 	m.decoderStageID = id
+}
+
+// SourceStageID is the stage that produced the message, stamped by the
+// engine; DLQ metadata reads it as er-original-source.
+func (m *Message) SourceStageID() string {
+	return m.sourceStageID
+}
+
+func (m *Message) SetSourceStageID(id string) {
+	m.sourceStageID = id
 }
 
 func (m *Message) ParsedData() any {

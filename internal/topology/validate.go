@@ -4,6 +4,8 @@ import (
 	"fmt"
 
 	"github.com/edgesets/edgestream/internal/config"
+	"github.com/edgesets/edgestream/internal/eql"
+	"github.com/edgesets/edgestream/internal/registry"
 )
 
 func Validate(ir *TopologyIR) error {
@@ -62,8 +64,21 @@ func Validate(ir *TopologyIR) error {
 		return fmt.Errorf("pipeline must have at least one sink")
 	}
 
+	// DLQ sinks are written to directly by the engine on failure, so they
+	// legitimately have no incoming edge (pipeline dlq.sink, edge
+	// delivery.dlq).
+	dlqSinks := make(map[string]bool)
+	if ir.DLQ != nil && ir.DLQ.Sink != "" {
+		dlqSinks[ir.DLQ.Sink] = true
+	}
+	for _, e := range ir.Edges {
+		if e.Delivery != nil && e.Delivery.DLQ != "" {
+			dlqSinks[e.Delivery.DLQ] = true
+		}
+	}
+
 	for id, st := range stageIDs {
-		if st.Kind != KindSource && incoming[id] == 0 {
+		if st.Kind != KindSource && incoming[id] == 0 && !dlqSinks[id] {
 			return fmt.Errorf("stage %q has no incoming edges", id)
 		}
 	}
@@ -100,6 +115,93 @@ func validateCodecRef(ref *config.CodecRef, codecs map[string]CodecIR, role stri
 	if ref.Ref != "" {
 		if _, ok := codecs[ref.Ref]; !ok {
 			return fmt.Errorf("%s ref %q not found in codecs", role, ref.Ref)
+		}
+	}
+	return nil
+}
+
+// ValidateSemantics extends Validate with checks that need the plugin
+// registry and the CEL compiler, so `edgestream validate` catches what would
+// otherwise only surface at run start:
+//
+//   - stage type registered (source / transform / sink)
+//   - transform config and DSL compile (map / filter / route factories)
+//   - transform predicate and edge condition CEL compile
+//   - codec type registered (stage decoder/encoder and codecs entries)
+//
+// Every error identifies the offending stage (or edge). A nil registry
+// defaults to registry.Default. Stage construction is side-effect free, so
+// validation never touches the network or disk.
+func ValidateSemantics(ir *TopologyIR, reg *registry.Registry) error {
+	if reg == nil {
+		reg = registry.Default
+	}
+	if err := Validate(ir); err != nil {
+		return err
+	}
+	for _, st := range ir.Stages {
+		switch st.Kind {
+		case KindSource:
+			if _, err := reg.CreateSource(st.Type, st.ID, st.Config); err != nil {
+				return fmt.Errorf("stage %q: %w", st.ID, err)
+			}
+		case KindTransform:
+			if _, err := reg.CreateTransform(st.Type, st.ID, st.Config); err != nil {
+				return fmt.Errorf("stage %q: %w", st.ID, err)
+			}
+			if st.Predicate != "" {
+				if _, err := eql.CompileFilter(st.Predicate); err != nil {
+					return fmt.Errorf("stage %q predicate: %w", st.ID, err)
+				}
+			}
+		case KindSink:
+			if _, err := reg.CreateSink(st.Type, st.ID, st.Config); err != nil {
+				return fmt.Errorf("stage %q: %w", st.ID, err)
+			}
+		default:
+			return fmt.Errorf("stage %q: unknown kind %q", st.ID, st.Kind)
+		}
+		if err := validateCodecRefType(st.Decoder, ir.Codecs, reg, "decoder"); err != nil {
+			return fmt.Errorf("stage %q: %w", st.ID, err)
+		}
+		if err := validateCodecRefType(st.Encoder, ir.Codecs, reg, "encoder"); err != nil {
+			return fmt.Errorf("stage %q: %w", st.ID, err)
+		}
+	}
+	for _, e := range ir.Edges {
+		if e.Condition == "" {
+			continue
+		}
+		if _, err := eql.CompileCondition(e.Condition); err != nil {
+			return fmt.Errorf("edge %s->%s condition: %w", e.From, e.To, err)
+		}
+	}
+	for name, c := range ir.Codecs {
+		if !reg.HasCodec(c.Type) {
+			return fmt.Errorf("codec %q: unknown codec type %q", name, c.Type)
+		}
+	}
+	return nil
+}
+
+// validateCodecRefType extends validateCodecRef with registration checks:
+// a direct type must be registered, and a named ref must resolve to a codecs
+// entry whose type is registered.
+func validateCodecRefType(ref *config.CodecRef, codecs map[string]CodecIR, reg *registry.Registry, role string) error {
+	if err := validateCodecRef(ref, codecs, role); err != nil {
+		return err
+	}
+	if ref == nil || ref.IsEmpty() {
+		return nil
+	}
+	if ref.Type != "" {
+		if !reg.HasCodec(ref.Type) {
+			return fmt.Errorf("%s type %q not registered", role, ref.Type)
+		}
+	}
+	if ref.Ref != "" {
+		if !reg.HasCodec(codecs[ref.Ref].Type) {
+			return fmt.Errorf("%s ref %q type %q not registered", role, ref.Ref, codecs[ref.Ref].Type)
 		}
 	}
 	return nil

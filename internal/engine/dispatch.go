@@ -58,9 +58,17 @@ func (p *Pipeline) dispatchTransformOutputs(ctx context.Context, stageID string,
 		}
 		agg := aggs[o.ID]
 		if agg == nil {
+			// Output matches no input message — nack it instead of silently
+			// dropping it.
+			p.ackMessageError(stageID, o, fmt.Errorf("transform %q output ID %q matches no input message", stageID, o.ID))
 			continue
 		}
 		child := o
+		if child == agg.parent {
+			// Never overwrite the parent's own ackFn: dispatch a copy so the
+			// parent is acked exactly once by the aggregator.
+			child = o.ShallowCopy()
+		}
 		parent := agg.parent
 		child.SetAckFn(func(err error) {
 			if err != nil && atomic.CompareAndSwapInt32(&agg.errStored, 0, 1) {

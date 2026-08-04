@@ -23,7 +23,7 @@ type EdgeInbound struct {
 	strategy string
 	bufType  string
 
-	mu     sync.Mutex
+	mu     sync.RWMutex // Close takes the write lock; Enqueue holds the read lock across its channel sends
 	closed bool
 	wg     sync.WaitGroup
 }
@@ -94,13 +94,14 @@ func (e *EdgeInbound) DiskBytes() int64 {
 }
 
 func (e *EdgeInbound) Enqueue(ctx context.Context, msg *message.Message) (dropped bool, reason string, err error) {
-	e.mu.Lock()
+	// The read lock is held across the whole enqueue: Close closes e.mem
+	// under the write lock, so a send can never race with channel close.
+	e.mu.RLock()
+	defer e.mu.RUnlock()
 	if e.closed {
-		e.mu.Unlock()
 		msg.Ack(context.Canceled)
 		return false, "", context.Canceled
 	}
-	e.mu.Unlock()
 
 	switch e.bufType {
 	case "disk":
@@ -167,6 +168,11 @@ func (e *EdgeInbound) handleDiskFull(ctx context.Context, msg *message.Message, 
 func (e *EdgeInbound) drainLoop(ctx context.Context) {
 	defer e.wg.Done()
 	defer close(e.out)
+	defer e.nackRemainingMem(ctx)
+	var diskWake <-chan struct{}
+	if e.disk != nil {
+		diskWake = e.disk.WakeCh()
+	}
 	for {
 		if ctx.Err() != nil && e.shouldStop(ctx) {
 			return
@@ -188,6 +194,8 @@ func (e *EdgeInbound) drainLoop(ctx context.Context) {
 			if e.shouldStop(ctx) {
 				return
 			}
+		case <-diskWake:
+			// a record spilled to disk while idle; loop back to ReadNext
 		case msg, ok := <-e.mem:
 			if !ok {
 				return
@@ -195,6 +203,26 @@ func (e *EdgeInbound) drainLoop(ctx context.Context) {
 			if !e.emit(ctx, msg) {
 				return
 			}
+		}
+	}
+}
+
+// nackRemainingMem nacks messages still sitting in the mem channel after
+// the drain loop stopped, so sources always see a terminal ack callback.
+func (e *EdgeInbound) nackRemainingMem(ctx context.Context) {
+	err := ctx.Err()
+	if err == nil {
+		err = context.Canceled
+	}
+	for {
+		select {
+		case msg, ok := <-e.mem:
+			if !ok {
+				return
+			}
+			msg.Ack(err)
+		default:
+			return
 		}
 	}
 }
@@ -232,6 +260,9 @@ func (e *EdgeInbound) Close() error {
 	close(e.mem)
 	e.mu.Unlock()
 	e.wg.Wait()
+	// the drain loop may have exited before e.mem was closed; make sure no
+	// message is left without a terminal ack
+	e.nackRemainingMem(context.Background())
 	if e.disk != nil {
 		return e.disk.Close()
 	}

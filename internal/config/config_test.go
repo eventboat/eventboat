@@ -1,8 +1,10 @@
 package config_test
 
 import (
+	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/edgesets/edgestream/internal/config"
@@ -16,6 +18,33 @@ func testdata(t *testing.T, name string) string {
 		t.Fatal("runtime.Caller failed")
 	}
 	return filepath.Join(filepath.Dir(file), "..", "..", "testdata", "pipelines", name)
+}
+
+func TestYAMLUnknownField(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "unknown.yaml")
+	content := `apiVersion: edgestream/v1
+kind: Pipeline
+metadata:
+  name: test
+engine:
+  max_workers: 8
+  unknown_engine_setting: true
+steps:
+  s:
+    source:
+      type: cron
+`
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := config.LoadYAML(path)
+	if err == nil {
+		t.Fatal("expected error for unknown YAML field")
+	}
+	if !strings.Contains(err.Error(), "unknown_engine_setting") || !strings.Contains(err.Error(), "field") {
+		t.Fatalf("expected error to name unknown field, got: %v", err)
+	}
 }
 
 func TestLinearYAML_Validate(t *testing.T) {

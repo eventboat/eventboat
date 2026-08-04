@@ -591,6 +591,8 @@ sink:
 
 **DLQ fallback 链：** 入边 `delivery.dlq`（引用 sink stage id）→ pipeline 级 `dlq.sink` → 丢弃 + `edgestream_dlq_enqueued_total` error metric。
 
+**DLQ 成功即消费（Kafka Connect 语义）：** 消息成功写入任一级 DLQ 后，原消息 `Ack(nil)`——source 提交 offset、不重投；仅当所有 DLQ 级别均失败或未配置 DLQ（最终丢弃）时保持 nack，source 可重投。
+
 > 重试与 DLQ **不在 `StageIR` 上配置**；全部由 `depends_on` 展开后的 `EdgeIR.delivery` 与 pipeline 顶层 `dlq` 表达。Transform 的条件应用使用 `transform.predicate`（Kafka Connect 风格），**无**边级 `predicate` 字段。
 
 **DLQ 是 Sink stage 引用**（非独立概念）：
@@ -1869,6 +1871,8 @@ plugins/
 | **v2.2** | P2 按需 + gRPC 插件 + per-partition ordering + 社区贡献指南 + **AI Phase 3**（管道内 `agent` transform、向量 Sink） |
 | **v2.3+** | **AI Phase 4**（MCP 双向、streaming LLM、`task` step） |
 
+> 注：**WASM Transform 当前尚未实现**（`plugins/transform/wasm/wasm.go` 为占位），v2.0 实际只包含 P0 Go 插件 + Codec（json/raw）。
+
 > AI/Agent 完整设计见 [docs/ai-agent.md](docs/ai-agent.md)；Phase 0 Skill 见 [skills/edgestream/](skills/edgestream/)；Phase 1 计划见 [docs/superpowers/plans/2026-07-01-agent-skill.md](docs/superpowers/plans/2026-07-01-agent-skill.md)。
 
 ---
@@ -2215,9 +2219,10 @@ v2 增加 `edgestream eql`（CEL/eql REPL）、`edgestream lint`（配置 lint�
 
 #### Sprint 4：热加载 + 代码质量 + 测试补强
 
-- [ ] Admin API：`POST /admin/reload/{pipeline}`、`SIGHUP`、409 并发保护
-- [ ] `msgAdapter` 去重；engine/topology 集成测试
-- [ ] CLI：`edgestream test`（fixture 驱动）
+- [x] Admin API：`POST /admin/reload/{pipeline}`、`SIGHUP`、409 并发保护
+- [ ] `msgAdapter` 去重
+- [x] engine/topology 集成测试
+- [x] CLI：`edgestream test`（fixture 驱动）
 
 ### 阶段 2：生产就绪（v2.0）
 
@@ -2225,7 +2230,7 @@ v2 增加 `edgestream eql`（CEL/eql REPL）、`edgestream lint`（配置 lint�
 - [ ] 其余 P0 组件（grpc_server source、grpc/log sink）
 - [x] Sink max_in_flight + ordering（基础实现已完成）
 - [x] retry + DLQ（边 `delivery` + pipeline `dlq` fallback 链；确定性/瞬时错误分类待细化）
-- [ ] 配置热加载（Sprint 4）
+- [x] 配置热加载（Sprint 4）
 - [ ] Notifications
 - [ ] WASM Transform（wazero）
 - [ ] PollingSource wrapper
@@ -2302,7 +2307,7 @@ v2 增加 `edgestream eql`（CEL/eql REPL）、`edgestream lint`（配置 lint�
 | R3 | Transform split 子消息 Ack 聚合链 | [x] | §6.3 |
 | R4 | 优雅停机顺序（Source 先停 → drain → Flush → Stop） | [x] | §6.6 |
 | R5 | Edge disk buffer WAL 格式与崩溃恢复语义 | [x] | §6.8 |
-| R6 | pull 源 `PollingSource` wrapper 行为（退避/背压跳过） | [x] | §4.3、§9.1 |
+| R6 | pull 源 `PollingSource` wrapper 行为（退避/背压跳过） | [ ] | §4.3、§9.1；wrapper 尚未实现 |
 | R7 | 热加载 gap（30–60s）与 409 并发重载约束 | [x] | §6.6 |
 
 ### 13.4 文档与附件一致性

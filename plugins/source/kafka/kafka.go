@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/edgesets/edgestream/internal/basestage"
 	"github.com/edgesets/edgestream/internal/message"
@@ -12,6 +13,10 @@ import (
 	"github.com/google/uuid"
 	kafkago "github.com/segmentio/kafka-go"
 )
+
+// commitTimeout bounds offset commits so OnAck cannot hang indefinitely
+// (CommitMessages has no internal deadline when given context.Background).
+const commitTimeout = 10 * time.Second
 
 func init() {
 	registry.RegisterSource("kafka", newSource)
@@ -42,6 +47,7 @@ func newSource(id string, cfg map[string]any) (stage.Source, error) {
 		groupID: groupID,
 		minBytes: minBytes,
 		maxBytes: maxBytes,
+		commitTimeout: commitTimeout,
 		pending: make(map[string]kafkago.Message),
 	}, nil
 }
@@ -54,12 +60,19 @@ type Source struct {
 	minBytes int
 	maxBytes int
 
+	// commitTimeout bounds offset commits; a field so tests can shorten it.
+	commitTimeout time.Duration
+
 	mu      sync.Mutex
 	reader  *kafkago.Reader
+	closed  bool
 	pending map[string]kafkago.Message
 }
 
 func (s *Source) Init(ctx context.Context) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.closed = false
 	s.reader = kafkago.NewReader(kafkago.ReaderConfig{
 		Brokers:  s.brokers,
 		GroupID:  s.groupID,
@@ -70,16 +83,31 @@ func (s *Source) Init(ctx context.Context) error {
 	return nil
 }
 
+// Stop marks the source closed and clears pending offsets before closing the
+// reader, so engine error paths that never deliver acks cannot leak the
+// pending map, and no commit can race with reader.Close.
 func (s *Source) Stop(ctx context.Context) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.closed = true
+	s.pending = make(map[string]kafkago.Message)
 	if s.reader != nil {
-		return s.reader.Close()
+		err := s.reader.Close()
+		s.reader = nil
+		return err
 	}
 	return nil
 }
 
 func (s *Source) Consume(ctx context.Context, out chan<- *message.Message) error {
 	for {
-		km, err := s.reader.FetchMessage(ctx)
+		s.mu.Lock()
+		reader := s.reader
+		s.mu.Unlock()
+		if reader == nil {
+			return fmt.Errorf("kafka source: not initialized")
+		}
+		km, err := reader.FetchMessage(ctx)
 		if err != nil {
 			return err
 		}
@@ -93,6 +121,10 @@ func (s *Source) Consume(ctx context.Context, out chan<- *message.Message) error
 		msg := message.New(append([]byte(nil), km.Value...), meta)
 		msg.ID = msgID
 		s.mu.Lock()
+		if s.closed {
+			s.mu.Unlock()
+			return fmt.Errorf("kafka source: stopped")
+		}
 		s.pending[msgID] = km
 		s.mu.Unlock()
 		select {
@@ -103,18 +135,23 @@ func (s *Source) Consume(ctx context.Context, out chan<- *message.Message) error
 	}
 }
 
+// OnAck commits the message offset on success. The lock is held across the
+// commit so Stop cannot close the reader mid-commit; after Stop the pending
+// map is empty and commits are skipped safely.
 func (s *Source) OnAck(msg *message.Message, err error) {
 	if msg == nil || err != nil {
 		return
 	}
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	km, ok := s.pending[msg.ID]
 	if ok {
 		delete(s.pending, msg.ID)
 	}
-	s.mu.Unlock()
-	if !ok || s.reader == nil {
+	if !ok || s.closed || s.reader == nil {
 		return
 	}
-	_ = s.reader.CommitMessages(context.Background(), km)
+	ctx, cancel := context.WithTimeout(context.Background(), s.commitTimeout)
+	defer cancel()
+	_ = s.reader.CommitMessages(ctx, km)
 }

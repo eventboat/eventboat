@@ -119,7 +119,7 @@ func TestSendToInbound_DropNewest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	eb.Start(context.Background())
+	// no Start: the drain loop must not race the second Enqueue for mem room
 	_, _, _ = eb.Enqueue(context.Background(), message.New(nil, nil))
 
 	var acks atomic.Int32
@@ -134,5 +134,80 @@ func TestSendToInbound_DropNewest(t *testing.T) {
 	}
 	if acks.Load() != 1 {
 		t.Fatalf("expected dropped message to be acked")
+	}
+}
+
+func TestDispatchTransformOutputs_UnmatchedOutputNacked(t *testing.T) {
+	p := &Pipeline{
+		ir:             &topology.TopologyIR{},
+		stageErrorMode: map[string]string{},
+		graph:          &runtimeGraph{nodes: map[string]*runtimeNode{}, outgoing: map[string][]topology.EdgeIR{}},
+	}
+
+	var parentAcks atomic.Int32
+	parent := message.New(nil, nil)
+	parent.ID = "msg-1"
+	parent.SetAckFn(func(error) {
+		parentAcks.Add(1)
+	})
+
+	var orphanAcks atomic.Int32
+	var orphanErr error
+	orphan := message.New(nil, nil)
+	orphan.ID = "no-such-input"
+	orphan.SetAckFn(func(err error) {
+		orphanAcks.Add(1)
+		orphanErr = err
+	})
+
+	p.dispatchTransformOutputs(context.Background(), "map", []*message.Message{parent}, []*message.Message{orphan})
+
+	if parentAcks.Load() != 1 {
+		t.Fatalf("parent ack count = %d, want 1", parentAcks.Load())
+	}
+	if orphanAcks.Load() != 1 {
+		t.Fatalf("unmatched output ack count = %d, want 1 (output silently dropped)", orphanAcks.Load())
+	}
+	if orphanErr == nil {
+		t.Fatal("unmatched output should be acked with an error")
+	}
+}
+
+func TestDispatchTransformOutputs_SameIDMultiOutputKeepsParentAck(t *testing.T) {
+	eb := setupTestEdge(t, "map", "sink")
+	p := &Pipeline{graph: &runtimeGraph{
+		nodes:        map[string]*runtimeNode{},
+		edgeInbounds: map[string]*buffer.EdgeInbound{edgeKey("map", "sink"): eb},
+	}}
+	p.graph.nodes["sink"] = &runtimeNode{inboundEdges: []*buffer.EdgeInbound{eb}}
+	p.graph.outgoing = map[string][]topology.EdgeIR{
+		"map": {{From: "map", To: "sink"}},
+	}
+
+	var parentAcks atomic.Int32
+	parent := message.New([]byte(`{"x":1}`), nil)
+	parent.ID = "msg-1"
+	parent.SetAckFn(func(error) {
+		parentAcks.Add(1)
+	})
+
+	// Transform emitted the original message plus another output with the
+	// same ID (e.g. split): both must be dispatched, and the parent's own
+	// ackFn must survive and fire exactly once.
+	sibling := parent.ShallowCopy()
+	sibling.SetAckFn(nil)
+
+	p.dispatchTransformOutputs(context.Background(), "map", []*message.Message{parent}, []*message.Message{parent, sibling})
+
+	for i := 0; i < 2; i++ {
+		select {
+		case got := <-eb.Out():
+			got.Ack(nil)
+		case <-time.After(time.Second):
+			t.Fatalf("expected 2 children dispatched, got %d", i)
+		}
+	}
+	if parentAcks.Load() != 1 {
+		t.Fatalf("parent ack count = %d, want 1", parentAcks.Load())
 	}
 }

@@ -14,10 +14,10 @@ A Go-based DAG event router (formerly EdgeStream v2). Built around a generic `Me
 | **Protocol-agnostic** | The engine does not parse payloads; encoding/decoding is handled by Codec plugins (Source `decoder` / Sink `encoder`) |
 | **eql** | CEL expressions plus assignment extensions (`payload.x = expr`, `del()`) for map / filter / edge conditions |
 | **Reliability** | Automatic backpressure propagation, refCount Ack, edge-level retry/DLQ, optional disk buffer |
-| **Observability** | `edgestream_*` Prometheus metrics, OTLP tracing, health checks and notifications |
-| **Extensibility** | Go compile-time registration + WASM (wazero); gRPC out-of-process plugins planned for v2.1 |
+| **Observability** | `edgestream_*` Prometheus metrics, health checks; OTLP tracing and notifications planned |
+| **Extensibility** | Go compile-time registration; WASM (wazero) and gRPC out-of-process plugins planned for v2.1 |
 | **AI / Agent** | **Agent-first:** [skills.sh skill](skills/edgestream/SKILL.md) (`npx skills add edgesets/edgestream@edgestream`) + CLI/Admin API; in-pipeline `llm`/`agent` transforms planned v2.1+ — [AI/Agent Guide](docs/ai-agent.md) |
-| **Deployment** | Single binary, multiple Pipelines + K8s Operator (shared engine) |
+| **Deployment** | Single binary, multiple Pipelines; K8s Operator planned for v2.1 |
 | **Configuration** | **YAML** (CRD / CI) + **HOCON** (Envelope-style local config), parsed into a unified IR; see [Configuration Reference](docs/configurations.md) |
 
 ## Architecture

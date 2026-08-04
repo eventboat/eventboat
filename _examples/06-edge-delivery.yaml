@@ -1,5 +1,5 @@
 # 模式：边级 buffer / retry / DLQ / best-effort
-# 主路径 sink 带重试；失败消息经 DLQ 边写入 dlq-sink；analytics 为 optional 边。
+# 主路径 sink 带重试；失败消息经 pipeline 级 dlq 写入 dlq-sink；analytics 为 optional 边。
 apiVersion: edgestream/v1
 kind: Pipeline
 metadata:
@@ -48,14 +48,11 @@ steps:
     depends_on:
       enrich:
         required: false
-        buffer: { type: memory, size: 16, strategy: drop }
+        buffer: { type: memory, size: 16, strategy: drop_newest }
     sink:
       type: drop
 
-  # 占位入边满足拓扑校验；失败消息由 primary-out 边的 delivery.dlq 在运行时投递至此 stage
+  # DLQ sink 被 dlq.sink 引用，合法地没有入边：失败消息由引擎直接投递至此 stage
   dlq-sink:
-    depends_on:
-      enrich:
-        condition: "false"
     sink:
       type: drop

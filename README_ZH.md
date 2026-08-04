@@ -14,10 +14,10 @@ Go 实现的 DAG 事件路由器（原 EdgeStream v2）。以通用 `Message`（
 | **协议无关** | 引擎不解析 payload；编解码由 Codec 插件完成（Source `decoder` / Sink `encoder`） |
 | **eql** | CEL 表达式 + 赋值扩展（`payload.x = expr`、`del()`），用于 map / filter / 边 condition |
 | **可靠性** | 背压自动传播、refCount Ack、边级 retry/DLQ、可选 disk buffer |
-| **可观测性** | `edgestream_*` Prometheus 指标、OTLP tracing、健康检查与通知 |
-| **扩展** | Go 编译时注册 + WASM（wazero）；v2.1 计划 gRPC 进程外插件 |
+| **可观测性** | `edgestream_*` Prometheus 指标、健康检查；OTLP tracing 与通知为规划中能力 |
+| **扩展** | Go 编译时注册；WASM（wazero）与 gRPC 进程外插件计划 v2.1 |
 | **AI / Agent** | **Agent 优先：** [skills.sh Skill](skills/edgestream/SKILL.md)（`npx skills add edgesets/edgestream@edgestream`）+ CLI/Admin API；管道内 `llm`/`agent` Transform 计划 v2.1+ — 详见 [AI/Agent 指南](docs/ai-agent.md) |
-| **部署** | 单二进制多 Pipeline + K8s Operator（共享同一引擎） |
+| **部署** | 单二进制多 Pipeline；K8s Operator 计划 v2.1 |
 | **配置** | **YAML**（CRD / CI）+ **HOCON**（Envelope 风格本地配置），解析为统一 IR；详见 [配置规范](docs/configurations.md) |
 
 ## 架构

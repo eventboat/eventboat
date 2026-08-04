@@ -162,7 +162,7 @@ func (p *Program) EvalFilter(ctx *EvalContext) (bool, error) {
 	}
 	b, ok := val.Value().(bool)
 	if !ok {
-		return false, nil
+		return false, fmt.Errorf("filter expression must evaluate to bool, got %T", val.Value())
 	}
 	return b, nil
 }
@@ -217,14 +217,24 @@ func (d DeleteStmt) Execute(ctx *EvalContext) error {
 	}
 	path := strings.TrimSpace(d.Path)
 	if strings.HasPrefix(path, "payload") {
-		delPath(ensureMap(ctx.Payload), trimRoot(path, "payload"))
+		sub := trimRoot(path, "payload")
+		if sub == "" {
+			ctx.Payload = make(map[string]any)
+		} else {
+			delPath(ensureMap(ctx.Payload), sub)
+		}
 		if ctx.Msg != nil {
 			ctx.Msg.SetParsedData(ctx.Payload)
 		}
 		return nil
 	}
 	if strings.HasPrefix(path, "metadata") {
-		delPath(ctx.Meta, trimRoot(path, "metadata"))
+		sub := trimRoot(path, "metadata")
+		if sub == "" {
+			ctx.Meta = make(map[string]any)
+		} else {
+			delPath(ctx.Meta, sub)
+		}
 		return nil
 	}
 	return fmt.Errorf("delete path must start with payload or metadata")

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -99,7 +100,11 @@ func (s *Source) emit(ctx context.Context) {
 		"cron.schedule":   s.schedule,
 	}
 	var parsed map[string]any
-	_ = json.Unmarshal(payload, &parsed)
+	if err := json.Unmarshal(payload, &parsed); err != nil {
+		// Malformed payload: emit raw bytes without parsed data, but never silently.
+		slog.Warn("cron source: payload is not valid JSON, emitting unparsed",
+			"stage", s.ID(), "error", err)
+	}
 	msg := message.New(payload, meta)
 	msg.SetParsedCodec("json")
 	if parsed != nil {
@@ -111,9 +116,10 @@ func (s *Source) emit(ctx context.Context) {
 	if out == nil {
 		return
 	}
+	// Block until the consumer reads or the pipeline shuts down; ticks must
+	// not be dropped silently under backpressure.
 	select {
 	case <-ctx.Done():
 	case out <- msg:
-	default: // backpressure — drop, don't block cron scheduler
 	}
 }

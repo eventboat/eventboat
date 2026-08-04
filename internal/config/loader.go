@@ -61,7 +61,7 @@ func LoadYAML(path string) (*PipelineConfig, error) {
 	}
 	var cfg PipelineConfig
 	dec := yaml.NewDecoder(strings.NewReader(string(data)))
-	dec.KnownFields(false)
+	dec.KnownFields(true)
 	if err := dec.Decode(&cfg); err != nil {
 		return nil, fmt.Errorf("yaml decode: %w", err)
 	}

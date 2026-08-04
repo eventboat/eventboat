@@ -25,9 +25,15 @@ func newSink(id string, cfg map[string]any) (stage.Sink, error) {
 	if topic == "" {
 		return nil, fmt.Errorf("kafka sink: topic is required")
 	}
-	balancer := kafkago.Balancer(&kafkago.LeastBytes{})
-	if basestage.ConfigString(cfg, "balancer") == "hash" {
+	balancerName := basestage.ConfigString(cfg, "balancer")
+	var balancer kafkago.Balancer
+	switch balancerName {
+	case "", "least_bytes":
+		balancer = &kafkago.LeastBytes{}
+	case "hash":
 		balancer = &kafkago.Hash{}
+	default:
+		return nil, fmt.Errorf("kafka sink: unknown balancer %q (want least_bytes or hash)", balancerName)
 	}
 	return &Sink{
 		Base:     basestage.Base{IDVal: id, KindVal: stage.KindSink, TypeVal: "kafka"},
@@ -69,18 +75,31 @@ func (s *Sink) Write(ctx context.Context, msgs []*message.Message) error {
 	}
 	kmsgs := make([]kafkago.Message, 0, len(msgs))
 	for _, msg := range msgs {
-		km := kafkago.Message{
+		kmsgs = append(kmsgs, kafkago.Message{
 			Topic: s.topic,
+			Key:   messageKey(msg.Metadata),
 			Value: msg.Payload,
-		}
-		if msg.Metadata != nil {
-			if key, ok := msg.Metadata["kafka.key"].(string); ok {
-				km.Key = []byte(key)
-			}
-		}
-		kmsgs = append(kmsgs, km)
+		})
 	}
 	return s.writer.WriteMessages(ctx, kmsgs...)
 }
 
+// messageKey converts the kafka.key metadata entry to bytes; non-string
+// scalars (e.g. numbers decoded from JSON) are stringified instead of dropped.
+func messageKey(meta map[string]any) []byte {
+	if meta == nil {
+		return nil
+	}
+	key, ok := meta["kafka.key"]
+	if !ok || key == nil {
+		return nil
+	}
+	if s, ok := key.(string); ok {
+		return []byte(s)
+	}
+	return []byte(fmt.Sprint(key))
+}
+
+// Flush is a no-op: kafka-go's WriteMessages is synchronous (it returns only
+// after the brokers ack), so there is no client-side buffer to flush.
 func (s *Sink) Flush(context.Context) error { return nil }

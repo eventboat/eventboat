@@ -43,7 +43,9 @@ func (t *Transform) Process(ctx context.Context, batch []*message.Message) ([]*m
 				payload = m
 			}
 		} else if len(msg.Payload) > 0 {
-			_ = json.Unmarshal(msg.Payload, &payload)
+			if err := json.Unmarshal(msg.Payload, &payload); err != nil {
+				return nil, err
+			}
 		}
 		ok, err := t.prg.EvalFilter(&eql.EvalContext{
 			Msg:     eql.NewMsgAdapter(msg),
