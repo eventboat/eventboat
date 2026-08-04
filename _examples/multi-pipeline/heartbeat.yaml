@@ -1,5 +1,5 @@
 # 多 Pipeline 示例之一：心跳 tick
-apiVersion: eventr/v1
+apiVersion: edgestream/v1
 kind: Pipeline
 metadata:
   name: heartbeat

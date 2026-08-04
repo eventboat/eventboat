@@ -6,10 +6,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/deeploop-ai/eventr/internal/config"
-	"github.com/deeploop-ai/eventr/internal/testutil"
-	"github.com/deeploop-ai/eventr/internal/topology"
-	_ "github.com/deeploop-ai/eventr/plugins/all"
+	"github.com/edgesets/edgestream/internal/config"
+	"github.com/edgesets/edgestream/internal/testutil"
+	"github.com/edgesets/edgestream/internal/topology"
+	_ "github.com/edgesets/edgestream/plugins/all"
 )
 
 func TestPipelineMapFilterIntegration(t *testing.T) {

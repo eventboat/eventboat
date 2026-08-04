@@ -3,7 +3,7 @@ package route
 import (
 	"testing"
 
-	"github.com/deeploop-ai/eventr/internal/eql"
+	"github.com/edgesets/edgestream/internal/eql"
 )
 
 func TestRouteOrderUsesExplicitOrder(t *testing.T) {

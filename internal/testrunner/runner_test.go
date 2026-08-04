@@ -4,8 +4,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/deeploop-ai/eventr/internal/testrunner"
-	_ "github.com/deeploop-ai/eventr/plugins/all"
+	"github.com/edgesets/edgestream/internal/testrunner"
+	_ "github.com/edgesets/edgestream/plugins/all"
 )
 
 func TestMapFilterSuite(t *testing.T) {

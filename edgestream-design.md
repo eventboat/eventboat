@@ -1,6 +1,6 @@
-# eventr 需求与设计方案
+# edgestream 需求与设计方案
 
-> 版：v2.0-draft（eventr，原 EventRouter v2）
+> 版：v2.0-draft（edgestream，原 EdgeStream v2）
 > 日期：2025-06-24
 > 状态：定稿前修订（经竞品深度对比 + 40 项架构决策澄清）
 
@@ -30,7 +30,7 @@
 
 ### 1.1 v1 回顾
 
-EventRouter v1 是一个轻量级 Go 事件路由库/二进制程序，围绕 `Input → Processor → Output` 模式处理 `CloudEvents`。
+EdgeStream v1 是一个轻量级 Go 事件路由库/二进制程序，围绕 `Input → Processor → Output` 模式处理 `CloudEvents`。
 
 | 能力 | 实现 |
 |------|------|
@@ -45,7 +45,7 @@ EventRouter v1 是一个轻量级 Go 事件路由库/二进制程序，围绕 `I
 | 输出目标 | HTTP、Kafka、gRPC、Drop、Log |
 | 处理器 | Logger、JSON 解析、Goja JS 脚本、Filter |
 
-### 1.2 eventr 目标
+### 1.2 edgestream 目标
 
 从架构层面重新设计，功能覆盖 v1 核心能力的同时，解决以下结构性不足：
 
@@ -101,7 +101,7 @@ EventRouter v1 是一个轻量级 Go 事件路由库/二进制程序，围绕 `I
 | 写入语义 | **由各 Sink 插件自行定义**（`config` 字段，无引擎级 Planner / `write_mode` 统一约定） | 事件路由器定位；复杂 ETL 语义在专用 sink 或 transform 内实现 |
 | 赋值语义 | immutable 语义 + COW 实现 | 与 CEL 一致，fan-out 安全，纯路由零开销 |
 | DLQ 格式 | passthrough + `er-*` metadata | 对标 Kafka Connect headers / Knative CE extensions |
-| 配置格式 | **YAML + HOCON 双格式**；**结构对齐 Envelope**（`steps` 嵌套块），**字段名保持 eventr** | 见 §8 |
+| 配置格式 | **YAML + HOCON 双格式**；**结构对齐 Envelope**（`steps` 嵌套块），**字段名保持 edgestream** | 见 §8 |
 
 ---
 
@@ -589,7 +589,7 @@ sink:
 | Source 读取失败 | Source | Source 内部处理 | N/A |
 | DSL 编译错误 | 启动期 | N/A | 启动失败 |
 
-**DLQ fallback 链：** 入边 `delivery.dlq`（引用 sink stage id）→ pipeline 级 `dlq.sink` → 丢弃 + `eventr_dlq_enqueued_total` error metric。
+**DLQ fallback 链：** 入边 `delivery.dlq`（引用 sink stage id）→ pipeline 级 `dlq.sink` → 丢弃 + `edgestream_dlq_enqueued_total` error metric。
 
 > 重试与 DLQ **不在 `StageIR` 上配置**；全部由 `depends_on` 展开后的 `EdgeIR.delivery` 与 pipeline 顶层 `dlq` 表达。Transform 的条件应用使用 `transform.predicate`（Kafka Connect 风格），**无**边级 `predicate` 字段。
 
@@ -738,7 +738,7 @@ spec:
 
 ### 7.1 设计目标
 
-eql = **CEL 表达式层**（谓词 + 值计算）+ **eql 赋值扩展**（`.path = expr`、`del()`）+ **eventr 注册的 CEL 自定义函数**。
+eql = **CEL 表达式层**（谓词 + 值计算）+ **eql 赋值扩展**（`.path = expr`、`del()`）+ **edgestream 注册的 CEL 自定义函数**。
 
 | 目标 | 说明 |
 |------|------|
@@ -842,7 +842,7 @@ now() - payload.created > duration("1h")
 | `duration(s)` | 字符串转 duration |
 | `a ?? b` | coalesce（第一个非 nil 值） |
 
-**eventr 注册函数**（snake_case，通过 cel-go `cel.Function()` 注册）：
+**edgestream 注册函数**（snake_case，通过 cel-go `cel.Function()` 注册）：
 
 | 类别 | 函数 | 说明 |
 |------|------|------|
@@ -859,7 +859,7 @@ now() - payload.created > duration("1h")
 | **JSON** | `json(v)` | 解析 JSON 字符串为 map |
 | | `to_json(v)` | 序列化为 JSON 字符串 |
 | **类型** | `array(v)` | 类型转换为数组 |
-| | `typeof(v)` | 返回类型名（eventr 扩展，与 CEL `type()` 不同） |
+| | `typeof(v)` | 返回类型名（edgestream 扩展，与 CEL `type()` 不同） |
 | **UUID/ID** | `uuid()` | 生成 UUID v4 |
 | | `hash(s)` | SHA256 哈希 |
 | **编码** | `base64_encode(s)` / `base64_decode(s)` | Base64 编解码 |
@@ -996,7 +996,7 @@ steps:
 ### 8.1 设计原则
 
 1. **双格式、一 schema** — YAML 与 HOCON 书写等价，解析为同一份 Canonical Schema，再展开为 `TopologyIR`
-2. **结构对齐 Envelope、字段名保持 eventr** — `steps.{name}` + `source` / `transform` / `sink` 子块；字段用 `depends_on`、`decoder`/`encoder`、`type`/`config`、`engine` 等
+2. **结构对齐 Envelope、字段名保持 edgestream** — `steps.{name}` + `source` / `transform` / `sink` 子块；字段用 `depends_on`、`decoder`/`encoder`、`type`/`config`、`engine` 等
 3. **边即依赖** — 拓扑边**仅**通过各 step 的 `depends_on` 声明（含 per-edge buffer/delivery）；**无**独立顶层 `edges:` 段
 4. **渐进复杂度** — 线性：`depends_on: [a, b]`；分支/背压：`depends_on: { upstream: { route, buffer, delivery } }`
 5. **统一 IR** — 配置层 **step**（`steps.{name}`）→ 运行时 **stage**（`StageIR`）+ **edge**（`EdgeIR`，由 `depends_on` 展开）；术语见 §3.2
@@ -1004,7 +1004,7 @@ steps:
 
 #### 8.1.1 与 Envelope 的结构对照（仅布局，字段名各用各的）
 
-| Envelope 结构块 | eventr 结构块 | eventr 字段（不变） |
+| Envelope 结构块 | edgestream 结构块 | edgestream 字段（不变） |
 |----------------|---------------|---------------------|
 | `application.*` | `engine.*` | `max_workers`、`max_inflight` 等 |
 | `steps.{name}` | `steps.{name}` | step 名默认即展开后的 stage id（合体 sink 为 `{name}-sink`） |
@@ -1014,7 +1014,7 @@ steps:
 | `steps.{name}.output` | `steps.{name}.sink` | `type`、`encoder`、`batch`、`config` |
 | `udfs` | `udfs` / `cel.functions` | 可选，v2 评估 |
 
-> Envelope 的 `planner` 块**不映射**为 eventr 配置项；写入语义由 **sink 的 `config`** 自行表达。
+> Envelope 的 `planner` 块**不映射**为 edgestream 配置项；写入语义由 **sink 的 `config`** 自行表达。
 >
 > Envelope 用户迁移：`input`→`source`，`deriver`→`transform`，`output`→`sink`；边写在下游 `depends_on`，不要另建 `edges` 列表。
 
@@ -1097,8 +1097,8 @@ steps: { ... }
 
 | 格式 | 典型场景 | 说明 |
 |------|---------|------|
-| **YAML** | K8s CRD、`eventr run --config-dir`、CI `validate` | 默认格式；`apiVersion`/`kind`/`metadata` 仅 YAML/CRD 使用 |
-| **HOCON** | Envelope 风格手写、本地 `.conf` | 扩展名 `.conf` / `.hocon`；**结构与 Envelope 对齐，字段名仍用 eventr** |
+| **YAML** | K8s CRD、`edgestream run --config-dir`、CI `validate` | 默认格式；`apiVersion`/`kind`/`metadata` 仅 YAML/CRD 使用 |
+| **HOCON** | Envelope 风格手写、本地 `.conf` | 扩展名 `.conf` / `.hocon`；**结构与 Envelope 对齐，字段名仍用 edgestream** |
 
 两种格式**能力完全对等**：同一 pipeline 可用任一种写出，展开后 IR 字节级一致（除 `metadata` 等 K8s 包装字段）。
 
@@ -1108,7 +1108,7 @@ steps: { ... }
 
 | 候选库 | 结论 |
 |--------|------|
-| **`gurkankaymak/hocon`** | **采用** — 维护活跃（v1.2.23+）、功能覆盖 eventr 所需 substitution / 嵌套对象 / duration |
+| **`gurkankaymak/hocon`** | **采用** — 维护活跃（v1.2.23+）、功能覆盖 edgestream 所需 substitution / 嵌套对象 / duration |
 | `o3co/go.hocon` | 备选 — spec 合规清单更全，但过新、生产验证少；Envelope 迁移遇解析差异时再评估 |
 | `sopranoworks/gekka-config` | 不采用 — Pekko 生态向，社区体量小 |
 | `en-vee/aconf` | 不采用 — 2019 年后停更 |
@@ -1125,7 +1125,7 @@ steps: { ... }
 >
 > **Substitution：** `${VAR}` / `${?OPT}` 由 `gurkankaymak/hocon` 在 `Get*` / `GetStringSlice` 等读取时解析（含环境变量回退）。生产加载器在树规范化阶段须走已解析值，勿对未解析的 `Substitution` 节点直接序列化。
 
-**eventr 依赖的 HOCON 特性（须在 spike 中验收）：**
+**edgestream 依赖的 HOCON 特性（须在 spike 中验收）：**
 
 | 特性 | 配置示例 | 用途 |
 |------|----------|------|
@@ -1147,10 +1147,10 @@ steps: { ... }
 4. 解析树可无损转为 `map[string]any`（供后续 `PipelineConfig` 加载器消费）
 
 ```bash
-eventr run --config pipeline.yaml          # YAML
-eventr run --config pipeline.conf        # HOCON（按扩展名）
-eventr run --config pipeline.conf --format hocon   # 显式指定（扩展名非标准时）
-eventr validate --config-dir ./pipelines/  # 目录内 .yaml/.yml/.conf/.hocon 均可混放
+edgestream run --config pipeline.yaml          # YAML
+edgestream run --config pipeline.conf        # HOCON（按扩展名）
+edgestream run --config pipeline.conf --format hocon   # 显式指定（扩展名非标准时）
+edgestream validate --config-dir ./pipelines/  # 目录内 .yaml/.yml/.conf/.hocon 均可混放
 ```
 
 | 扩展名 | 解析器 |
@@ -1170,7 +1170,7 @@ type PipelineConfig struct {
     APIVersion    string
     Kind          string
     Metadata      map[string]string
-    Engine        EngineConfig              // 对标 Envelope application.*（eventr 字段名不变）
+    Engine        EngineConfig              // 对标 Envelope application.*（edgestream 字段名不变）
     Steps         map[string]StepConfig     // 主写法
     Stages        []StageConfig             // 平坦写法（与 Steps 二选一）
     Codecs        []CodecIR
@@ -1239,10 +1239,10 @@ type SinkBlock struct {
 | 默认值 `${?OPTIONAL}` | 未设置则空/省略 | HOCON optional substitution |
 | `parameter.*` 透传 | `sink.config` 内或 `sink` 下 `parameter:` 块 | `sink` 下 `parameter { }` 或 `parameter.*` 点号键 |
 
-#### 8.2.5 推荐写法：`steps` 块（YAML，eventr 字段名）
+#### 8.2.5 推荐写法：`steps` 块（YAML，edgestream 字段名）
 
 ```yaml
-apiVersion: eventr/v1
+apiVersion: edgestream/v1
 kind: Pipeline
 metadata:
   name: order-processing
@@ -1335,7 +1335,7 @@ steps {
 ### 8.3 场景一：简单线性（`steps` 写法）
 
 ```yaml
-apiVersion: eventr/v1
+apiVersion: edgestream/v1
 kind: Pipeline
 metadata:
   name: order-processing
@@ -1424,7 +1424,7 @@ steps {
 ### 8.4 场景二：分支 DAG（扩展 `depends_on`）
 
 ```yaml
-apiVersion: eventr/v1
+apiVersion: edgestream/v1
 kind: Pipeline
 metadata:
   name: order-processing
@@ -1654,7 +1654,7 @@ steps.enrich.sink       → StageIR id=enrich-sink, kind=sink
 与 `steps` **二选一**；展开后与 §8.3 线性示例生成相同 `TopologyIR`。适合极简管道或迁移早期草案。
 
 ```yaml
-apiVersion: eventr/v1
+apiVersion: edgestream/v1
 kind: Pipeline
 metadata:
   name: order-processing
@@ -1822,13 +1822,13 @@ steps:
 ```go
 // plugins/source/kafka/kafka.go
 package kafka
-import "code.dandanvoice.com/eventr/plugin"
+import "code.dandanvoice.com/edgestream/plugin"
 func init() { plugin.RegisterSource("kafka", &KafkaSourceFactory{}) }
 
 // 用户自定义：fork + import + 重新编译
-// cmd/my-eventr/main.go
+// cmd/my-edgestream/main.go
 import (
-    _ "code.dandanvoice.com/eventr/plugins/source/all"
+    _ "code.dandanvoice.com/edgestream/plugins/source/all"
     _ "mycompany.com/my-source"
 )
 ```
@@ -1869,7 +1869,7 @@ plugins/
 | **v2.2** | P2 按需 + gRPC 插件 + per-partition ordering + 社区贡献指南 + **AI Phase 3**（管道内 `agent` transform、向量 Sink） |
 | **v2.3+** | **AI Phase 4**（MCP 双向、streaming LLM、`task` step） |
 
-> AI/Agent 完整设计见 [docs/ai-agent.md](docs/ai-agent.md)；Phase 0 Skill 见 [skills/eventr/](skills/eventr/)；Phase 1 计划见 [docs/superpowers/plans/2026-07-01-agent-skill.md](docs/superpowers/plans/2026-07-01-agent-skill.md)。
+> AI/Agent 完整设计见 [docs/ai-agent.md](docs/ai-agent.md)；Phase 0 Skill 见 [skills/edgestream/](skills/edgestream/)；Phase 1 计划见 [docs/superpowers/plans/2026-07-01-agent-skill.md](docs/superpowers/plans/2026-07-01-agent-skill.md)。
 
 ---
 
@@ -1877,7 +1877,7 @@ plugins/
 
 ### 10.1 指标前缀与标签
 
-前缀：`eventr_`。
+前缀：`edgestream_`。
 
 **固定低基数标签**（总是启用）：`pipeline`、`stage_id`、`stage_kind`、`from`、`to`、`status`、`error_type`、`type`、`codec`、`route_name`。
 
@@ -1891,47 +1891,47 @@ plugins/
 
 | 层级 | 指标名 | 类型 | 标签 |
 |------|--------|------|------|
-| **Pipeline** | `eventr_events_total` | Counter | pipeline, status |
-| | `eventr_event_latency_seconds` | Histogram | pipeline |
-| | `eventr_event_size_bytes` | Histogram | pipeline |
-| | `eventr_inflight_events` | Gauge | pipeline |
-| **Stage** | `eventr_stage_duration_seconds` | Histogram | pipeline, stage_id, stage_kind |
-| | `eventr_stage_processed_total` | Counter | pipeline, stage_id, status |
-| | `eventr_stage_errors_total` | Counter | pipeline, stage_id, error_type |
-| | `eventr_stage_retries_total` | Counter | pipeline, stage_id |
-| **Source** | `eventr_source_read_total` | Counter | pipeline, stage_id |
-| | `eventr_source_read_errors_total` | Counter | pipeline, stage_id |
-| | `eventr_source_lag` | Gauge | pipeline, stage_id |
-| | `eventr_source_poll_interval_seconds` | Gauge | pipeline, stage_id |
-| **Transform** | `eventr_transform_batch_size` | Histogram | pipeline, stage_id |
-| | `eventr_transform_fanout_total` | Counter | pipeline, stage_id |
-| **Sink** | `eventr_sink_write_total` | Counter | pipeline, stage_id, status |
-| | `eventr_sink_write_events` | Counter | pipeline, stage_id |
-| | `eventr_sink_batch_size` | Histogram | pipeline, stage_id |
-| | `eventr_sink_in_flight` | Gauge | pipeline, stage_id |
-| | `eventr_sink_flush_total` | Counter | pipeline, stage_id |
-| **Edge** | `eventr_edge_buffer_size` | Gauge | pipeline, from, to |
-| | `eventr_edge_buffer_type` | Gauge | pipeline, from, to, type |
-| | `eventr_edge_dropped_total` | Counter | pipeline, from, to, reason |
-| | `eventr_edge_disk_wal_size_bytes` | Gauge | pipeline, from, to |
-| | `eventr_edge_disk_wal_segments` | Gauge | pipeline, from, to |
-| **Codec** | `eventr_codec_decode_total` | Counter | pipeline, stage_id, codec, status |
-| | `eventr_codec_decode_duration_seconds` | Histogram | pipeline, stage_id, codec |
-| | `eventr_codec_encode_total` | Counter | pipeline, stage_id, codec, status |
-| | `eventr_codec_encode_duration_seconds` | Histogram | pipeline, stage_id, codec |
-| **DLQ** | `eventr_dlq_messages` | Gauge | pipeline, dlq_stage_id |
-| | `eventr_dlq_enqueued_total` | Counter | pipeline, dlq_stage_id, error_type |
-| | `eventr_dlq_replayed_total` | Counter | pipeline, dlq_stage_id |
-| **Route** | `eventr_route_matched_total` | Counter | pipeline, stage_id, route_name |
-| | `eventr_route_default_total` | Counter | pipeline, stage_id |
-| **DSL** | `eventr_dsl_eval_total` | Counter | pipeline, stage_id, status |
-| | `eventr_dsl_eval_duration_seconds` | Histogram | pipeline, stage_id |
-| | `eventr_dsl_type_mismatch_total` | Counter | pipeline, stage_id |
-| **Engine** | `eventr_engine_goroutines` | Gauge | pipeline |
-| | `eventr_engine_pipelines` | Gauge | (无 label) |
-| | `eventr_pipeline_uptime_seconds` | Gauge | pipeline |
-| | `eventr_pipeline_status` | Gauge | pipeline, status |
-| | `eventr_hot_reload_total` | Counter | pipeline, status |
+| **Pipeline** | `edgestream_events_total` | Counter | pipeline, status |
+| | `edgestream_event_latency_seconds` | Histogram | pipeline |
+| | `edgestream_event_size_bytes` | Histogram | pipeline |
+| | `edgestream_inflight_events` | Gauge | pipeline |
+| **Stage** | `edgestream_stage_duration_seconds` | Histogram | pipeline, stage_id, stage_kind |
+| | `edgestream_stage_processed_total` | Counter | pipeline, stage_id, status |
+| | `edgestream_stage_errors_total` | Counter | pipeline, stage_id, error_type |
+| | `edgestream_stage_retries_total` | Counter | pipeline, stage_id |
+| **Source** | `edgestream_source_read_total` | Counter | pipeline, stage_id |
+| | `edgestream_source_read_errors_total` | Counter | pipeline, stage_id |
+| | `edgestream_source_lag` | Gauge | pipeline, stage_id |
+| | `edgestream_source_poll_interval_seconds` | Gauge | pipeline, stage_id |
+| **Transform** | `edgestream_transform_batch_size` | Histogram | pipeline, stage_id |
+| | `edgestream_transform_fanout_total` | Counter | pipeline, stage_id |
+| **Sink** | `edgestream_sink_write_total` | Counter | pipeline, stage_id, status |
+| | `edgestream_sink_write_events` | Counter | pipeline, stage_id |
+| | `edgestream_sink_batch_size` | Histogram | pipeline, stage_id |
+| | `edgestream_sink_in_flight` | Gauge | pipeline, stage_id |
+| | `edgestream_sink_flush_total` | Counter | pipeline, stage_id |
+| **Edge** | `edgestream_edge_buffer_size` | Gauge | pipeline, from, to |
+| | `edgestream_edge_buffer_type` | Gauge | pipeline, from, to, type |
+| | `edgestream_edge_dropped_total` | Counter | pipeline, from, to, reason |
+| | `edgestream_edge_disk_wal_size_bytes` | Gauge | pipeline, from, to |
+| | `edgestream_edge_disk_wal_segments` | Gauge | pipeline, from, to |
+| **Codec** | `edgestream_codec_decode_total` | Counter | pipeline, stage_id, codec, status |
+| | `edgestream_codec_decode_duration_seconds` | Histogram | pipeline, stage_id, codec |
+| | `edgestream_codec_encode_total` | Counter | pipeline, stage_id, codec, status |
+| | `edgestream_codec_encode_duration_seconds` | Histogram | pipeline, stage_id, codec |
+| **DLQ** | `edgestream_dlq_messages` | Gauge | pipeline, dlq_stage_id |
+| | `edgestream_dlq_enqueued_total` | Counter | pipeline, dlq_stage_id, error_type |
+| | `edgestream_dlq_replayed_total` | Counter | pipeline, dlq_stage_id |
+| **Route** | `edgestream_route_matched_total` | Counter | pipeline, stage_id, route_name |
+| | `edgestream_route_default_total` | Counter | pipeline, stage_id |
+| **DSL** | `edgestream_dsl_eval_total` | Counter | pipeline, stage_id, status |
+| | `edgestream_dsl_eval_duration_seconds` | Histogram | pipeline, stage_id |
+| | `edgestream_dsl_type_mismatch_total` | Counter | pipeline, stage_id |
+| **Engine** | `edgestream_engine_goroutines` | Gauge | pipeline |
+| | `edgestream_engine_pipelines` | Gauge | (无 label) |
+| | `edgestream_pipeline_uptime_seconds` | Gauge | pipeline |
+| | `edgestream_pipeline_status` | Gauge | pipeline, status |
+| | `edgestream_hot_reload_total` | Counter | pipeline, status |
 
 ### 10.3 暴露方式
 
@@ -1954,12 +1954,12 @@ observability:
 每层创建 span — 完整捕获事件经过的每个 stage 和 edge，包括 condition 匹配结果：
 
 ```
-Pipeline Span (eventr.pipeline.order-processing)
-├── Source Span (eventr.source.kafka-source)
-│   ├── Transform Span (eventr.transform.enrich)
-│   │   ├── Edge Span (eventr.edge.enrich→us-sink)
-│   │   │   └── Sink Span (eventr.sink.us-sink)
-│   │   └── Edge Span (eventr.edge.enrich→eu-sink)
+Pipeline Span (edgestream.pipeline.order-processing)
+├── Source Span (edgestream.source.kafka-source)
+│   ├── Transform Span (edgestream.transform.enrich)
+│   │   ├── Edge Span (edgestream.edge.enrich→us-sink)
+│   │   │   └── Sink Span (edgestream.sink.us-sink)
+│   │   └── Edge Span (edgestream.edge.enrich→eu-sink)
 ```
 
 trace_id / message_id / topic / partition 进 span attributes（高基数信息只在 tracing 出现）。
@@ -2059,14 +2059,14 @@ observability:
 
 ```bash
 # 基础启动（单 Pipeline）
-eventr run --config pipeline.yaml
+edgestream run --config pipeline.yaml
 
 # 目录模式（多 Pipeline，每个文件一个 pipeline）
-eventr run --config-dir /etc/eventr/pipelines/
+edgestream run --config-dir /etc/edgestream/pipelines/
 
 # YAML 或 HOCON（按扩展名自动识别）
-eventr run --config pipeline.yaml
-eventr run --config pipeline.conf
+edgestream run --config pipeline.yaml
+edgestream run --config pipeline.conf
 
 # 配置文件内 ${KAFKA_BROKERS} 自动替换（YAML/HOCON 均支持）
 ```
@@ -2074,8 +2074,8 @@ eventr run --config pipeline.conf
 #### 文件结构
 
 ```
-/opt/eventr/
-├── bin/eventr             # 主二进制（含所有内置 Go 插件）
+/opt/edgestream/
+├── bin/edgestream             # 主二进制（含所有内置 Go 插件）
 ├── etc/
 │   ├── config.yaml        # 引擎全局配置
 │   └── pipelines/         # 管道定义（.yaml / .yml / .conf / .hocon 可混放）
@@ -2091,7 +2091,7 @@ eventr run --config pipeline.conf
 #### CRD
 
 ```yaml
-apiVersion: eventr/v1
+apiVersion: edgestream/v1
 kind: Pipeline
 metadata:
   name: order-processing
@@ -2157,13 +2157,13 @@ spec:
 ### 11.4 CLI 工具
 
 ```
-eventr run        # 运行引擎
-eventr validate   # 仅校验配置（CI 用）
-eventr test       # 用 fixture 数据测试管道（CI 用）
-eventr doc        # 生成管道可视化（DOT 格式 → Graphviz）
+edgestream run        # 运行引擎
+edgestream validate   # 仅校验配置（CI 用）
+edgestream test       # 用 fixture 数据测试管道（CI 用）
+edgestream doc        # 生成管道可视化（DOT 格式 → Graphviz）
 ```
 
-v2 增加 `eventr eql`（CEL/eql REPL）、`eventr lint`（配置 lint）。
+v2 增加 `edgestream eql`（CEL/eql REPL）、`edgestream lint`（配置 lint）。
 
 ---
 
@@ -2183,7 +2183,7 @@ v2 增加 `eventr eql`（CEL/eql REPL）、`eventr lint`（配置 lint）。
 - [x] 3 个 Source（kafka/http_server/cron）+ 3 个 Sink（kafka/http/drop）+ 3 个 Transform（map/filter/route）
 - [ ] WASM Transform（占位，推迟至 v2.0）
 - [x] 多 Pipeline 运行时（进程内隔离；`engine.max_workers`/`max_inflight` 已接线）
-- [x] Metrics（`eventr_` 前缀）+ Tracing（OTLP 骨架）+ Health endpoints
+- [x] Metrics（`edgestream_` 前缀）+ Tracing（OTLP 骨架）+ Health endpoints
 - [x] CLI：run + validate
 
 ### 阶段 1.5：v2.0-beta（当前冲刺，约 3–4 周）
@@ -2192,11 +2192,11 @@ v2 增加 `eventr eql`（CEL/eql REPL）、`eventr lint`（配置 lint）。
 
 #### Sprint 1：可观测性基础（闭合 alpha 最后一项）— **已完成**
 
-- [x] Prometheus `eventr_*` 指标端点（`:9090/metrics`）
-  - Pipeline：`eventr_events_total`、`eventr_event_latency_seconds`、`eventr_inflight_events`
-  - Stage：`eventr_stage_duration_seconds`、`eventr_stage_errors_total`
-  - Edge：`eventr_edge_buffer_size`、`eventr_edge_dropped_total`
-  - DLQ：`eventr_dlq_enqueued_total`
+- [x] Prometheus `edgestream_*` 指标端点（`:9090/metrics`）
+  - Pipeline：`edgestream_events_total`、`edgestream_event_latency_seconds`、`edgestream_inflight_events`
+  - Stage：`edgestream_stage_duration_seconds`、`edgestream_stage_errors_total`
+  - Edge：`edgestream_edge_buffer_size`、`edgestream_edge_dropped_total`
+  - DLQ：`edgestream_dlq_enqueued_total`
 - [x] Health 端点：`/live`（存活）+ `/ready`（聚合 Stage `HealthCheck`）
 - [x] 结构化 JSON 日志（`slog`）+ 动态 level 调整（`PUT /debug/loglevel`）
 - [x] OTLP Tracing 接口骨架（pipeline → stage 粒度，noop 实现）
@@ -2217,7 +2217,7 @@ v2 增加 `eventr eql`（CEL/eql REPL）、`eventr lint`（配置 lint）。
 
 - [ ] Admin API：`POST /admin/reload/{pipeline}`、`SIGHUP`、409 并发保护
 - [ ] `msgAdapter` 去重；engine/topology 集成测试
-- [ ] CLI：`eventr test`（fixture 驱动）
+- [ ] CLI：`edgestream test`（fixture 驱动）
 
 ### 阶段 2：生产就绪（v2.0）
 
@@ -2238,12 +2238,12 @@ v2 增加 `eventr eql`（CEL/eql REPL）、`eventr lint`（配置 lint）。
 - [ ] Codec P1（avro/protobuf/csv）
 - [ ] gRPC 进程外插件
 - [ ] 插件 SDK 文档 + 示例
-- [ ] **AI Phase 0** — Agent 调用 eventr：skills.sh Skill（`skills/eventr/`）、文档对齐（详见 [docs/ai-agent.md](docs/ai-agent.md)）
+- [ ] **AI Phase 0** — Agent 调用 edgestream：skills.sh Skill（`skills/edgestream/`）、文档对齐（详见 [docs/ai-agent.md](docs/ai-agent.md)）
 - [ ] **AI Phase 1** — `plugins list`、`validate --format json`、MCP Server
 
 ### 阶段 3.5：AI/Agent（v2.0-beta → v2.2）
 
-- [ ] **AI Phase 0** — skills.sh Skill + Agent 工作流文档（[skills/eventr/](skills/eventr/)）
+- [ ] **AI Phase 0** — skills.sh Skill + Agent 工作流文档（[skills/edgestream/](skills/edgestream/)）
 - [ ] **AI Phase 1** — 机器可读 CLI（JSON validate/plugins）+ MCP Server
 - [ ] **AI Phase 2** — 管道内 `llm` / `embed` transform（v2.1）
 - [ ] **AI Phase 3** — 管道内 `agent` transform、向量 Sink（v2.2）
@@ -2312,7 +2312,7 @@ v2 增加 `eventr eql`（CEL/eql REPL）、`eventr lint`（配置 lint）。
 | D1 | `design-review.md` 过时建议已标注 | [x] | 文首注意 |
 | D2 | `competitor-research.md` 中 `edges:` / Planner 表述与主文档对齐 | [x] | §9.2–9.4 及总结项已标注决策 |
 | D3 | 全文无 `Stage.Type()` / `Edge.Predicate` / Stage 级 DLQ 残留 | [x] | 定稿前修订已清理 |
-| D4 | 指标前缀统一 `eventr_`（非 `er2_`） | [x] | §10.1 |
+| D4 | 指标前缀统一 `edgestream_`（非 `er2_`） | [x] | §10.1 |
 | D5 | 路线图阶段与 §13 检查项可追溯 | [x] | §12 |
 
 ### 13.5 明确推迟（不阻塞 v2.0-final）

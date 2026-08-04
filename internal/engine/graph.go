@@ -3,10 +3,10 @@ package engine
 import (
 	"fmt"
 
-	"github.com/deeploop-ai/eventr/internal/buffer"
-	"github.com/deeploop-ai/eventr/internal/eql"
-	"github.com/deeploop-ai/eventr/internal/message"
-	"github.com/deeploop-ai/eventr/internal/topology"
+	"github.com/edgesets/edgestream/internal/buffer"
+	"github.com/edgesets/edgestream/internal/eql"
+	"github.com/edgesets/edgestream/internal/message"
+	"github.com/edgesets/edgestream/internal/topology"
 )
 
 type runtimeNode struct {

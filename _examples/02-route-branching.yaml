@@ -1,6 +1,6 @@
 # 模式：条件分支（route transform + depends_on.route）
 # map 写入 metadata.region，route 按区域分流至不同 sink。
-apiVersion: eventr/v1
+apiVersion: edgestream/v1
 kind: Pipeline
 metadata:
   name: route-branching

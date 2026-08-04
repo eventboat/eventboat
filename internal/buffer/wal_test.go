@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/deeploop-ai/eventr/internal/message"
+	"github.com/edgesets/edgestream/internal/message"
 )
 
 func TestWALRecordRoundTrip(t *testing.T) {

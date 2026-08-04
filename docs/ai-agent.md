@@ -2,7 +2,7 @@
 
 > 版本：v1.1-draft  
 > 日期：2026-07-01  
-> 状态：Phase 0 进行中（Agent 调用 eventr）
+> 状态：Phase 0 进行中（Agent 调用 edgestream）
 
 English summary in [README](../README.md#agent-first-ai-integration).
 
@@ -14,32 +14,32 @@ AI/Agent 支持分 **两个方向**，优先级明确：
 
 | 方向 | 含义 | 优先级 |
 |------|------|--------|
-| **Agent → eventr** | 外部 AI Agent（Cursor、Claude、自定义编排）**调用** eventr：写配置、校验、测试、运行、热加载 | **Phase 0（第一步）** |
-| **eventr → LLM** | Pipeline 内部的 `llm` / `embed` / `agent` Transform，在 DAG 里调用大模型 | Phase 2（v2.1+） |
+| **Agent → edgestream** | 外部 AI Agent（Cursor、Claude、自定义编排）**调用** edgestream：写配置、校验、测试、运行、热加载 | **Phase 0（第一步）** |
+| **edgestream → LLM** | Pipeline 内部的 `llm` / `embed` / `agent` Transform，在 DAG 里调用大模型 | Phase 2（v2.1+） |
 
-**第一步的核心：** 让 Agent 能可靠地操作 eventr，而不是先在引擎里嵌 LLM。
+**第一步的核心：** 让 Agent 能可靠地操作 edgestream，而不是先在引擎里嵌 LLM。
 
 典型 Agent 工作流：
 
 ```
 用户意图 → Agent 读 Skill → 选 _examples 模板 → 写 YAML
-         → eventr validate → eventr test → eventr run / admin reload
+         → edgestream validate → edgestream test → edgestream run / admin reload
 ```
 
 已交付 / 进行中的 Agent 入口：
 
 ```bash
-npx skills add deeploop-ai/eventr@eventr
+npx skills add edgesets/edgestream@edgestream
 ```
 
-Browse: https://skills.sh/deeploop-ai/eventr/eventr
+Browse: https://skills.sh/edgesets/edgestream/edgestream
 
 | 入口 | 路径 | 状态 |
 |------|------|------|
-| **Agent Skill (skills.sh)** | [`skills/eventr/SKILL.md`](../skills/eventr/SKILL.md) | ✅ Phase 0 |
-| **CLI** | `eventr validate` / `test` / `run` | ✅ 已有 |
+| **Agent Skill (skills.sh)** | [`skills/edgestream/SKILL.md`](../skills/edgestream/SKILL.md) | ✅ Phase 0 |
+| **CLI** | `edgestream validate` / `test` / `run` | ✅ 已有 |
 | **Admin HTTP API** | `/admin/reload`、`/admin/pipelines` | ✅ 已有 |
-| **MCP Server** | `eventr mcp` 或独立 `eventr-mcp` | Phase 1b |
+| **MCP Server** | `edgestream mcp` 或独立 `edgestream-mcp` | Phase 1b |
 | **JSON 输出** | `validate --format json` 等 | Phase 1b |
 
 ### 1.1 为什么 Agent 调用是第一步
@@ -47,17 +47,17 @@ Browse: https://skills.sh/deeploop-ai/eventr/eventr
 | 原因 | 说明 |
 |------|------|
 | **立刻可用** | 不改动引擎核心；Skill + 文档即可让 Cursor Agent 写 pipeline |
-| **复利最大** | Agent 帮用户配 pipeline → 降低 eventr 使用门槛 → 生态飞轮 |
+| **复利最大** | Agent 帮用户配 pipeline → 降低 edgestream 使用门槛 → 生态飞轮 |
 | **与 LLM Transform 正交** | 外部 Agent 写配置；内部 `llm` transform 是运行时能力，可后做 |
 | **对标真实需求** | 开发者用 AI 助手搭数据管道，比「管道里调 GPT」更常见 |
 
 ### 1.2 设计原则（Agent 侧）
 
 1. **CLI 优先** — Agent 通过可脚本化命令操作；HTTP Admin 仅在引擎已运行时
-2. **Skill 即契约** — `skills/eventr/` 发布到 skills.sh，固化术语、工作流、插件清单
+2. **Skill 即契约** — `skills/edgestream/` 发布到 skills.sh，固化术语、工作流、插件清单
 3. **校验先于运行** — Skill 强制 `validate` → `test` → `run` 顺序
 4. **机器可读输出** — Phase 1b 起 CLI/MCP 返回 JSON，便于 Agent 解析
-5. **文档分层** — Skill（操作手册）→ configurations.md（字段参考）→ eventr-design.md（语义）
+5. **文档分层** — Skill（操作手册）→ configurations.md（字段参考）→ edgestream-design.md（语义）
 
 ### 1.3 设计原则（Pipeline 内 LLM，Phase 2+）
 
@@ -69,17 +69,17 @@ Browse: https://skills.sh/deeploop-ai/eventr/eventr
 
 ## 2. 架构概览
 
-### 2.1 Phase 0：Agent 调用 eventr（当前）
+### 2.1 Phase 0：Agent 调用 edgestream（当前）
 
 ```
 ┌─────────────────────────────────────────────────────────┐
 │  Cursor / Claude / Custom Agent                          │
-│  reads skills/eventr/SKILL.md                            │
+│  reads skills/edgestream/SKILL.md                            │
 └──────────────────────────┬──────────────────────────────┘
                            │ shell / MCP (Phase 1b)
                            ▼
 ┌─────────────────────────────────────────────────────────┐
-│  eventr CLI                    Admin HTTP (运行中)        │
+│  edgestream CLI                    Admin HTTP (运行中)        │
 │  validate · test · run         reload · pipelines · status│
 └──────────────────────────┬──────────────────────────────┘
                            ▼
@@ -88,7 +88,7 @@ Browse: https://skills.sh/deeploop-ai/eventr/eventr
 └─────────────────────────────────────────────────────────┘
 ```
 
-### 2.2 Phase 2+：eventr 内嵌 LLM（后续）
+### 2.2 Phase 2+：edgestream 内嵌 LLM（后续）
 
 ```
 Source → map/route → llm transform → embed → Sink
@@ -144,7 +144,7 @@ steps:
 - `messages[].content` 支持 eql 模板（`${payload.x}`、`${metadata.y}`）
 - 成功：按 `result` 配置写入 payload/metadata；可选保留 raw response 到 `metadata['er-llm-raw']`
 - 失败：429/5xx → 瞬时错误，走边 retry；400/401 → 确定性错误，直接 DLQ
-- 超时：context deadline，计 `eventr_llm_timeout_total`
+- 超时：context deadline，计 `edgestream_llm_timeout_total`
 
 ### 3.2 Transform：`embed`（P1，v2.1）
 
@@ -326,24 +326,24 @@ Provider 注册与 Source/Sink 相同：`registry.RegisterLLMProvider("openai", 
 
 ## 6. 可观测性
 
-### 6.1 指标（`eventr_*` 扩展）
+### 6.1 指标（`edgestream_*` 扩展）
 
 | 指标 | 类型 | 标签 |
 |------|------|------|
-| `eventr_llm_requests_total` | Counter | pipeline, stage_id, provider, model, status |
-| `eventr_llm_latency_seconds` | Histogram | pipeline, stage_id, provider, model |
-| `eventr_llm_tokens_total` | Counter | pipeline, stage_id, provider, model, direction=prompt\|completion |
-| `eventr_llm_errors_total` | Counter | pipeline, stage_id, error_type |
-| `eventr_agent_turns_total` | Counter | pipeline, stage_id |
-| `eventr_agent_tool_calls_total` | Counter | pipeline, stage_id, tool_name, status |
+| `edgestream_llm_requests_total` | Counter | pipeline, stage_id, provider, model, status |
+| `edgestream_llm_latency_seconds` | Histogram | pipeline, stage_id, provider, model |
+| `edgestream_llm_tokens_total` | Counter | pipeline, stage_id, provider, model, direction=prompt\|completion |
+| `edgestream_llm_errors_total` | Counter | pipeline, stage_id, error_type |
+| `edgestream_agent_turns_total` | Counter | pipeline, stage_id |
+| `edgestream_agent_tool_calls_total` | Counter | pipeline, stage_id, tool_name, status |
 
 ### 6.2 Tracing
 
 ```
-Transform Span (eventr.transform.classify)
-└── LLM Span (eventr.llm.complete)
+Transform Span (edgestream.transform.classify)
+└── LLM Span (edgestream.llm.complete)
     ├── attributes: provider, model, tokens, finish_reason
-    └── Child Span (eventr.agent.tool) × N
+    └── Child Span (edgestream.agent.tool) × N
 ```
 
 ---
@@ -407,12 +407,12 @@ kafka → llm (router)─┼─► llm (support expert) ──► sink
 
 ## 8. 开发路线图
 
-### Phase 0：Agent 调用 eventr（**当前，第一步**）
+### Phase 0：Agent 调用 edgestream（**当前，第一步**）
 
 | 任务 | 交付物 | 状态 |
 |------|--------|------|
-| 0.1 项目 Agent Skill（skills.sh） | `skills/eventr/SKILL.md` + `reference.md` + `skills/README.md` | ✅ |
-| 0.2 文档对齐 | 本文件、README、eventr-design §12 | ✅ |
+| 0.1 项目 Agent Skill（skills.sh） | `skills/edgestream/SKILL.md` + `reference.md` + `skills/README.md` | ✅ |
+| 0.2 文档对齐 | 本文件、README、edgestream-design §12 | ✅ |
 | 0.3 `_examples` 索引在 Skill 中可发现 | Skill reference 链接 | ✅ |
 | 0.4 Agent 工作流验收 | 用 Cursor Agent 完成：validate 示例 → 新建 cron pipeline → test | 待验收 |
 
@@ -422,22 +422,22 @@ kafka → llm (router)─┼─► llm (support expert) ──► sink
 
 | 任务 | 交付物 |
 |------|--------|
-| 1a.1 `eventr plugins list` | 输出已注册 source/transform/sink/codec |
-| 1a.2 `eventr validate --format json` | 结构化错误（path、message、line）供 Agent 解析 |
-| 1a.3 `eventr doc --format dot` | 管道拓扑 DOT（设计文档已规划） |
+| 1a.1 `edgestream plugins list` | 输出已注册 source/transform/sink/codec |
+| 1a.2 `edgestream validate --format json` | 结构化错误（path、message、line）供 Agent 解析 |
+| 1a.3 `edgestream doc --format dot` | 管道拓扑 DOT（设计文档已规划） |
 | 1a.4 Skill 更新 | 引用新 CLI 子命令 |
 
 ### Phase 1b：MCP Server（v2.0-beta，约 2 周）
 
-独立进程或 `eventr mcp`，暴露 Agent 工具：
+独立进程或 `edgestream mcp`，暴露 Agent 工具：
 
 | MCP Tool | 映射 |
 |----------|------|
-| `eventr_validate` | validate config file/dir |
-| `eventr_test` | run fixture suite |
-| `eventr_plugins_list` | list registered plugins |
-| `eventr_pipeline_status` | GET /admin/pipelines/{name}/status |
-| `eventr_reload` | POST /admin/reload/{name} |
+| `edgestream_validate` | validate config file/dir |
+| `edgestream_test` | run fixture suite |
+| `edgestream_plugins_list` | list registered plugins |
+| `edgestream_pipeline_status` | GET /admin/pipelines/{name}/status |
+| `edgestream_reload` | POST /admin/reload/{name} |
 
 实现计划：[2026-07-01-agent-skill.md](superpowers/plans/2026-07-01-agent-skill.md)
 
@@ -457,7 +457,7 @@ kafka → llm (router)─┼─► llm (support expert) ──► sink
 
 ### Phase 4：编排与 MCP 工具双向（v2.3+）
 
-原 Phase C；另含 **eventr 作为 MCP tool 被外部 Agent 调用** 与 **pipeline 内 agent 调用 MCP** 的统一 tool 抽象。
+原 Phase C；另含 **edgestream 作为 MCP tool 被外部 Agent 调用** 与 **pipeline 内 agent 调用 MCP** 的统一 tool 抽象。
 
 ---
 
@@ -467,8 +467,8 @@ kafka → llm (router)─┼─► llm (support expert) ──► sink
 |------|------|
 | [2026-07-01-agent-skill.md](superpowers/plans/2026-07-01-agent-skill.md) | **Phase 0–1b** Agent Skill + CLI JSON + MCP |
 | [2026-07-01-ai-agent-foundation.md](superpowers/plans/2026-07-01-ai-agent-foundation.md) | Phase 2 管道内 LLM（TDD 任务分解） |
-| [skills/eventr/SKILL.md](../skills/eventr/SKILL.md) | Agent 操作手册（skills.sh 发布） |
-| [skills/README.md](../skills/README.md) | 安装：`npx skills add deeploop-ai/eventr@eventr` |
+| [skills/edgestream/SKILL.md](../skills/edgestream/SKILL.md) | Agent 操作手册（skills.sh 发布） |
+| [skills/README.md](../skills/README.md) | 安装：`npx skills add edgesets/edgestream@edgestream` |
 | [configurations.md](configurations.md) | 配置字段参考 |
 
 ---
@@ -494,4 +494,4 @@ kafka → llm (router)─┼─► llm (support expert) ──► sink
 
 ---
 
-> 下一步：**Phase 1a** — `eventr plugins list` 与 `validate --format json`；**Phase 1b** — MCP Server。Pipeline 内 LLM 见 Phase 2 计划。
+> 下一步：**Phase 1a** — `edgestream plugins list` 与 `validate --format json`；**Phase 1b** — MCP Server。Pipeline 内 LLM 见 Phase 2 计划。

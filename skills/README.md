@@ -1,29 +1,29 @@
-# EventR Skills
+# EdgeStream Skills
 
-Agent skills for [EventR](https://github.com/deeploop-ai/eventr), published for the [skills.sh](https://skills.sh/) ecosystem.
+Agent skills for [EdgeStream](https://github.com/edgesets/edgestream), published for the [skills.sh](https://skills.sh/) ecosystem.
 
 Install with the [Skills CLI](https://github.com/vercel-labs/skills):
 
 ```bash
 # Install into the current project (Cursor, Claude Code, Codex, etc.)
-npx skills add deeploop-ai/eventr@eventr
+npx skills add edgesets/edgestream@edgestream
 
 # Install globally for all projects
-npx skills add deeploop-ai/eventr@eventr -g -y
+npx skills add edgesets/edgestream@edgestream -g -y
 
 # Try without installing
-npx skills use deeploop-ai/eventr@eventr
+npx skills use edgesets/edgestream@edgestream
 ```
 
 After publishing to GitHub, the skill page will appear at:
 
-`https://skills.sh/deeploop-ai/eventr/eventr`
+`https://skills.sh/edgesets/edgestream/edgestream`
 
 ## Skills in this directory
 
 | Skill | Description |
 |-------|-------------|
-| [eventr](eventr/SKILL.md) | Author, validate, test, and run EventR DAG pipelines (YAML/HOCON, eql, plugins) |
+| [edgestream](edgestream/SKILL.md) | Author, validate, test, and run EdgeStream DAG pipelines (YAML/HOCON, eql, plugins) |
 
 ## Layout
 
@@ -32,7 +32,7 @@ This repo follows the [Agent Skills](https://github.com/vercel-labs/skills) conv
 ```
 skills/
 ├── README.md           # this file
-└── eventr/
+└── edgestream/
     ├── SKILL.md        # required — name must match directory
     └── reference.md    # plugin & config reference (bundled with skill)
 ```
@@ -45,7 +45,7 @@ When editing skills locally:
 
 ```bash
 # Install from this repo (path to repo root or skills dir)
-npx skills add ./ --skill eventr
+npx skills add ./ --skill edgestream
 
 # Validate frontmatter: name matches directory, description present
 npx skills init --help

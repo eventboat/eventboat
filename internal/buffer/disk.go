@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/deeploop-ai/eventr/internal/message"
+	"github.com/edgesets/edgestream/internal/message"
 )
 
 const (

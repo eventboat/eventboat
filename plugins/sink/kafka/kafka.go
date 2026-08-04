@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/deeploop-ai/eventr/internal/basestage"
-	"github.com/deeploop-ai/eventr/internal/message"
-	"github.com/deeploop-ai/eventr/internal/registry"
-	"github.com/deeploop-ai/eventr/internal/stage"
+	"github.com/edgesets/edgestream/internal/basestage"
+	"github.com/edgesets/edgestream/internal/message"
+	"github.com/edgesets/edgestream/internal/registry"
+	"github.com/edgesets/edgestream/internal/stage"
 	kafkago "github.com/segmentio/kafka-go"
 )
 

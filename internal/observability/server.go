@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"sync"
 
-	"github.com/deeploop-ai/eventr/internal/config"
+	"github.com/edgesets/edgestream/internal/config"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 

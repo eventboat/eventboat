@@ -3,8 +3,8 @@ package cron_test
 import (
 	"testing"
 
-	"github.com/deeploop-ai/eventr/internal/registry"
-	_ "github.com/deeploop-ai/eventr/plugins/source/cron"
+	"github.com/edgesets/edgestream/internal/registry"
+	_ "github.com/edgesets/edgestream/plugins/source/cron"
 )
 
 func TestCronSource_InvalidSchedule(t *testing.T) {

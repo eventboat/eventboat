@@ -1,9 +1,9 @@
 .PHONY: build test validate tidy pipeline-test
 
-BINARY := bin/eventr
+BINARY := bin/edgestream
 
 build:
-	go build -o $(BINARY) ./cmd/eventr
+	go build -o $(BINARY) ./cmd/edgestream
 
 test:
 	go test ./...

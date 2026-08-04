@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/deeploop-ai/eventr/internal/config"
+	"github.com/edgesets/edgestream/internal/config"
 )
 
 func hoconTestdata(t *testing.T, name string) string {

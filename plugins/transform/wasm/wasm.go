@@ -3,8 +3,8 @@ package wasm
 import (
 	"fmt"
 
-	"github.com/deeploop-ai/eventr/internal/registry"
-	"github.com/deeploop-ai/eventr/internal/stage"
+	"github.com/edgesets/edgestream/internal/registry"
+	"github.com/edgesets/edgestream/internal/stage"
 )
 
 func init() {

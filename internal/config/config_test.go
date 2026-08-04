@@ -5,8 +5,8 @@ import (
 	"runtime"
 	"testing"
 
-	"github.com/deeploop-ai/eventr/internal/config"
-	"github.com/deeploop-ai/eventr/internal/topology"
+	"github.com/edgesets/edgestream/internal/config"
+	"github.com/edgesets/edgestream/internal/topology"
 )
 
 func testdata(t *testing.T, name string) string {

@@ -8,10 +8,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/deeploop-ai/eventr/internal/config"
-	"github.com/deeploop-ai/eventr/internal/engine"
-	"github.com/deeploop-ai/eventr/internal/topology"
-	_ "github.com/deeploop-ai/eventr/plugins/all"
+	"github.com/edgesets/edgestream/internal/config"
+	"github.com/edgesets/edgestream/internal/engine"
+	"github.com/edgesets/edgestream/internal/topology"
+	_ "github.com/edgesets/edgestream/plugins/all"
 )
 
 func TestReloadPipeline(t *testing.T) {

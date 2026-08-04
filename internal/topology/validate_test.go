@@ -3,7 +3,7 @@ package topology
 import (
 	"testing"
 
-	"github.com/deeploop-ai/eventr/internal/config"
+	"github.com/edgesets/edgestream/internal/config"
 )
 
 func TestValidateRejectsCycle(t *testing.T) {

@@ -8,13 +8,13 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/deeploop-ai/eventr/internal/codec"
-	"github.com/deeploop-ai/eventr/internal/config"
-	"github.com/deeploop-ai/eventr/internal/message"
-	"github.com/deeploop-ai/eventr/internal/observability"
-	"github.com/deeploop-ai/eventr/internal/registry"
-	"github.com/deeploop-ai/eventr/internal/stage"
-	"github.com/deeploop-ai/eventr/internal/topology"
+	"github.com/edgesets/edgestream/internal/codec"
+	"github.com/edgesets/edgestream/internal/config"
+	"github.com/edgesets/edgestream/internal/message"
+	"github.com/edgesets/edgestream/internal/observability"
+	"github.com/edgesets/edgestream/internal/registry"
+	"github.com/edgesets/edgestream/internal/stage"
+	"github.com/edgesets/edgestream/internal/topology"
 	"github.com/google/uuid"
 )
 

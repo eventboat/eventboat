@@ -9,11 +9,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/deeploop-ai/eventr/internal/config"
-	"github.com/deeploop-ai/eventr/internal/engine"
-	"github.com/deeploop-ai/eventr/internal/registry"
-	"github.com/deeploop-ai/eventr/internal/testutil"
-	"github.com/deeploop-ai/eventr/internal/topology"
+	"github.com/edgesets/edgestream/internal/config"
+	"github.com/edgesets/edgestream/internal/engine"
+	"github.com/edgesets/edgestream/internal/registry"
+	"github.com/edgesets/edgestream/internal/testutil"
+	"github.com/edgesets/edgestream/internal/topology"
 	"gopkg.in/yaml.v3"
 )
 

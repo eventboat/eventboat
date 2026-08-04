@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/deeploop-ai/eventr/internal/stage"
+	"github.com/edgesets/edgestream/internal/stage"
 )
 
 type Base struct {

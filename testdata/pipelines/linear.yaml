@@ -1,4 +1,4 @@
-apiVersion: eventr/v1
+apiVersion: edgestream/v1
 kind: Pipeline
 metadata:
   name: order-processing

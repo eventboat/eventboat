@@ -1,6 +1,6 @@
 # 模式：边级 buffer / retry / DLQ / best-effort
 # 主路径 sink 带重试；失败消息经 DLQ 边写入 dlq-sink；analytics 为 optional 边。
-apiVersion: eventr/v1
+apiVersion: edgestream/v1
 kind: Pipeline
 metadata:
   name: edge-delivery

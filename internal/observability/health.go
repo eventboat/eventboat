@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/deeploop-ai/eventr/internal/stage"
+	"github.com/edgesets/edgestream/internal/stage"
 )
 
 // StageHealth is a single stage readiness result.

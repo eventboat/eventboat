@@ -1,4 +1,4 @@
-module github.com/deeploop-ai/eventr
+module github.com/edgesets/edgestream
 
 go 1.23.0
 

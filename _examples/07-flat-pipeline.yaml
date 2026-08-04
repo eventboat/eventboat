@@ -1,6 +1,6 @@
 # 模式：平坦 pipeline[] 写法（与 steps 等价，二选一）
 # 适合极简管道或从早期草案迁移；每行显式声明 kind 与 type。
-apiVersion: eventr/v1
+apiVersion: edgestream/v1
 kind: Pipeline
 metadata:
   name: flat-pipeline

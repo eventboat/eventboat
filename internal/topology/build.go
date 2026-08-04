@@ -3,7 +3,7 @@ package topology
 import (
 	"fmt"
 
-	"github.com/deeploop-ai/eventr/internal/config"
+	"github.com/edgesets/edgestream/internal/config"
 )
 
 func FromConfig(cfg *config.PipelineConfig) (*TopologyIR, error) {

@@ -10,7 +10,7 @@ import (
 	"strings"
 	"sync/atomic"
 
-	"github.com/deeploop-ai/eventr/internal/config"
+	"github.com/edgesets/edgestream/internal/config"
 )
 
 var currentLevel atomic.Int32

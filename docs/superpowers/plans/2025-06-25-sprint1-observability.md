@@ -10,7 +10,7 @@
 
 ## Global Constraints
 
-- Metric prefix: `eventr_` (not `er2_`)
+- Metric prefix: `edgestream_` (not `er2_`)
 - Default metrics port: `9090`, path `/metrics`
 - Default health endpoints: `/live`, `/ready`
 - Health `/live` does not query stages; `/ready` aggregates all Stage `HealthCheck`
@@ -51,12 +51,12 @@
 - Modify: `internal/engine/engine.go`
 - Modify: `internal/engine/pipeline.go`
 - Modify: `internal/engine/dispatch.go`
-- Modify: `cmd/eventr/main.go`
+- Modify: `cmd/edgestream/main.go`
 
 - [x] Wire metrics into pipeline hot paths
-- [x] Start observability server from `eventr run`
+- [x] Start observability server from `edgestream run`
 
 ### Task 5: Verify
 
 - [x] `go test ./...`
-- [x] `go build ./cmd/eventr`
+- [x] `go build ./cmd/edgestream`

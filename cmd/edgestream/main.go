@@ -11,13 +11,13 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/deeploop-ai/eventr/internal/config"
-	"github.com/deeploop-ai/eventr/internal/engine"
-	"github.com/deeploop-ai/eventr/internal/observability"
-	"github.com/deeploop-ai/eventr/internal/registry"
-	"github.com/deeploop-ai/eventr/internal/testrunner"
-	"github.com/deeploop-ai/eventr/internal/topology"
-	_ "github.com/deeploop-ai/eventr/plugins/all"
+	"github.com/edgesets/edgestream/internal/config"
+	"github.com/edgesets/edgestream/internal/engine"
+	"github.com/edgesets/edgestream/internal/observability"
+	"github.com/edgesets/edgestream/internal/registry"
+	"github.com/edgesets/edgestream/internal/testrunner"
+	"github.com/edgesets/edgestream/internal/topology"
+	_ "github.com/edgesets/edgestream/plugins/all"
 )
 
 func main() {
@@ -39,7 +39,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintf(os.Stderr, "Usage: eventr <run|validate|test> [flags]\n")
+	fmt.Fprintf(os.Stderr, "Usage: edgestream <run|validate|test> [flags]\n")
 }
 
 func runCmd(args []string) {
@@ -90,7 +90,7 @@ func runCmd(args []string) {
 	if err := eng.Start(ctx); err != nil {
 		fatal(err)
 	}
-	fmt.Println("eventr running; press Ctrl+C to stop")
+	fmt.Println("edgestream running; press Ctrl+C to stop")
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGHUP)

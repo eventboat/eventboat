@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/deeploop-ai/eventr/internal/codec"
-	"github.com/deeploop-ai/eventr/internal/stage"
+	"github.com/edgesets/edgestream/internal/codec"
+	"github.com/edgesets/edgestream/internal/stage"
 )
 
 type SourceFactory func(id string, cfg map[string]any) (stage.Source, error)

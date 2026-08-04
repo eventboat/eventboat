@@ -1,35 +1,35 @@
 ---
-name: eventr
+name: edgestream
 description: >-
-  Operate and author EventR DAG event pipelines. Use when the user asks to
-  create, validate, test, run, debug, or reload EventR pipelines; write steps/
+  Operate and author EdgeStream DAG event pipelines. Use when the user asks to
+  create, validate, test, run, debug, or reload EdgeStream pipelines; write steps/
   depends_on YAML or HOCON; configure source/transform/sink plugins or eql;
-  or work in the eventr repository.
+  or work in the edgestream repository.
 license: TBD
 metadata:
-  author: deeploop-ai
-  repository: https://github.com/deeploop-ai/eventr
-  homepage: https://github.com/deeploop-ai/eventr
-  skills-sh: deeploop-ai/eventr/eventr
+  author: edgesets
+  repository: https://github.com/edgesets/edgestream
+  homepage: https://github.com/edgesets/edgestream
+  skills-sh: edgesets/edgestream/edgestream
 ---
 
-# EventR Agent Skill
+# EdgeStream Agent Skill
 
-EventR is a Go DAG event router: **Source → Transform → Sink**, with `depends_on` edges, eql (CEL + assignment), retry/DLQ, and at-least-once Ack.
+EdgeStream is a Go DAG event router: **Source → Transform → Sink**, with `depends_on` edges, eql (CEL + assignment), retry/DLQ, and at-least-once Ack.
 
 **Your job:** help users design pipelines, write config, validate, test, and run — using CLI first, Admin HTTP API when the engine is already running.
 
 ## Install
 
 ```bash
-npx skills add deeploop-ai/eventr@eventr
+npx skills add edgesets/edgestream@edgestream
 ```
 
-Browse: [skills.sh/deeploop-ai/eventr/eventr](https://skills.sh/deeploop-ai/eventr/eventr)
+Browse: [skills.sh/edgesets/edgestream/edgestream](https://skills.sh/edgesets/edgestream/edgestream)
 
 ## When to apply this skill
 
-- User mentions eventr, EventR, event router, pipeline YAML/HOCON
+- User mentions edgestream, EdgeStream, event router, pipeline YAML/HOCON
 - Creating or editing `steps`, `depends_on`, eql `dsl`, or plugin config
 - Running `validate` / `test` / `run` / reload
 - Debugging topology, routing, backpressure, or DLQ behavior
@@ -38,12 +38,12 @@ Browse: [skills.sh/deeploop-ai/eventr/eventr](https://skills.sh/deeploop-ai/even
 
 **Always read first:** [reference.md](reference.md) — plugin schemas, edges, admin API (bundled with this skill).
 
-**When working inside the eventr git repo**, also read:
+**When working inside the edgestream git repo**, also read:
 
 1. [docs/configurations.md](../../docs/configurations.md) — full config reference
 2. [_examples/](../../_examples/) — copy patterns before inventing new topology
 3. [docs/ai-agent.md](../../docs/ai-agent.md) — agent integration roadmap
-4. [eventr-design.md](../../eventr-design.md) — deep design when semantics are unclear
+4. [edgestream-design.md](../../edgestream-design.md) — deep design when semantics are unclear
 
 ## Agent workflow
 
@@ -53,9 +53,9 @@ Always follow this loop when authoring pipelines:
 1. Clarify intent (sources, transforms, sinks, routing, reliability)
 2. Pick closest _examples/ template (or reference.md patterns if repo unavailable)
 3. Write or edit config (prefer steps + depends_on)
-4. eventr validate --config <file>     # must pass before run
-5. eventr test --config <suite.yaml>   # when behavior must be proven
-6. eventr run --config <file>          # local run; cron+drop needs no deps
+4. edgestream validate --config <file>     # must pass before run
+5. edgestream test --config <suite.yaml>   # when behavior must be proven
+6. edgestream run --config <file>          # local run; cron+drop needs no deps
 7. POST /admin/reload/{name}           # only if engine already running
 ```
 
@@ -69,16 +69,16 @@ Always follow this loop when authoring pipelines:
 
 ## CLI reference
 
-Build once if needed: `go build -o bin/eventr ./cmd/eventr`
+Build once if needed: `go build -o bin/edgestream ./cmd/edgestream`
 
 | Command | Purpose |
 |---------|---------|
-| `eventr validate --config FILE` | Parse + topology check; exit non-zero on error |
-| `eventr validate --config-dir DIR` | Validate all `.yaml`/`.yml`/`.conf`/`.hocon` in dir |
-| `eventr test --config SUITE.yaml` | Fixture-driven pipeline test |
-| `eventr test --dir testdata/tests` | Run all suite files in directory |
-| `eventr run --config FILE` | Start engine (SIGINT/SIGTERM graceful stop; SIGHUP reload all) |
-| `eventr run --config-dir DIR` | Load multiple pipelines |
+| `edgestream validate --config FILE` | Parse + topology check; exit non-zero on error |
+| `edgestream validate --config-dir DIR` | Validate all `.yaml`/`.yml`/`.conf`/`.hocon` in dir |
+| `edgestream test --config SUITE.yaml` | Fixture-driven pipeline test |
+| `edgestream test --dir testdata/tests` | Run all suite files in directory |
+| `edgestream run --config FILE` | Start engine (SIGINT/SIGTERM graceful stop; SIGHUP reload all) |
+| `edgestream run --config-dir DIR` | Load multiple pipelines |
 
 Makefile shortcuts: `make build`, `make test`, `make validate`, `make pipeline-test`
 
@@ -101,7 +101,7 @@ Default health/metrics port from config (`observability.health.port`, often `808
 ## Config skeleton (YAML)
 
 ```yaml
-apiVersion: eventr/v1
+apiVersion: edgestream/v1
 kind: Pipeline
 metadata:
   name: my-pipeline
@@ -198,12 +198,12 @@ cases:
 | Both `route` and `condition` on same edge | Use one only |
 | `payload.*` in eql without `decoder: json` | Add decoder or use raw bytes |
 | Fan-out from one transform | Each downstream step declares its own `depends_on` + `route` |
-| Editing without validate | Always run `eventr validate` |
+| Editing without validate | Always run `edgestream validate` |
 
 ## Out of scope (not implemented yet)
 
 - `llm` / `embed` / `agent` transforms — planned v2.1+
-- MCP server for eventr — planned Phase 1b
+- MCP server for edgestream — planned Phase 1b
 - Do not invent plugin types not listed above
 
 ## Extended reference

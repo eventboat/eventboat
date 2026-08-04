@@ -3,9 +3,9 @@ package kafka_test
 import (
 	"testing"
 
-	"github.com/deeploop-ai/eventr/internal/registry"
-	_ "github.com/deeploop-ai/eventr/plugins/sink/kafka"
-	_ "github.com/deeploop-ai/eventr/plugins/source/kafka"
+	"github.com/edgesets/edgestream/internal/registry"
+	_ "github.com/edgesets/edgestream/plugins/sink/kafka"
+	_ "github.com/edgesets/edgestream/plugins/source/kafka"
 )
 
 func TestKafkaSink_RequiresTopic(t *testing.T) {

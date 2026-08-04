@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/deeploop-ai/eventr/internal/config"
-	"github.com/deeploop-ai/eventr/internal/observability"
-	"github.com/deeploop-ai/eventr/internal/stage"
+	"github.com/edgesets/edgestream/internal/config"
+	"github.com/edgesets/edgestream/internal/observability"
+	"github.com/edgesets/edgestream/internal/stage"
 	"github.com/prometheus/client_golang/prometheus"
 )
 

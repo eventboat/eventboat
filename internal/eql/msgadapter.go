@@ -1,6 +1,6 @@
 package eql
 
-import "github.com/deeploop-ai/eventr/internal/message"
+import "github.com/edgesets/edgestream/internal/message"
 
 // MsgAdapter implements MessageView for a *message.Message.
 type MsgAdapter struct{ *message.Message }

@@ -3,7 +3,7 @@ package topology
 import (
 	"time"
 
-	"github.com/deeploop-ai/eventr/internal/config"
+	"github.com/edgesets/edgestream/internal/config"
 )
 
 // Stage kind constants — used for IR serialization and engine comparisons.

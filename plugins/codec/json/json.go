@@ -3,8 +3,8 @@ package jsoncodec
 import (
 	"encoding/json"
 
-	"github.com/deeploop-ai/eventr/internal/codec"
-	"github.com/deeploop-ai/eventr/internal/registry"
+	"github.com/edgesets/edgestream/internal/codec"
+	"github.com/edgesets/edgestream/internal/registry"
 	cel "github.com/google/cel-go/cel"
 )
 

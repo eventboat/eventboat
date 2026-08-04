@@ -6,10 +6,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/deeploop-ai/eventr/internal/buffer"
-	"github.com/deeploop-ai/eventr/internal/config"
-	"github.com/deeploop-ai/eventr/internal/message"
-	"github.com/deeploop-ai/eventr/internal/topology"
+	"github.com/edgesets/edgestream/internal/buffer"
+	"github.com/edgesets/edgestream/internal/config"
+	"github.com/edgesets/edgestream/internal/message"
+	"github.com/edgesets/edgestream/internal/topology"
 )
 
 func setupTestEdge(t *testing.T, from, to string) *buffer.EdgeInbound {

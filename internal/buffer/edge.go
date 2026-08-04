@@ -6,9 +6,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/deeploop-ai/eventr/internal/config"
-	"github.com/deeploop-ai/eventr/internal/message"
-	"github.com/deeploop-ai/eventr/internal/topology"
+	"github.com/edgesets/edgestream/internal/config"
+	"github.com/edgesets/edgestream/internal/message"
+	"github.com/edgesets/edgestream/internal/topology"
 )
 
 // EdgeInbound is a per-edge inbound buffer with optional disk backing.

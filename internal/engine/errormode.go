@@ -3,7 +3,7 @@ package engine
 import (
 	"strings"
 
-	"github.com/deeploop-ai/eventr/internal/message"
+	"github.com/edgesets/edgestream/internal/message"
 )
 
 type errorMode string

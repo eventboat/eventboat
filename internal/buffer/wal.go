@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/deeploop-ai/eventr/internal/message"
+	"github.com/edgesets/edgestream/internal/message"
 	"github.com/google/uuid"
 )
 

@@ -4,8 +4,8 @@ import (
 	"context"
 	"time"
 
-	"github.com/deeploop-ai/eventr/internal/message"
-	"github.com/deeploop-ai/eventr/internal/observability"
+	"github.com/edgesets/edgestream/internal/message"
+	"github.com/edgesets/edgestream/internal/observability"
 )
 
 func (p *Pipeline) beginMessageLifecycle(ctx context.Context, msg *message.Message) error {

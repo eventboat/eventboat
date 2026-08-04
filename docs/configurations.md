@@ -1,8 +1,8 @@
 # 配置规范
 
-本文档说明 EventR Pipeline 可用的全部配置项。配置支持 **YAML** 与 **HOCON** 两种格式，解析为统一的 `PipelineConfig`，再展开为运行时 `TopologyIR`。
+本文档说明 EdgeStream Pipeline 可用的全部配置项。配置支持 **YAML** 与 **HOCON** 两种格式，解析为统一的 `PipelineConfig`，再展开为运行时 `TopologyIR`。
 
-> **与 Envelope 的关系：** EventR 在布局上对齐 [Cloudera Envelope](https://github.com/cloudera-labs/envelope/blob/master/docs/configurations.adoc) 的 `steps` 块结构，但字段名保持 eventr 自有命名（如 `depends_on`、`source`/`transform`/`sink`）。Envelope 用户迁移时：`application` → `engine`，`input` → `source`，`deriver` → `transform`，`output` → `sink`，`dependencies` → `depends_on`。
+> **与 Envelope 的关系：** EdgeStream 在布局上对齐 [Cloudera Envelope](https://github.com/cloudera-labs/envelope/blob/master/docs/configurations.adoc) 的 `steps` 块结构，但字段名保持 edgestream 自有命名（如 `depends_on`、`source`/`transform`/`sink`）。Envelope 用户迁移时：`application` → `engine`，`input` → `source`，`deriver` → `transform`，`output` → `sink`，`dependencies` → `depends_on`。
 
 ## 目录
 
@@ -30,7 +30,7 @@
 **YAML：**
 
 ```yaml
-apiVersion: eventr/v1
+apiVersion: edgestream/v1
 kind: Pipeline
 metadata:
   name: order-processing
@@ -581,7 +581,7 @@ steps:
 
 | 字段 | 说明 |
 |------|------|
-| `apiVersion` | 如 `eventr/v1`（YAML/CRD 专用） |
+| `apiVersion` | 如 `edgestream/v1`（YAML/CRD 专用） |
 | `kind` | 如 `Pipeline` |
 | `metadata.name` | Pipeline 名称；展开为 `TopologyIR.Name` |
 
@@ -654,7 +654,7 @@ edges:
 与 `steps` **二选一**；适合极简管道或早期草案迁移。每行一个 stage，需显式声明 `kind` 与 `type`。
 
 ```yaml
-apiVersion: eventr/v1
+apiVersion: edgestream/v1
 kind: Pipeline
 metadata:
   name: order-processing
@@ -737,7 +737,7 @@ config:
 
 ## 配置校验
 
-`eventr validate` 在启动前执行以下检查：
+`edgestream validate` 在启动前执行以下检查：
 
 | 检查项 | 说明 |
 |--------|------|
@@ -752,8 +752,8 @@ config:
 | 插件类型 | `type` 须在注册表中存在且与 `kind` 匹配 |
 
 ```bash
-eventr validate --config pipeline.yaml
-eventr validate --config-dir ./pipelines/
+edgestream validate --config pipeline.yaml
+edgestream validate --config-dir ./pipelines/
 ```
 
 ---
@@ -767,17 +767,17 @@ eventr validate --config-dir ./pipelines/
 
 ```bash
 # 运行单个 Pipeline
-eventr run --config pipeline.yaml
-eventr run --config pipeline.conf
+edgestream run --config pipeline.yaml
+edgestream run --config pipeline.conf
 
 # 显式指定格式（扩展名非标准时）
-eventr run --config pipeline.txt --format hocon
+edgestream run --config pipeline.txt --format hocon
 
 # 目录内混放 YAML / HOCON
-eventr run --config-dir ./pipelines/
+edgestream run --config-dir ./pipelines/
 
 # 仅校验
-eventr validate --config testdata/pipelines/linear.yaml
+edgestream validate --config testdata/pipelines/linear.yaml
 ```
 
 K8s Operator **仅接受 YAML CRD**；HOCON 用于集群外本地配置。
@@ -786,12 +786,12 @@ K8s Operator **仅接受 YAML CRD**；HOCON 用于集群外本地配置。
 
 ## Envelope 字段对照
 
-从 Envelope 迁移时参考下表。EventR **不**映射 Envelope 的 `planner` 块；写入语义由 sink `config` 自行表达。
+从 Envelope 迁移时参考下表。EdgeStream **不**映射 Envelope 的 `planner` 块；写入语义由 sink `config` 自行表达。
 
-| Envelope | EventR | 备注 |
+| Envelope | EdgeStream | 备注 |
 |----------|--------|------|
 | `application.name` | `metadata.name` | |
-| `application.executor.*` | `engine.max_workers` 等 | 语义不同，按 eventr 引擎调优 |
+| `application.executor.*` | `engine.max_workers` 等 | 语义不同，按 edgestream 引擎调优 |
 | `application.batch.milliseconds` | — | 流式微批由 sink `batch` 控制 |
 | `steps.{name}.dependencies` | `steps.{name}.depends_on` | 支持序列与映射两种形态 |
 | `steps.{name}.input` | `steps.{name}.source` | |
@@ -805,7 +805,7 @@ K8s Operator **仅接受 YAML CRD**；HOCON 用于集群外本地配置。
 
 ### Source 插件对照
 
-| Envelope input.type | EventR source.type | 主要 config 字段 |
+| Envelope input.type | EdgeStream source.type | 主要 config 字段 |
 |---------------------|-------------------|------------------|
 | `kafka` | `kafka` | `brokers`, `topics`, `group_id` |
 | `filesystem` | — | v2.1+ 规划 |
@@ -815,7 +815,7 @@ K8s Operator **仅接受 YAML CRD**；HOCON 用于集群外本地配置。
 
 ### Sink 插件对照
 
-| Envelope output.type | EventR sink.type | 主要 config 字段 |
+| Envelope output.type | EdgeStream sink.type | 主要 config 字段 |
 |----------------------|-----------------|------------------|
 | `kafka` | `kafka` | `brokers`, `topic` |
 | `filesystem` | — | v2.1+ 规划 |
@@ -826,6 +826,6 @@ K8s Operator **仅接受 YAML CRD**；HOCON 用于集群外本地配置。
 
 ## 相关文档
 
-- [设计方案 §8 配置模型](../eventr-design.md#8-配置模型) — 设计背景与展开规则
-- [eql DSL](../eventr-design.md#7-dsl-语言设计-eql) — map/filter/route 表达式语法
+- [设计方案 §8 配置模型](../edgestream-design.md#8-配置模型) — 设计背景与展开规则
+- [eql DSL](../edgestream-design.md#7-dsl-语言设计-eql) — map/filter/route 表达式语法
 - [示例配置](../testdata/pipelines/) — `linear.yaml`、`linear.conf`
