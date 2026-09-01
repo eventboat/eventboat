@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/edgesets/edgestream/internal/config"
-	"github.com/edgesets/edgestream/internal/message"
+	"github.com/riverpod/riverpod/internal/config"
+	"github.com/riverpod/riverpod/internal/message"
 )
 
 func TestDiskWALAppendAndRecover(t *testing.T) {

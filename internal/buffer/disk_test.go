@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/edgesets/edgestream/internal/message"
+	"github.com/riverpod/riverpod/internal/message"
 )
 
 // reopenWAL simulates a crash: a new DiskWAL on the same dir without closing

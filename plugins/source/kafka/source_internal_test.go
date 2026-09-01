@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/edgesets/edgestream/internal/basestage"
-	"github.com/edgesets/edgestream/internal/message"
-	"github.com/edgesets/edgestream/internal/stage"
+	"github.com/riverpod/riverpod/internal/basestage"
+	"github.com/riverpod/riverpod/internal/message"
+	"github.com/riverpod/riverpod/internal/stage"
 	kafkago "github.com/segmentio/kafka-go"
 )
 

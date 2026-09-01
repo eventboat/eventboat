@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/edgesets/edgestream/internal/codec"
-	"github.com/edgesets/edgestream/internal/stage"
+	"github.com/riverpod/riverpod/internal/codec"
+	"github.com/riverpod/riverpod/internal/stage"
 )
 
 type SourceFactory func(id string, cfg map[string]any) (stage.Source, error)

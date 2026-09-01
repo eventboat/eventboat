@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/edgesets/edgestream/internal/config"
-	"github.com/edgesets/edgestream/internal/observability"
-	"github.com/edgesets/edgestream/internal/topology"
+	"github.com/riverpod/riverpod/internal/config"
+	"github.com/riverpod/riverpod/internal/observability"
+	"github.com/riverpod/riverpod/internal/topology"
 	"github.com/google/uuid"
 )
 

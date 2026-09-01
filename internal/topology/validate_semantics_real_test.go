@@ -4,9 +4,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/edgesets/edgestream/internal/registry"
-	"github.com/edgesets/edgestream/internal/topology"
-	_ "github.com/edgesets/edgestream/plugins/all"
+	"github.com/riverpod/riverpod/internal/registry"
+	"github.com/riverpod/riverpod/internal/topology"
+	_ "github.com/riverpod/riverpod/plugins/all"
 )
 
 func realPluginsFixture() *topology.TopologyIR {

@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/edgesets/edgestream/internal/stage"
+	"github.com/riverpod/riverpod/internal/stage"
 )
 
 type Base struct {

@@ -5,7 +5,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/edgesets/edgestream/internal/message"
+	"github.com/riverpod/riverpod/internal/message"
 )
 
 // The ack chain attached before Append must survive the WAL roundtrip: the

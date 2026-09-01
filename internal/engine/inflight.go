@@ -4,8 +4,8 @@ import (
 	"context"
 	"time"
 
-	"github.com/edgesets/edgestream/internal/message"
-	"github.com/edgesets/edgestream/internal/observability"
+	"github.com/riverpod/riverpod/internal/message"
+	"github.com/riverpod/riverpod/internal/observability"
 )
 
 func (p *Pipeline) beginMessageLifecycle(ctx context.Context, msg *message.Message) error {

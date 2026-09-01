@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/edgesets/edgestream/internal/config"
-	"github.com/edgesets/edgestream/internal/observability"
-	"github.com/edgesets/edgestream/internal/stage"
+	"github.com/riverpod/riverpod/internal/config"
+	"github.com/riverpod/riverpod/internal/observability"
+	"github.com/riverpod/riverpod/internal/stage"
 	"github.com/prometheus/client_golang/prometheus"
 )
 

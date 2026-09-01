@@ -4,8 +4,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/edgesets/edgestream/internal/testrunner"
-	_ "github.com/edgesets/edgestream/plugins/all"
+	"github.com/riverpod/riverpod/internal/testrunner"
+	_ "github.com/riverpod/riverpod/plugins/all"
 )
 
 func TestMapFilterSuite(t *testing.T) {

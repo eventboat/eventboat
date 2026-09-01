@@ -1,9 +1,9 @@
 .PHONY: build test validate tidy pipeline-test
 
-BINARY := bin/edgestream
+BINARY := bin/riverpod
 
 build:
-	go build -o $(BINARY) ./cmd/edgestream
+	go build -o $(BINARY) ./cmd/riverpod
 
 test:
 	go test ./...

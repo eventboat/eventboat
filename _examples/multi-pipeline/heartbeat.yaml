@@ -1,5 +1,5 @@
 # 多 Pipeline 示例之一：心跳 tick
-apiVersion: edgestream/v1
+apiVersion: riverpod/v1
 kind: Pipeline
 metadata:
   name: heartbeat

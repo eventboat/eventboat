@@ -1,6 +1,6 @@
 # 模式：边级 buffer / retry / DLQ / best-effort
 # 主路径 sink 带重试；失败消息经 pipeline 级 dlq 写入 dlq-sink；analytics 为 optional 边。
-apiVersion: edgestream/v1
+apiVersion: riverpod/v1
 kind: Pipeline
 metadata:
   name: edge-delivery

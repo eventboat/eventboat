@@ -3,8 +3,8 @@ package wasm
 import (
 	"fmt"
 
-	"github.com/edgesets/edgestream/internal/registry"
-	"github.com/edgesets/edgestream/internal/stage"
+	"github.com/riverpod/riverpod/internal/registry"
+	"github.com/riverpod/riverpod/internal/stage"
 )
 
 func init() {

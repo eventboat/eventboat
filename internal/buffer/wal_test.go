@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/edgesets/edgestream/internal/message"
+	"github.com/riverpod/riverpod/internal/message"
 )
 
 func TestWALRecordRoundTrip(t *testing.T) {

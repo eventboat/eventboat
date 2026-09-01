@@ -4,9 +4,9 @@ import (
 	"context"
 	"testing"
 
-	"github.com/edgesets/edgestream/internal/message"
-	"github.com/edgesets/edgestream/internal/registry"
-	_ "github.com/edgesets/edgestream/plugins/transform/filter"
+	"github.com/riverpod/riverpod/internal/message"
+	"github.com/riverpod/riverpod/internal/registry"
+	_ "github.com/riverpod/riverpod/plugins/transform/filter"
 )
 
 func newFilter(t *testing.T, dsl string) interface {

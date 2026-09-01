@@ -10,10 +10,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/edgesets/edgestream/internal/basestage"
-	"github.com/edgesets/edgestream/internal/message"
-	"github.com/edgesets/edgestream/internal/registry"
-	"github.com/edgesets/edgestream/internal/stage"
+	"github.com/riverpod/riverpod/internal/basestage"
+	"github.com/riverpod/riverpod/internal/message"
+	"github.com/riverpod/riverpod/internal/registry"
+	"github.com/riverpod/riverpod/internal/stage"
 )
 
 // defaultMaxBodyBytes caps request bodies to protect against OOM from

@@ -3,7 +3,7 @@ package eql_test
 import (
 	"testing"
 
-	"github.com/edgesets/edgestream/internal/eql"
+	"github.com/riverpod/riverpod/internal/eql"
 )
 
 func TestDeletePayloadRoot(t *testing.T) {

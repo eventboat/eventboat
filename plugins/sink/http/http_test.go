@@ -9,10 +9,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/edgesets/edgestream/internal/message"
-	"github.com/edgesets/edgestream/internal/registry"
-	"github.com/edgesets/edgestream/internal/stage"
-	_ "github.com/edgesets/edgestream/plugins/sink/http"
+	"github.com/riverpod/riverpod/internal/message"
+	"github.com/riverpod/riverpod/internal/registry"
+	"github.com/riverpod/riverpod/internal/stage"
+	_ "github.com/riverpod/riverpod/plugins/sink/http"
 )
 
 func newSink(t *testing.T, cfg map[string]any) stage.Sink {

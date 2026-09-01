@@ -4,9 +4,9 @@ import (
 	"context"
 	"testing"
 
-	"github.com/edgesets/edgestream/internal/eql"
-	"github.com/edgesets/edgestream/internal/message"
-	"github.com/edgesets/edgestream/internal/registry"
+	"github.com/riverpod/riverpod/internal/eql"
+	"github.com/riverpod/riverpod/internal/message"
+	"github.com/riverpod/riverpod/internal/registry"
 )
 
 func TestRouteOrderUsesExplicitOrder(t *testing.T) {

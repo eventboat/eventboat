@@ -3,7 +3,7 @@ package topology
 import (
 	"testing"
 
-	"github.com/edgesets/edgestream/internal/config"
+	"github.com/riverpod/riverpod/internal/config"
 )
 
 func TestValidateRejectsCycle(t *testing.T) {

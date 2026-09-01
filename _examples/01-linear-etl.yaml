@@ -1,6 +1,6 @@
 # 模式：线性 ETL（Source → map → filter → sink）
 # 无需外部依赖；cron 定时产生 JSON，drop 吞没输出。
-apiVersion: edgestream/v1
+apiVersion: riverpod/v1
 kind: Pipeline
 metadata:
   name: linear-etl
@@ -27,7 +27,7 @@ steps:
       config:
         dsl: |
           payload.total = payload.price * payload.quantity
-          metadata.enriched_at = "edgestream"
+          metadata.enriched_at = "riverpod"
 
   filter-high:
     depends_on: [enrich]

@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"sync"
 
-	"github.com/edgesets/edgestream/internal/config"
+	"github.com/riverpod/riverpod/internal/config"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 

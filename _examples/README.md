@@ -1,6 +1,6 @@
-# EdgeStream 示例配置
+# Riverpod 示例配置
 
-本目录收录常见 Pipeline 模式的演示配置，可直接用于学习、`edgestream validate` 校验或作为项目模板。
+本目录收录常见 Pipeline 模式的演示配置，可直接用于学习、`riverpod validate` 校验或作为项目模板。
 
 > 带 `cron` + `drop` 的示例无需外部依赖即可本地校验与试运行；涉及 Kafka / HTTP 的示例需配置对应环境变量或服务。
 
@@ -8,13 +8,13 @@
 
 ```bash
 # 校验单个示例
-go run ./cmd/edgestream validate --config _examples/01-linear-etl.yaml
+go run ./cmd/riverpod validate --config _examples/01-linear-etl.yaml
 
 # 校验全部 YAML 示例
-go run ./cmd/edgestream validate --config-dir _examples
+go run ./cmd/riverpod validate --config-dir _examples
 
 # 试运行（cron 定时产生消息，drop 吞没输出）
-go run ./cmd/edgestream run --config _examples/01-linear-etl.yaml
+go run ./cmd/riverpod run --config _examples/01-linear-etl.yaml
 ```
 
 ## 示例索引

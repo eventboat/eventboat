@@ -6,10 +6,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/edgesets/edgestream/internal/buffer"
-	"github.com/edgesets/edgestream/internal/config"
-	"github.com/edgesets/edgestream/internal/message"
-	"github.com/edgesets/edgestream/internal/topology"
+	"github.com/riverpod/riverpod/internal/buffer"
+	"github.com/riverpod/riverpod/internal/config"
+	"github.com/riverpod/riverpod/internal/message"
+	"github.com/riverpod/riverpod/internal/topology"
 )
 
 func setupTestEdge(t *testing.T, from, to string) *buffer.EdgeInbound {

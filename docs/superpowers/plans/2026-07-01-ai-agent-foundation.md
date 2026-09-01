@@ -25,9 +25,9 @@
 | `plugins/transform/llm/llm.go` | `llm` transform |
 | `plugins/transform/embed/embed.go` | `embed` transform |
 | `plugins/all/all.go` | Blank import new transforms |
-| `internal/observability/metrics.go` | Add `edgestream_llm_*` counters/histograms |
+| `internal/observability/metrics.go` | Add `riverpod_llm_*` counters/histograms |
 | `_examples/09-llm-classify.yaml` | End-to-end example |
-| `testdata/tests/llm_classify.yaml` | Fixture test for `edgestream test` |
+| `testdata/tests/llm_classify.yaml` | Fixture test for `riverpod test` |
 | `docs/configurations.md` | User config reference section |
 
 ---
@@ -88,7 +88,7 @@
 
 **Files:** Modify `internal/observability/metrics.go`; wire from `plugins/transform/llm/llm.go`
 
-- [ ] **5.1** Add counters/histograms: `edgestream_llm_requests_total`, `edgestream_llm_latency_seconds`, `edgestream_llm_tokens_total`, `edgestream_llm_errors_total`
+- [ ] **5.1** Add counters/histograms: `riverpod_llm_requests_total`, `riverpod_llm_latency_seconds`, `riverpod_llm_tokens_total`, `riverpod_llm_errors_total`
 - [ ] **5.2** Call from llm transform on each Complete
 - [ ] **5.3** Run `go test ./...` — PASS
 
@@ -114,7 +114,7 @@
 - [ ] **7.1** Add classify example (comments explain mock/local ollama switch)
 - [ ] **7.2** Add fixture test using in-process test plugins or mock provider env
 - [ ] **7.3** Add `### Transform: llm` and `### Transform: embed` sections to configurations.md
-- [ ] **7.4** Run `edgestream validate --config _examples/09-llm-classify.yaml`
+- [ ] **7.4** Run `riverpod validate --config _examples/09-llm-classify.yaml`
 - [ ] **7.5** Run `go test ./...` — PASS
 
 ---
@@ -132,9 +132,9 @@
 
 ```bash
 go test ./...
-go build -o bin/edgestream ./cmd/edgestream
-bin/edgestream validate --config _examples/09-llm-classify.yaml
-bin/edgestream test --dir testdata/tests
+go build -o bin/riverpod ./cmd/riverpod
+bin/riverpod validate --config _examples/09-llm-classify.yaml
+bin/riverpod test --dir testdata/tests
 ```
 
 Optional integration (requires local Ollama):

@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/edgesets/edgestream/internal/config"
-	"github.com/edgesets/edgestream/internal/topology"
+	"github.com/riverpod/riverpod/internal/config"
+	"github.com/riverpod/riverpod/internal/topology"
 )
 
 func testdata(t *testing.T, name string) string {
@@ -23,7 +23,7 @@ func testdata(t *testing.T, name string) string {
 func TestYAMLUnknownField(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "unknown.yaml")
-	content := `apiVersion: edgestream/v1
+	content := `apiVersion: riverpod/v1
 kind: Pipeline
 metadata:
   name: test

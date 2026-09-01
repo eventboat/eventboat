@@ -6,7 +6,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
-// Metrics holds Prometheus collectors for the edgestream runtime (§10.2 Sprint 1 subset).
+// Metrics holds Prometheus collectors for the riverpod runtime (§10.2 Sprint 1 subset).
 type Metrics struct {
 	reg prometheus.Registerer
 
@@ -28,49 +28,49 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 	m := &Metrics{reg: reg}
 
 	m.EventsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Name: "edgestream_events_total",
+		Name: "riverpod_events_total",
 		Help: "Total events processed through a pipeline.",
 	}, []string{"pipeline", "status"})
 
 	m.EventLatency = prometheus.NewHistogramVec(prometheus.HistogramOpts{
-		Name:    "edgestream_event_latency_seconds",
+		Name:    "riverpod_event_latency_seconds",
 		Help:    "End-to-end event latency from source dispatch to final ack.",
 		Buckets: prometheus.DefBuckets,
 	}, []string{"pipeline"})
 
 	m.InflightEvents = prometheus.NewGaugeVec(prometheus.GaugeOpts{
-		Name: "edgestream_inflight_events",
+		Name: "riverpod_inflight_events",
 		Help: "Number of events currently in flight within a pipeline.",
 	}, []string{"pipeline"})
 
 	m.StageDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
-		Name:    "edgestream_stage_duration_seconds",
+		Name:    "riverpod_stage_duration_seconds",
 		Help:    "Stage processing duration.",
 		Buckets: prometheus.DefBuckets,
 	}, []string{"pipeline", "stage_id", "stage_kind"})
 
 	m.StageErrors = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Name: "edgestream_stage_errors_total",
+		Name: "riverpod_stage_errors_total",
 		Help: "Stage processing errors.",
 	}, []string{"pipeline", "stage_id", "error_type"})
 
 	m.EdgeBufferSize = prometheus.NewGaugeVec(prometheus.GaugeOpts{
-		Name: "edgestream_edge_buffer_size",
+		Name: "riverpod_edge_buffer_size",
 		Help: "Current edge inbound buffer occupancy.",
 	}, []string{"pipeline", "from", "to"})
 
 	m.EdgeDropped = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Name: "edgestream_edge_dropped_total",
+		Name: "riverpod_edge_dropped_total",
 		Help: "Messages dropped due to edge buffer policy.",
 	}, []string{"pipeline", "from", "to", "reason"})
 
 	m.DLQEnqueued = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Name: "edgestream_dlq_enqueued_total",
+		Name: "riverpod_dlq_enqueued_total",
 		Help: "Messages enqueued to DLQ.",
 	}, []string{"pipeline", "dlq_stage_id", "error_type"})
 
 	m.EnginePipelines = prometheus.NewGauge(prometheus.GaugeOpts{
-		Name: "edgestream_engine_pipelines",
+		Name: "riverpod_engine_pipelines",
 		Help: "Number of loaded pipelines.",
 	})
 

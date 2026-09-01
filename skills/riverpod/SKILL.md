@@ -1,35 +1,35 @@
 ---
-name: edgestream
+name: riverpod
 description: >-
-  Operate and author EdgeStream DAG event pipelines. Use when the user asks to
-  create, validate, test, run, debug, or reload EdgeStream pipelines; write steps/
+  Operate and author Riverpod DAG event pipelines. Use when the user asks to
+  create, validate, test, run, debug, or reload Riverpod pipelines; write steps/
   depends_on YAML or HOCON; configure source/transform/sink plugins or eql;
-  or work in the edgestream repository.
+  or work in the riverpod repository.
 license: TBD
 metadata:
-  author: edgesets
-  repository: https://github.com/edgesets/edgestream
-  homepage: https://github.com/edgesets/edgestream
-  skills-sh: edgesets/edgestream/edgestream
+  author: riverpod
+  repository: https://github.com/riverpod/riverpod
+  homepage: https://github.com/riverpod/riverpod
+  skills-sh: riverpod/riverpod/riverpod
 ---
 
-# EdgeStream Agent Skill
+# Riverpod Agent Skill
 
-EdgeStream is a Go DAG event router: **Source → Transform → Sink**, with `depends_on` edges, eql (CEL + assignment), retry/DLQ, and at-least-once Ack.
+Riverpod is a Go DAG event router: **Source → Transform → Sink**, with `depends_on` edges, eql (CEL + assignment), retry/DLQ, and at-least-once Ack.
 
 **Your job:** help users design pipelines, write config, validate, test, and run — using CLI first, Admin HTTP API when the engine is already running.
 
 ## Install
 
 ```bash
-npx skills add edgesets/edgestream@edgestream
+npx skills add riverpod/riverpod@riverpod
 ```
 
-Browse: [skills.sh/edgesets/edgestream/edgestream](https://skills.sh/edgesets/edgestream/edgestream)
+Browse: [skills.sh/riverpod/riverpod/riverpod](https://skills.sh/riverpod/riverpod/riverpod)
 
 ## When to apply this skill
 
-- User mentions edgestream, EdgeStream, event router, pipeline YAML/HOCON
+- User mentions riverpod, Riverpod, event router, pipeline YAML/HOCON
 - Creating or editing `steps`, `depends_on`, eql `dsl`, or plugin config
 - Running `validate` / `test` / `run` / reload
 - Debugging topology, routing, backpressure, or DLQ behavior
@@ -38,12 +38,12 @@ Browse: [skills.sh/edgesets/edgestream/edgestream](https://skills.sh/edgesets/ed
 
 **Always read first:** [reference.md](reference.md) — plugin schemas, edges, admin API (bundled with this skill).
 
-**When working inside the edgestream git repo**, also read:
+**When working inside the riverpod git repo**, also read:
 
 1. [docs/configurations.md](../../docs/configurations.md) — full config reference
 2. [_examples/](../../_examples/) — copy patterns before inventing new topology
 3. [docs/ai-agent.md](../../docs/ai-agent.md) — agent integration roadmap
-4. [edgestream-design.md](../../edgestream-design.md) — deep design when semantics are unclear
+4. [riverpod-design.md](../../riverpod-design.md) — deep design when semantics are unclear
 
 ## Agent workflow
 
@@ -53,9 +53,9 @@ Always follow this loop when authoring pipelines:
 1. Clarify intent (sources, transforms, sinks, routing, reliability)
 2. Pick closest _examples/ template (or reference.md patterns if repo unavailable)
 3. Write or edit config (prefer steps + depends_on)
-4. edgestream validate --config <file>     # must pass before run
-5. edgestream test --config <suite.yaml>   # when behavior must be proven
-6. edgestream run --config <file>          # local run; cron+drop needs no deps
+4. riverpod validate --config <file>     # must pass before run
+5. riverpod test --config <suite.yaml>   # when behavior must be proven
+6. riverpod run --config <file>          # local run; cron+drop needs no deps
 7. POST /admin/reload/{name}           # only if engine already running
 ```
 
@@ -69,16 +69,16 @@ Always follow this loop when authoring pipelines:
 
 ## CLI reference
 
-Build once if needed: `go build -o bin/edgestream ./cmd/edgestream`
+Build once if needed: `go build -o bin/riverpod ./cmd/riverpod`
 
 | Command | Purpose |
 |---------|---------|
-| `edgestream validate --config FILE` | Parse + topology check; exit non-zero on error |
-| `edgestream validate --config-dir DIR` | Validate all `.yaml`/`.yml`/`.conf`/`.hocon` in dir |
-| `edgestream test --config SUITE.yaml` | Fixture-driven pipeline test |
-| `edgestream test --dir testdata/tests` | Run all suite files in directory |
-| `edgestream run --config FILE` | Start engine (SIGINT/SIGTERM graceful stop; SIGHUP reload all) |
-| `edgestream run --config-dir DIR` | Load multiple pipelines |
+| `riverpod validate --config FILE` | Parse + topology check; exit non-zero on error |
+| `riverpod validate --config-dir DIR` | Validate all `.yaml`/`.yml`/`.conf`/`.hocon` in dir |
+| `riverpod test --config SUITE.yaml` | Fixture-driven pipeline test |
+| `riverpod test --dir testdata/tests` | Run all suite files in directory |
+| `riverpod run --config FILE` | Start engine (SIGINT/SIGTERM graceful stop; SIGHUP reload all) |
+| `riverpod run --config-dir DIR` | Load multiple pipelines |
 
 Makefile shortcuts: `make build`, `make test`, `make validate`, `make pipeline-test`
 
@@ -101,7 +101,7 @@ Default health/metrics port from config (`observability.health.port`, often `808
 ## Config skeleton (YAML)
 
 ```yaml
-apiVersion: edgestream/v1
+apiVersion: riverpod/v1
 kind: Pipeline
 metadata:
   name: my-pipeline
@@ -198,12 +198,12 @@ cases:
 | Both `route` and `condition` on same edge | Use one only |
 | `payload.*` in eql without `decoder: json` | Add decoder or use raw bytes |
 | Fan-out from one transform | Each downstream step declares its own `depends_on` + `route` |
-| Editing without validate | Always run `edgestream validate` |
+| Editing without validate | Always run `riverpod validate` |
 
 ## Out of scope (not implemented yet)
 
 - `llm` / `embed` / `agent` transforms — planned v2.1+
-- MCP server for edgestream — planned Phase 1b
+- MCP server for riverpod — planned Phase 1b
 - Do not invent plugin types not listed above
 
 ## Extended reference

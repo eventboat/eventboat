@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/edgesets/edgestream/internal/codec"
-	"github.com/edgesets/edgestream/internal/registry"
+	"github.com/riverpod/riverpod/internal/codec"
+	"github.com/riverpod/riverpod/internal/registry"
 	cel "github.com/google/cel-go/cel"
 )
 

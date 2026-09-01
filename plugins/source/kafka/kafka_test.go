@@ -3,9 +3,9 @@ package kafka_test
 import (
 	"testing"
 
-	"github.com/edgesets/edgestream/internal/registry"
-	_ "github.com/edgesets/edgestream/plugins/sink/kafka"
-	_ "github.com/edgesets/edgestream/plugins/source/kafka"
+	"github.com/riverpod/riverpod/internal/registry"
+	_ "github.com/riverpod/riverpod/plugins/sink/kafka"
+	_ "github.com/riverpod/riverpod/plugins/source/kafka"
 )
 
 func TestKafkaSink_RequiresTopic(t *testing.T) {

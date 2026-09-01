@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/edgesets/edgestream/internal/config"
+	"github.com/riverpod/riverpod/internal/config"
 )
 
 func hoconExamples(t *testing.T, name string) string {

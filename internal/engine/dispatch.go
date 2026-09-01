@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"sync/atomic"
 
-	"github.com/edgesets/edgestream/internal/eql"
-	"github.com/edgesets/edgestream/internal/message"
-	"github.com/edgesets/edgestream/internal/topology"
+	"github.com/riverpod/riverpod/internal/eql"
+	"github.com/riverpod/riverpod/internal/message"
+	"github.com/riverpod/riverpod/internal/topology"
 )
 
 type ackAggregator struct {

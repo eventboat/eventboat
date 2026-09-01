@@ -1,4 +1,4 @@
-module github.com/edgesets/edgestream
+module github.com/riverpod/riverpod
 
 go 1.23.0
 

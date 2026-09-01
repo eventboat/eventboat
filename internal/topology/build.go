@@ -3,7 +3,7 @@ package topology
 import (
 	"fmt"
 
-	"github.com/edgesets/edgestream/internal/config"
+	"github.com/riverpod/riverpod/internal/config"
 )
 
 func FromConfig(cfg *config.PipelineConfig) (*TopologyIR, error) {

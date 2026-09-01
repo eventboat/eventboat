@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/edgesets/edgestream/internal/stage"
+	"github.com/riverpod/riverpod/internal/stage"
 )
 
 // StageHealth is a single stage readiness result.

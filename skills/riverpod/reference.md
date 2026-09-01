@@ -1,4 +1,4 @@
-# EdgeStream Agent Reference
+# Riverpod Agent Reference
 
 Supplement to [SKILL.md](SKILL.md). Read when configuring specific plugins or admin/observability endpoints. This file ships with the skill for standalone installs via [skills.sh](https://skills.sh/).
 
@@ -198,9 +198,9 @@ observability:
 { "error": "pipeline reload already in progress" }
 ```
 
-## Example patterns (edgestream repo)
+## Example patterns (riverpod repo)
 
-When cloning [edgesets/edgestream](https://github.com/edgesets/edgestream), see `_examples/`:
+When cloning [riverpod/riverpod](https://github.com/riverpod/riverpod), see `_examples/`:
 
 | File | Pattern |
 |------|---------|

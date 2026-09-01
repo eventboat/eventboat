@@ -3,8 +3,8 @@ package kafka_test
 import (
 	"testing"
 
-	"github.com/edgesets/edgestream/internal/registry"
-	_ "github.com/edgesets/edgestream/plugins/sink/kafka"
+	"github.com/riverpod/riverpod/internal/registry"
+	_ "github.com/riverpod/riverpod/plugins/sink/kafka"
 )
 
 func TestKafkaSink_InvalidBalancer(t *testing.T) {

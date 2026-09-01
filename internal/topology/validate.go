@@ -3,9 +3,9 @@ package topology
 import (
 	"fmt"
 
-	"github.com/edgesets/edgestream/internal/config"
-	"github.com/edgesets/edgestream/internal/eql"
-	"github.com/edgesets/edgestream/internal/registry"
+	"github.com/riverpod/riverpod/internal/config"
+	"github.com/riverpod/riverpod/internal/eql"
+	"github.com/riverpod/riverpod/internal/registry"
 )
 
 func Validate(ir *TopologyIR) error {
@@ -121,7 +121,7 @@ func validateCodecRef(ref *config.CodecRef, codecs map[string]CodecIR, role stri
 }
 
 // ValidateSemantics extends Validate with checks that need the plugin
-// registry and the CEL compiler, so `edgestream validate` catches what would
+// registry and the CEL compiler, so `riverpod validate` catches what would
 // otherwise only surface at run start:
 //
 //   - stage type registered (source / transform / sink)

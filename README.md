@@ -1,10 +1,10 @@
-# EdgeStream
+# Riverpod
 
 English | [中文](README_ZH.md)
 
-A Go-based DAG event router (formerly EdgeStream v2). Built around a generic `Message` (`[]byte` payload + metadata), it processes streaming data through a **Source → Transform → Sink** directed acyclic graph, with conditional routing, per-edge buffering and delivery policies, retry/DLQ, and at-least-once Ack.
+A Go-based DAG event router. Built around a generic `Message` (`[]byte` payload + metadata), it processes streaming data through a **Source → Transform → Sink** directed acyclic graph, with conditional routing, per-edge buffering and delivery policies, retry/DLQ, and at-least-once Ack.
 
-> **Current status:** v2.0-alpha observability is complete; now in **v2.0-beta** (Sprint 2+). See the [development roadmap](edgestream-design.md#12-开发路线图).
+> **Current status:** v2.0-alpha observability is complete; now in **v2.0-beta** (Sprint 2+). See the [development roadmap](riverpod-design.md#12-开发路线图).
 
 ## Features
 
@@ -14,9 +14,9 @@ A Go-based DAG event router (formerly EdgeStream v2). Built around a generic `Me
 | **Protocol-agnostic** | The engine does not parse payloads; encoding/decoding is handled by Codec plugins (Source `decoder` / Sink `encoder`) |
 | **eql** | CEL expressions plus assignment extensions (`payload.x = expr`, `del()`) for map / filter / edge conditions |
 | **Reliability** | Automatic backpressure propagation, refCount Ack, edge-level retry/DLQ, optional disk buffer |
-| **Observability** | `edgestream_*` Prometheus metrics, health checks; OTLP tracing and notifications planned |
+| **Observability** | `riverpod_*` Prometheus metrics, health checks; OTLP tracing and notifications planned |
 | **Extensibility** | Go compile-time registration; WASM (wazero) and gRPC out-of-process plugins planned for v2.1 |
-| **AI / Agent** | **Agent-first:** [skills.sh skill](skills/edgestream/SKILL.md) (`npx skills add edgesets/edgestream@edgestream`) + CLI/Admin API; in-pipeline `llm`/`agent` transforms planned v2.1+ — [AI/Agent Guide](docs/ai-agent.md) |
+| **AI / Agent** | **Agent-first:** [skills.sh skill](skills/riverpod/SKILL.md) (`npx skills add riverpod/riverpod@riverpod`) + CLI/Admin API; in-pipeline `llm`/`agent` transforms planned v2.1+ — [AI/Agent Guide](docs/ai-agent.md) |
 | **Deployment** | Single binary, multiple Pipelines; K8s Operator planned for v2.1 |
 | **Configuration** | **YAML** (CRD / CI) + **HOCON** (Envelope-style local config), parsed into a unified IR; see [Configuration Reference](docs/configurations.md) |
 
@@ -35,7 +35,7 @@ YAML / HOCON / CRD  →  PipelineConfig  →  TopologyIR  →  Engine (fanOut/fa
 Recommended `steps` style (YAML):
 
 ```yaml
-apiVersion: edgestream/v1
+apiVersion: riverpod/v1
 kind: Pipeline
 metadata:
   name: order-processing
@@ -80,20 +80,20 @@ Branch routing is declared on downstream steps via `route` in `depends_on`:
 
 ### Agent-first AI integration
 
-**Step 1** is letting AI agents *operate* edgestream (write configs, validate, test, run) — not embedding LLM inside pipelines yet.
+**Step 1** is letting AI agents *operate* riverpod (write configs, validate, test, run) — not embedding LLM inside pipelines yet.
 
-The repo ships an [Agent Skill](skills/edgestream/SKILL.md) compatible with [skills.sh](https://skills.sh/):
+The repo ships an [Agent Skill](skills/riverpod/SKILL.md) compatible with [skills.sh](https://skills.sh/):
 
 ```bash
-npx skills add edgesets/edgestream@edgestream
+npx skills add riverpod/riverpod@riverpod
 ```
 
 It teaches agents the CLI workflow, plugin catalog, and `depends_on` patterns. Example agent loop:
 
 ```bash
-edgestream validate --config my-pipeline.yaml
-edgestream test --config testdata/tests/my-suite.yaml
-edgestream run --config my-pipeline.yaml
+riverpod validate --config my-pipeline.yaml
+riverpod test --config testdata/tests/my-suite.yaml
+riverpod run --config my-pipeline.yaml
 ```
 
 In-pipeline LLM classification (future `llm` transform + `route`) will build on the same DAG model — see [AI/Agent Guide](docs/ai-agent.md).
@@ -111,7 +111,7 @@ In-pipeline LLM classification (future `llm` transform + `route`) will build on 
             content: "Classify: ${payload.body}"
 ```
 
-Equivalent HOCON, flat `pipeline[]` compatibility, and branch routing details are in the [Configuration Reference](docs/configurations.md); design background in the [Configuration Model](edgestream-design.md#8-配置模型).
+Equivalent HOCON, flat `pipeline[]` compatibility, and branch routing details are in the [Configuration Reference](docs/configurations.md); design background in the [Configuration Model](riverpod-design.md#8-配置模型).
 
 ## Repository Layout
 
@@ -119,12 +119,12 @@ Equivalent HOCON, flat `pipeline[]` compatibility, and branch routing details ar
 |------|-------------|
 | [`docs/configurations.md`](docs/configurations.md) | **Configuration reference** (Engine / Steps / plugins / edges / variable substitution) |
 | [`docs/ai-agent.md`](docs/ai-agent.md) | **AI/Agent guide** (Agent Skill, MCP roadmap, in-pipeline LLM phases) |
-| [`skills/edgestream/`](skills/edgestream/) | **Agent Skill** ([skills.sh](https://skills.sh/edgesets/edgestream/edgestream)) for pipeline authoring |
+| [`skills/riverpod/`](skills/riverpod/) | **Agent Skill** ([skills.sh](https://skills.sh/riverpod/riverpod/riverpod)) for pipeline authoring |
 | [`skills/README.md`](skills/README.md) | Skills catalog and install commands |
-| [`edgestream-design.md`](edgestream-design.md) | Requirements and design (primary document) |
+| [`riverpod-design.md`](riverpod-design.md) | Requirements and design (primary document) |
 | [`competitor-research.md`](competitor-research.md) | Competitive analysis |
 | [`design-review.md`](design-review.md) | Design review (some entries outdated; primary doc takes precedence) |
-| [`cmd/edgestream/`](cmd/edgestream/) | CLI (`run` / `validate` / `test`) |
+| [`cmd/riverpod/`](cmd/riverpod/) | CLI (`run` / `validate` / `test`) |
 | [`internal/`](internal/) | Engine, config, topology, eql |
 | [`plugins/`](plugins/) | Source / Transform / Sink / Codec plugins |
 | [`_examples/`](_examples/) | Demo configs for common patterns (linear ETL, branching, fan-in, edge policies, etc.) |
@@ -134,9 +134,9 @@ Equivalent HOCON, flat `pipeline[]` compatibility, and branch routing details ar
 
 ```bash
 go test ./...
-go build -o bin/edgestream ./cmd/edgestream
-bin/edgestream validate --config testdata/pipelines/linear.yaml
-bin/edgestream test --dir testdata/tests
+go build -o bin/riverpod ./cmd/riverpod
+bin/riverpod validate --config testdata/pipelines/linear.yaml
+bin/riverpod test --dir testdata/tests
 ```
 
 Or use the Makefile:
@@ -149,17 +149,17 @@ make build test validate pipeline-test
 
 - [Configuration Reference](docs/configurations.md) — Engine, Steps, Source/Transform/Sink plugins, edges, and variable substitution (Envelope-style layout)
 - [AI/Agent Guide](docs/ai-agent.md) — LLM/Agent transforms, provider abstraction, observability, phased delivery plan
-- [Agent Skill (skills.sh)](skills/README.md) — install with `npx skills add edgesets/edgestream@edgestream`
-- [Background & Goals](edgestream-design.md#1-背景与目标)
-- [Core Interfaces & Message](edgestream-design.md#4-核心接口与-message-模型)
-- [Engine Runtime](edgestream-design.md#6-引擎运行时)
-- [eql DSL](edgestream-design.md#7-dsl-语言设计-eql)
-- [Configuration Model (Design)](edgestream-design.md#8-配置模型)
-- [v2.0 Finalization Checklist](edgestream-design.md#13-v20-定稿检查清单)
+- [Agent Skill (skills.sh)](skills/README.md) — install with `npx skills add riverpod/riverpod@riverpod`
+- [Background & Goals](riverpod-design.md#1-背景与目标)
+- [Core Interfaces & Message](riverpod-design.md#4-核心接口与-message-模型)
+- [Engine Runtime](riverpod-design.md#6-引擎运行时)
+- [eql DSL](riverpod-design.md#7-dsl-语言设计-eql)
+- [Configuration Model (Design)](riverpod-design.md#8-配置模型)
+- [v2.0 Finalization Checklist](riverpod-design.md#13-v20-定稿检查清单)
 
 ## Relationship to v1
 
-edgestream is **not** backward compatible with EdgeStream v1. v1 used a linear `Input → Processor → Output` model with CloudEvents binding; v2 is a ground-up redesign with DAG topology, generic Message, CEL/eql, Codec system, and dual deployment modes.
+riverpod is **not** backward compatible with Riverpod v1. v1 used a linear `Input → Processor → Output` model with CloudEvents binding; v2 is a ground-up redesign with DAG topology, generic Message, CEL/eql, Codec system, and dual deployment modes.
 
 ## License
 

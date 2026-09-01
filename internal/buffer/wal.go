@@ -10,7 +10,7 @@ import (
 	"hash/crc32"
 	"io"
 
-	"github.com/edgesets/edgestream/internal/message"
+	"github.com/riverpod/riverpod/internal/message"
 	"github.com/google/uuid"
 )
 

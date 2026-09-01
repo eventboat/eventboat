@@ -3,7 +3,7 @@ package topology
 import (
 	"time"
 
-	"github.com/edgesets/edgestream/internal/config"
+	"github.com/riverpod/riverpod/internal/config"
 )
 
 // Stage kind constants — used for IR serialization and engine comparisons.

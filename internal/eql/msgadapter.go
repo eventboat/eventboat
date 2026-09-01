@@ -1,6 +1,6 @@
 package eql
 
-import "github.com/edgesets/edgestream/internal/message"
+import "github.com/riverpod/riverpod/internal/message"
 
 // MsgAdapter implements MessageView for a *message.Message.
 type MsgAdapter struct{ *message.Message }

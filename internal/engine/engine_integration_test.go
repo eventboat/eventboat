@@ -6,10 +6,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/edgesets/edgestream/internal/config"
-	"github.com/edgesets/edgestream/internal/testutil"
-	"github.com/edgesets/edgestream/internal/topology"
-	_ "github.com/edgesets/edgestream/plugins/all"
+	"github.com/riverpod/riverpod/internal/config"
+	"github.com/riverpod/riverpod/internal/testutil"
+	"github.com/riverpod/riverpod/internal/topology"
+	_ "github.com/riverpod/riverpod/plugins/all"
 )
 
 func TestPipelineMapFilterIntegration(t *testing.T) {

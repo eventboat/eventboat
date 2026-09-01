@@ -1,6 +1,6 @@
 # 模式：Fan-in（多 Source 汇入同一 Transform）
 # 两个 cron source 分别模拟订单流与事件流，在 merge 步骤合并处理。
-apiVersion: edgestream/v1
+apiVersion: riverpod/v1
 kind: Pipeline
 metadata:
   name: fan-in

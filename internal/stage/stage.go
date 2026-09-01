@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/edgesets/edgestream/internal/message"
+	"github.com/riverpod/riverpod/internal/message"
 )
 
 type Kind int

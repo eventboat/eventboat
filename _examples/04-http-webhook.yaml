@@ -1,7 +1,7 @@
 # 模式：HTTP Webhook 接入
 # http_server 接收 POST body，经 map  enrichment 后转发至外部 HTTP 端点。
 # 运行前设置 WEBHOOK_TARGET_URL，例如：https://httpbin.org/post
-apiVersion: edgestream/v1
+apiVersion: riverpod/v1
 kind: Pipeline
 metadata:
   name: http-webhook

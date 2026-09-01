@@ -1,8 +1,8 @@
-# Event Router / Stream Processing Projects — Comparison with `edgestream`
+# Event Router / Stream Processing Projects — Comparison with `riverpod`
 
-> **注意（2025-06-24）：** 文末部分「建议」已被 `edgestream-design.md` v2.0-draft 吸收或推翻（`depends_on`、Codec 体系、不采纳 Planner 等）。**以 `edgestream-design.md` 为准**；下文保留调研原始脉络。
+> **注意（2025-06-24）：** 文末部分「建议」已被 `riverpod-design.md` v2.0-draft 吸收或推翻（`depends_on`、Codec 体系、不采纳 Planner 等）。**以 `riverpod-design.md` 为准**；下文保留调研原始脉络。
 
-Research conducted against the edgestream design (`edgestreamouter-v2-design.md`) for a
+Research conducted against the riverpod design (`riverpodouter-v2-design.md`) for a
 Go-based DAG event router with Source/Transform/Sink, per-edge buffers, a custom
 DSL ("eql"), and a Kubernetes operator.
 
@@ -18,7 +18,7 @@ The same analysis is provided inline in this file; references at the end.
 - [8. OpenTelemetry Collector](#8-opentelemetry-collector)
 - [9. Cloudera Envelope](#9-cloudera-envelope)
 - [Cross-cutting summary](#cross-cutting-summary)
-- [Top concrete things edgestream should steal](#top-concrete-things-edgestream-should-steal-in-priority-order)
+- [Top concrete things riverpod should steal](#top-concrete-things-riverpod-should-steal-in-priority-order)
 
 ---
 
@@ -64,12 +64,12 @@ abstractions:
 ### Distinctive ideas
 
 - Knative's **Broker/Trigger** cleanly separates durable ingress (Broker) from
-  declarative subscription (Trigger). edgestream's Source/Sink mixing could borrow
+  declarative subscription (Trigger). riverpod's Source/Sink mixing could borrow
   this "registry + subscription" split.
 - **Event Registry** is a metadata-first design — declaring what event types
   exist *as first-class CRDs*, decoupled from where they're routed.
 
-### What edgestream could borrow / is missing
+### What riverpod could borrow / is missing
 
 - Add an **EventType CRD / registry** so that Sinks can discover available
   event sources and DSL filters can reference event types by name, not magic
@@ -126,14 +126,14 @@ filter** (event timestamp range), **script filter** (Lua).
   without resetting, a `dep01 && dep02` where one side arrives daily and the
   other stalls can pair across time windows incorrectly.
 
-### What edgestream could borrow / is missing
+### What riverpod could borrow / is missing
 
-- edgestream's DAG currently implies **stateless per-event routing**. Consider a
+- riverpod's DAG currently implies **stateless per-event routing**. Consider a
   "Compound Source" or **join node** that waits on a boolean expression of
   upstream sources with window/time-based reset primitives — a feature Argo
   has that pure DAG routers don't.
 - Borrow the **interpreter-free boolean expression** style
-  (`dep01 && (dep02 || dep03)`) — edgestream's DSL could expose this directly as a
+  (`dep01 && (dep02 || dep03)`) — riverpod's DSL could expose this directly as a
   "Trigger" construct sitting at DAG joins, plus the `byTime` reset knob.
 
 ---
@@ -159,7 +159,7 @@ components:
   "transforms.flatten.delimiter": "."
   ```
 
-  Available SMTs include Cast, Drop, DropHeaders, EdgeStream, ExtractField,
+  Available SMTs include Cast, Drop, DropHeaders, Riverpod, ExtractField,
   ExtractTopic, Filter (Apache Kafka), Filter (Confluent, supports
   `filter.condition`), Flatten, GzipDecompress, HeaderFrom, HoistField,
   InsertField, InsertHeader, MaskField, MessageTimestampRouter, RegexRouter,
@@ -187,19 +187,19 @@ components:
 
 ### Distinctive ideas
 
-- The **SMT chain** is conceptually identical to edgestream's Transform chain —
+- The **SMT chain** is conceptually identical to riverpod's Transform chain —
   but it lives *at the connector level*, not at the broker. It's a serial
   pipeline that runs once per record, with **predicates** making individual
   transforms optional.
 - **Schema Registry** + Connect's contract-with-IDL model is the *only* project
   on this list that enforces data shape evolution end-to-end.
 
-### What edgestream could borrow
+### What riverpod could borrow
 
 - The **predicate-on-transform** pattern (`transforms.X.predicate`) so a
   Transform step can be conditionally applied per event without writing it as
   a separate conditional construct in the DSL — much more ergonomic than
-  edgestream's current "branch for condition" pattern.
+  riverpod's current "branch for condition" pattern.
 - The DLQ story: standardize `errors.tolerance` +
   `errors.deadletterqueue.*` semantics as a per-edge Sink config block,
   including context headers (`dlq.context.headers.enable`) so downstream can
@@ -234,7 +234,7 @@ first match wins, so wider patterns must come last.
 ### Filter pipeline
 
 All `<filter pattern>` blocks matching a tag form an ordered
-`Input → filter 1 → … → filter N → Output` pipeline (vs edgestream's DAG).
+`Input → filter 1 → … → filter N → Output` pipeline (vs riverpod's DAG).
 `record_transformer`, `grep`, `parser` are common filters.
 
 ### Label directive
@@ -265,19 +265,19 @@ smaller memory footprint, a `lua` filter.
 
 - **Tag-based routing** collapses "Destination selection" to a *pattern
   language over a single string field* rather than an explicit graph. It's the
-  opposite philosophy from edgestream's DAG: graph-centric vs. tag-pattern-centric.
+  opposite philosophy from riverpod's DAG: graph-centric vs. tag-pattern-centric.
   Both are valid; matches are cheap to reason about but the topology is implicit.
-- **Chunk keys + flush modes** is a much richer buffer model than edgestream's
+- **Chunk keys + flush modes** is a much richer buffer model than riverpod's
   "per-edge buffers" — partitioning, spilling to file, multiple overflow
   strategies.
 - `out_copy` plugin is the explicit fan-out primitive (`<match **>` with `copy`
   sends to multiple outputs in parallel).
 
-### What edgestream could borrow / is missing
+### What riverpod could borrow / is missing
 
 - Adopt a **chunk-key abstraction** over per-edge buffers so a single edge can
   partition events (e.g. `buffer.key = [tenant, type]`) — closer to Kafka
-  Connect's partition keys than to current edgestream buffers, and gives ordering
+  Connect's partition keys than to current riverpod buffers, and gives ordering
   and bounded back-pressure per partition.
 - The **`@ERROR` label** idea: a named "fallback router" reachable by *any*
   edge on error/buffer-overflow — letting users define their own DLQ routing
@@ -330,18 +330,18 @@ process.
 ### Distinctive ideas
 
 - **Selector → channel subset** with required/optional split is the cleanest
-  primitive for *partial fan-out with mixed durability* — edgestream's per-edge
+  primitive for *partial fan-out with mixed durability* — riverpod's per-edge
   buffers treat all sinks uniformly; Flume lets one out-edge be best-effort
   while another is required.
 - The **transactional Channel** decouples back-pressure (channel capacity)
   from sink liveness — a sink being down doesn't cause the source to block;
   the channel absorbs until capacity, then transactions rollback.
 
-### What edgestream could borrow
+### What riverpod could borrow
 
 - Per-edge **"required vs optional" sinks** would let users declare an audit
   sink that doesn't roll back the whole batch when it fails, distinct from a
-  primary sink that *does* — currently edgestream's per-edge buffers have no
+  primary sink that *does* — currently riverpod's per-edge buffers have no
   built-in "optional edge" concept.
 - Explicit **transaction-capacity** invariant check on per-edge buffers
   (analog of Flume's `batchSize <= transactionCapacity`) baked into
@@ -404,7 +404,7 @@ inspection/sampling framework than a router; not really a DAG router.
 
 ### Distinctive ideas
 
-- **Bloblang (Benthos)** is the closest parallel to edgestream's custom DSL — but
+- **Bloblang (Benthos)** is the closest parallel to riverpod's custom DSL — but
   it's a deliberately *general-purpose* pure-functional language with
   `root`/`this`, not a config-level predicate syntax. Letting users write
   arbitrary mapping logic in the transform steps (not just key-value routers)
@@ -415,12 +415,12 @@ inspection/sampling framework than a router; not really a DAG router.
 - Vector's **typed VRL with compile-time checks** is a much more defensible DSL
   experience than ad-hoc parser-DSLs.
 
-### What edgestream could borrow / is missing
+### What riverpod could borrow / is missing
 
 - Strongly consider a **Bloblang/VRL-style** mapping sublanguage inside
   Transform steps — predicates alone (CESQL-style) cover filtering, but
   transforms need real expression power (assignment, branching, function
-  calls). edgestream's DSL being config-style likely forces reach-out to Go
+  calls). riverpod's DSL being config-style likely forces reach-out to Go
   plugins for non-trivial transforms; that's a usability gap.
 - Adopt **WASM transforms** as a first-class plugin mechanism (vs. compiled Go
   plugins) — enables user-deployed logic without rebuilding the operator image;
@@ -492,22 +492,22 @@ Go (`knative.dev/eventing/pkg/eventfilter/attributes/csql`).
 
 - CESQL is *deliberately* restricted to CloudEvent context attributes (not
   `data`) — keeping the language small + terminating and giving it a free TCK
-  that any implementation can run to claim conformance. edgestream's custom DSL
+  that any implementation can run to claim conformance. riverpod's custom DSL
   probably reinvents strings, integers, AND/OR/NOT, LIKE, EXISTS — all already
   in CESQL.
 - The spec *defines error semantics contractually*: "filter MUST NOT pass on
   error" is critical — most ad-hoc DSLs leave this undefined.
 
-### What edgestream could borrow / is missing
+### What riverpod could borrow / is missing
 
-- **Yes, edgestream's "eql" is reinventing CESQL.** Strongly recommend implementing
+- **Yes, riverpod's "eql" is reinventing CESQL.** Strongly recommend implementing
   CESQL (or at least a CESQL subset close enough to run the official TCK) as
   the **built-in predicate language**, and reserving "eql" as a CESQL
-  extension namespace for edgestream-specific operators (e.g. referencing
+  extension namespace for riverpod-specific operators (e.g. referencing
   `data.*` paths as ergonomic shortcut).
 - Add the **error contract** ("false on parse error, false on evaluation
   error", with optional error reporting channel) explicitly — and *import the
-  official `cesql_tck` test fixtures* into edgestream's CI to lock in conformance.
+  official `cesql_tck` test fixtures* into riverpod's CI to lock in conformance.
   This is a near-free interoperability win with the CloudEvents ecosystem.
 
 ---
@@ -546,7 +546,7 @@ service:
   providers; configs are merged in-memory (similar to Kustomize overlays);
   `--set key=value` overrides at runtime.
 
-### Connector concept (key for edgestream's DAG)
+### Connector concept (key for riverpod's DAG)
 
 A **Connector** is *both* exporter and receiver — it consumes as an exporter
 at the tail of one pipeline and emits as a receiver at the head of another:
@@ -633,21 +633,21 @@ The deprecated `match_once` removal (v0.120) forced users to express routing
 either as explicit enumerations of condition combinations or as a **layered
 approach**: one router separates "matched any" from "matched none", second
 layer applies nondeterministic combinations. This is a practical frame for
-thinking about edgestream's multi-fan-out edge semantics.
+thinking about riverpod's multi-fan-out edge semantics.
 
 ### Distinctive ideas
 
 - The **Connector construct** is the cleanest formulation of "an edge in the DAG
-  is also a routable node" — edgestream could model per-edge "router sinks" as
+  is also a routable node" — riverpod could model per-edge "router sinks" as
   native first-class Nodes that are simultaneously a Sink of one edge and a
   Source of many.
 - `action: move | copy` is a tiny primitive that solves what would otherwise
   require complex DAG patterns — "route to high-priority and to archive"
   needs `copy` for archive; default `move` for first match + remaining
-  fallthrough. edgestream would otherwise encode this with router node +
+  fallthrough. riverpod would otherwise encode this with router node +
   fan-out node + branch — three nodes for one concept.
 
-### What edgestream could borrow / is missing
+### What riverpod could borrow / is missing
 
 - Treat the **"routing edge" as a first-class Node type** that is both Sink
   (for upstream pipeline) and Source (for multiple downstream pipelines),
@@ -665,21 +665,21 @@ thinking about edgestream's multi-fan-out edge semantics.
 
 ## 9. Cloudera Envelope
 
-[cloudera-labs/envelope](https://github.com/cloudera-labs/envelope) — configuration-driven ETL pipeline framework on Apache Spark (Java, HOCON config, batch + Spark Streaming micro-batch). Last release v0.7.2 (Dec 2019), ~160 stars, effectively archived but the **configuration design is distinctive and directly relevant to edgestream**.
+[cloudera-labs/envelope](https://github.com/cloudera-labs/envelope) — configuration-driven ETL pipeline framework on Apache Spark (Java, HOCON config, batch + Spark Streaming micro-batch). Last release v0.7.2 (Dec 2019), ~160 stars, effectively archived but the **configuration design is distinctive and directly relevant to riverpod**.
 
 ### 9.1 Configuration format: HOCON
 
-Envelope uses [HOCON](https://github.com/typesafehub/config/blob/master/HOCON.md) (Human-Optimized Config Object Notation) — Typesafe Config's format. Properties of HOCON that matter for edgestream:
+Envelope uses [HOCON](https://github.com/typesafehub/config/blob/master/HOCON.md) (Human-Optimized Config Object Notation) — Typesafe Config's format. Properties of HOCON that matter for riverpod:
 
 - **Superset of JSON** — any valid JSON is valid HOCON.
 - **Less indentation-sensitive than YAML** — uses `=` for assignment, `{}` for blocks, supports flat dotted paths (`application.executor.memory = 4G` is equivalent to nested `application { executor { memory = 4G } }`).
 - **Native substitutions** — `foo = ${bar}` references another config key; useful for DRY configs.
-- **Environment variable overrides built-in** — Typesafe Config automatically layers `ENV_VAR` overrides on top of the file config (e.g. `KAFKA_BROKERS` overrides `kafka.brokers`). No need for edgestream's `--set-env` CLI flag.
+- **Environment variable overrides built-in** — Typesafe Config automatically layers `ENV_VAR` overrides on top of the file config (e.g. `KAFKA_BROKERS` overrides `kafka.brokers`). No need for riverpod's `--set-env` CLI flag.
 - **Config layering** — system env > primary file > CLI args, composited and resolved in one pass.
 - **Comments** — `#` and `//` both supported (YAML only `#`).
 - **No significant whitespace** — blocks delimited by `{}`, not indentation. Avoids YAML's tab-vs-space and "indentation error that looks valid" class of bugs.
 
-Tradeoff: HOCON is Java-ecosystem; Go HOCON parsers exist (e.g. `github.com/gurkankaymak/hocon`) but are less mature than Typesafe Config. edgestream could adopt HOCON syntax or cherry-pick its ergonomic features (substitutions, env overlay, flat dotted paths) into a YAML-based scheme.
+Tradeoff: HOCON is Java-ecosystem; Go HOCON parsers exist (e.g. `github.com/gurkankaymak/hocon`) but are less mature than Typesafe Config. riverpod could adopt HOCON syntax or cherry-pick its ergonomic features (substitutions, env overlay, flat dotted paths) into a YAML-based scheme.
 
 ### 9.2 Step-centric DAG with `dependencies` list
 
@@ -710,11 +710,11 @@ steps {
 
 Each step is a **named block** containing optional `input` / `deriver` / `planner` / `partitioner` / `output` sub-blocks. Edges are expressed as `dependencies = [a, b]` **inside the child step**, not as a separate `edges:` section — the same pattern Vector uses (`inputs = [...]`).
 
-> **edgestream v2.0（2025-06）：** 已采纳 Envelope/Vector 的内联边思路，用 `depends_on`（序列或映射）替代独立 `edges:` 段；per-edge `buffer`/`delivery`/`route` 写在 `depends_on` 对象值内。详见 `edgestream-design.md` §8.1.3。**Planner 不采纳**；写入语义由各 Sink `config` 自管。
+> **riverpod v2.0（2025-06）：** 已采纳 Envelope/Vector 的内联边思路，用 `depends_on`（序列或映射）替代独立 `edges:` 段；per-edge `buffer`/`delivery`/`route` 写在 `depends_on` 对象值内。详见 `riverpod-design.md` §8.1.3。**Planner 不采纳**；写入语义由各 Sink `config` 自管。
 
 ### 9.3 The Planner concept — decoupling write semantics from output transport
 
-This is Envelope's most distinctive idea and edgestream's biggest structural omission for ETL use cases. A **Planner** sits between the deriver (transform) and the output (sink) and decides *how* to apply arriving records to the target:
+This is Envelope's most distinctive idea and riverpod's biggest structural omission for ETL use cases. A **Planner** sits between the deriver (transform) and the output (sink) and decides *how* to apply arriving records to the target:
 
 | Planner | Semantics |
 |---|---|
@@ -743,13 +743,13 @@ planner {
 }
 ```
 
-edgestream's current design has **no equivalent** — Sink handles both transport (Kafka/HTTP/Kudu) *and* write semantics (append vs upsert) in one plugin. This means:
-- Implementing SCD Type 2 / bi-temporal in edgestream requires a custom Transform that does lookup-against-target + mutation planning inline — heavy, error-prone, and duplicated per sink type.
+riverpod's current design has **no equivalent** — Sink handles both transport (Kafka/HTTP/Kudu) *and* write semantics (append vs upsert) in one plugin. This means:
+- Implementing SCD Type 2 / bi-temporal in riverpod requires a custom Transform that does lookup-against-target + mutation planning inline — heavy, error-prone, and duplicated per sink type.
 - The same Kafka sink can't transparently become "upsert to Kudu" vs "append to Kafka" by swapping a planner.
 
-**Recommendation:** edgestream should introduce a **Planner layer** between Transform and Sink (or as a Sink-decorator). P0 planners: `append`, `upsert`, `drop`. P1: `history` (SCD2), `merge`. P2: `bitemporal`. This is the single highest-value architectural idea to steal from Envelope for any ETL-oriented user.
+**Recommendation:** riverpod should introduce a **Planner layer** between Transform and Sink (or as a Sink-decorator). P0 planners: `append`, `upsert`, `drop`. P1: `history` (SCD2), `merge`. P2: `bitemporal`. This is the single highest-value architectural idea to steal from Envelope for any ETL-oriented user.
 
-> **edgestream v2.0 决策：不采纳 Planner。** 写入语义由各 Sink 插件 `config` 自行定义；复杂 ETL（SCD2 等）在专用 Sink 或 Transform 内实现。见 `edgestream-design.md` §2.2、§4.5。
+> **riverpod v2.0 决策：不采纳 Planner。** 写入语义由各 Sink 插件 `config` 自行定义；复杂 ETL（SCD2 等）在专用 Sink 或 Transform 内实现。见 `riverpod-design.md` §2.2、§4.5。
 
 ### 9.4 The Translator concept — decoupling byte parsing from input transport
 
@@ -777,11 +777,11 @@ input {
 }
 ```
 
-edgestream's current Source conflates transport + parsing — a Kafka source must "know" whether payloads are JSON/Avro/CSV. The Translator split lets the **same `kafka` source plugin** produce parsed records by pairing it with any translator. This reduces the connector matrix: instead of `kafka_json`, `kafka_avro`, `http_json`, `http_csv` (combinatorial explosion), you have `kafka` + `http` transports × `avro` + `json` + `csv` + `protobuf` translators.
+riverpod's current Source conflates transport + parsing — a Kafka source must "know" whether payloads are JSON/Avro/CSV. The Translator split lets the **same `kafka` source plugin** produce parsed records by pairing it with any translator. This reduces the connector matrix: instead of `kafka_json`, `kafka_avro`, `http_json`, `http_csv` (combinatorial explosion), you have `kafka` + `http` transports × `avro` + `json` + `csv` + `protobuf` translators.
 
-**Recommendation:** edgestream should add an optional `translator` sub-block on Source (or a `decode` Transform that's sugar for the same). P0 translators: `json`, `raw`. P1: `avro`, `protobuf`, `csv`.
+**Recommendation:** riverpod should add an optional `translator` sub-block on Source (or a `decode` Transform that's sugar for the same). P0 translators: `json`, `raw`. P1: `avro`, `protobuf`, `csv`.
 
-> **edgestream v2.0 决策：已采纳为 Codec 体系** — Source `decoder` / Sink `encoder` + 顶层 `codecs:` 共享配置。见 `edgestream-design.md` §5。
+> **riverpod v2.0 决策：已采纳为 Codec 体系** — Source `decoder` / Sink `encoder` + 顶层 `codecs:` 共享配置。见 `riverpod-design.md` §5。
 
 ### 9.5 Control-flow steps: Loop, Decision, Task, Repetition
 
@@ -792,37 +792,37 @@ Envelope has four step *types* beyond `data`:
 - **`task`** — side-effect-only step (send notification, update metastore, trigger external job), no DataFrame. Decouples "do something off-pipeline" from data flow.
 - **`repetition`** (streaming) — re-run cached steps on a schedule/criteria within a long-running streaming job, refreshing reference data periodically.
 
-edgestream has none of these. The most transferable are **decision** (runtime sub-graph selection — useful for "only run enrichment on prod events") and **task** (lifecycle side-effects — useful for "on pipeline start, warm a cache; on shutdown, flush a manifest").
+riverpod has none of these. The most transferable are **decision** (runtime sub-graph selection — useful for "only run enrichment on prod events") and **task** (lifecycle side-effects — useful for "on pipeline start, warm a cache; on shutdown, flush a manifest").
 
 ### 9.6 Other notable config features
 
-- **`udfs`** top-level array — register custom Spark SQL functions by class name/alias, extending the deriver language without writing a plugin jar. edgestream could let users register eql functions via config.
+- **`udfs`** top-level array — register custom Spark SQL functions by class name/alias, extending the deriver language without writing a plugin jar. riverpod could let users register eql functions via config.
 - **DQ deriver** (`type = dq`) — declarative data quality rules as config: `checknulls`, `enum`, `range`, `regex`, `count`, `checkschema`. Scope = `dataset|row`. This is a config-level alternative to writing filter DSL for common validation.
 - **Per-step tuning** — `cache.enabled`, `cache.storage.level`, `hint.small` (broadcast join), `repartition.partitions`, `coalesce.partitions`, `print.schema.enabled` (debug). Spark-specific but the pattern of per-step operational knobs is good.
-- **`parameter.*` passthrough** — `kafka.parameter.*` and `hbase.conf.*` strip the prefix and forward to the underlying client config. Avoids Envelope having to mirror every Kafka/HBase knob. edgestream should do the same rather than enumerating every Kafka consumer option.
+- **`parameter.*` passthrough** — `kafka.parameter.*` and `hbase.conf.*` strip the prefix and forward to the underlying client config. Avoids Envelope having to mirror every Kafka/HBase knob. riverpod should do the same rather than enumerating every Kafka consumer option.
 - **`spark.conf.*`** — same pattern for engine-level config.
 
 ### 9.7 Envelope weaknesses (don't over-adopt)
 
-- **Spark-only, JVM-only** — heavyweight; not suitable for edgestream's lightweight Go single-binary goal.
-- **Micro-batch, not true streaming** — Spark Streaming's micro-batch model is fundamentally different from edgestream's per-event channel model; Planner/Translator ideas transfer but the execution model doesn't.
-- **No per-edge conditions** — `dependencies` are unconditional; routing is done in SQL `WHERE` clauses, not on edges. edgestream's per-edge condition is more expressive.
-- **No per-edge buffers / backpressure config** — Spark handles internally; edgestream's per-edge buffer is a real advantage.
-- **No custom DSL** — relies on Spark SQL (powerful but JVM-coupled). edgestream's eql/CESQL is more portable.
-- **No at-least-once ack chain** — relies on Kafka offset management + Spark checkpointing. edgestream's refCount ack is more general.
+- **Spark-only, JVM-only** — heavyweight; not suitable for riverpod's lightweight Go single-binary goal.
+- **Micro-batch, not true streaming** — Spark Streaming's micro-batch model is fundamentally different from riverpod's per-event channel model; Planner/Translator ideas transfer but the execution model doesn't.
+- **No per-edge conditions** — `dependencies` are unconditional; routing is done in SQL `WHERE` clauses, not on edges. riverpod's per-edge condition is more expressive.
+- **No per-edge buffers / backpressure config** — Spark handles internally; riverpod's per-edge buffer is a real advantage.
+- **No custom DSL** — relies on Spark SQL (powerful but JVM-coupled). riverpod's eql/CESQL is more portable.
+- **No at-least-once ack chain** — relies on Kafka offset management + Spark checkpointing. riverpod's refCount ack is more general.
 - **Project effectively dead** (last release 2019) — ideas are evergreen but the codebase is not a live reference.
-- **HOCON Go ecosystem immature** — if edgestream adopts HOCON syntax, the Go parser is a risk.
+- **HOCON Go ecosystem immature** — if riverpod adopts HOCON syntax, the Go parser is a risk.
 
-### 9.8 What edgestream should steal from Envelope (priority order)
+### 9.8 What riverpod should steal from Envelope (priority order)
 
 1. **Planner layer** (§9.3) — decouple write semantics (append/upsert/SCD2/bitemporal) from Sink transport. **Highest-value idea for ETL users.**
 2. **Translator layer** (§9.4) — decouple byte parsing (json/avro/csv/protobuf) from Source transport. Reduces connector matrix.
-3. **`dependencies = [...]` as sugar for unconditional edges** (§9.2) — keep explicit `edges:` for per-edge condition/buffer, but allow `depends_on: [a, b]` on a stage as shorthand. Best of both Envelope's friendliness and edgestream's expressiveness.
+3. **`dependencies = [...]` as sugar for unconditional edges** (§9.2) — keep explicit `edges:` for per-edge condition/buffer, but allow `depends_on: [a, b]` on a stage as shorthand. Best of both Envelope's friendliness and riverpod's expressiveness.
 4. **HOCON ergonomics or HOCON syntax** (§9.1) — at minimum, support native env-var overlay + `${substitution}` in YAML; ideally offer HOCON as an alternative config format.
 5. **Decision steps** (§9.5) — runtime sub-graph pruning based on data (`if-true-steps`). Complements per-edge conditions (which are per-message).
 6. **Task steps** (§9.5) — lifecycle side-effects decoupled from data flow.
 7. **DQ rules as config** (§9.6) — declarative `null/enum/range/regex/schema` validation without DSL.
-8. **`parameter.*` passthrough** (§9.6) — forward unknown config keys to underlying clients (Kafka/HTTP) instead of enumerating every option in edgestream's schema.
+8. **`parameter.*` passthrough** (§9.6) — forward unknown config keys to underlying clients (Kafka/HTTP) instead of enumerating every option in riverpod's schema.
 9. **UDF registration via config** (§9.6) — extend eql with user-registered functions without writing a Go plugin.
 10. **Per-step operational knobs** (§9.6) — `cache`, `hint`, `repartition` analogs (e.g. per-stage `prefetch`, `parallelism hint`).
 
@@ -848,15 +848,15 @@ edgestream has none of these. The most transferable are **decision** (runtime su
 
 (?) in the table = known feature but not central / not researched deeply here.
 
-## Top concrete things edgestream should steal, in priority order
+## Top concrete things riverpod should steal, in priority order
 
 1. **CESQL as the standard predicate language** (project 7) — adopt the
-   official spec + run `cesql_tck`; reserve edgestream-specific extensions as a
-   CESQL-namespace. edgestream's `eql` should *be* CESQL-compatible, not a
+   official spec + run `cesql_tck`; reserve riverpod-specific extensions as a
+   CESQL-namespace. riverpod's `eql` should *be* CESQL-compatible, not a
    competitor.
 2. **Envelope's Planner layer** (project 9) — decouple write semantics
    (append/upsert/SCD2/bitemporal) from Sink transport. Highest-value idea
-   for ETL users; edgestream currently conflates the two in Sink plugins.
+   for ETL users; riverpod currently conflates the two in Sink plugins.
 3. **Envelope's Translator layer** (project 9) — decouple byte parsing
    (json/avro/csv/protobuf) from Source transport. Reduces the connector
    matrix from N×M to N+M.
@@ -864,10 +864,10 @@ edgestream has none of these. The most transferable are **decision** (runtime su
    collapse "router + fan-out" into one Node with `action: move|copy` and
    `default_pipelines`.
 5. **`dependencies = [...]` as sugar for unconditional edges** (projects 9 + Vector) —
-   **已采纳：** edgestream 用 `depends_on`（序列/映射）为唯一边语法，per-edge 属性内联在对象值内；独立 `edges:` 已 deprecated。见 `edgestream-design.md` §8.1.3。
+   **已采纳：** riverpod 用 `depends_on`（序列/映射）为唯一边语法，per-edge 属性内联在对象值内；独立 `edges:` 已 deprecated。见 `riverpod-design.md` §8.1.3。
 6. **HOCON ergonomics** (project 9) — native env-var overlay + `${substitution}`
    in config; ideally offer HOCON as an alternative format to YAML.
-   **已采纳：** YAML + HOCON 双格式。见 `edgestream-design.md` §8.2。
+   **已采纳：** YAML + HOCON 双格式。见 `riverpod-design.md` §8.2。
 7. **Argo's `conditions` + `conditionsReset` over dependencies** (project 2)
    — a "join gate" at DAG joins with `&&` / `||` over upstream Sources and
    time-based reset so stale half-matches don't fire.
@@ -899,4 +899,4 @@ edgestream has none of these. The most transferable are **decision** (runtime su
     evidence-backed extension point for user logic beyond CESQL/DSL.
 17. **Envelope `parameter.*` passthrough** (project 9) — forward unknown config
     keys to underlying clients (Kafka/HTTP) instead of enumerating every option
-    in edgestream's own schema.
+    in riverpod's own schema.

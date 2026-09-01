@@ -11,13 +11,13 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/edgesets/edgestream/internal/config"
-	"github.com/edgesets/edgestream/internal/engine"
-	"github.com/edgesets/edgestream/internal/observability"
-	"github.com/edgesets/edgestream/internal/registry"
-	"github.com/edgesets/edgestream/internal/testrunner"
-	"github.com/edgesets/edgestream/internal/topology"
-	_ "github.com/edgesets/edgestream/plugins/all"
+	"github.com/riverpod/riverpod/internal/config"
+	"github.com/riverpod/riverpod/internal/engine"
+	"github.com/riverpod/riverpod/internal/observability"
+	"github.com/riverpod/riverpod/internal/registry"
+	"github.com/riverpod/riverpod/internal/testrunner"
+	"github.com/riverpod/riverpod/internal/topology"
+	_ "github.com/riverpod/riverpod/plugins/all"
 )
 
 func main() {
@@ -39,7 +39,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintf(os.Stderr, "Usage: edgestream <run|validate|test> [flags]\n")
+	fmt.Fprintf(os.Stderr, "Usage: riverpod <run|validate|test> [flags]\n")
 }
 
 func runCmd(args []string) {
@@ -90,7 +90,7 @@ func runCmd(args []string) {
 	if err := eng.Start(ctx); err != nil {
 		fatal(err)
 	}
-	fmt.Println("edgestream running; press Ctrl+C to stop")
+	fmt.Println("riverpod running; press Ctrl+C to stop")
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGHUP)

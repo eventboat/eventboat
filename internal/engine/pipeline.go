@@ -11,13 +11,13 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/edgesets/edgestream/internal/codec"
-	"github.com/edgesets/edgestream/internal/config"
-	"github.com/edgesets/edgestream/internal/message"
-	"github.com/edgesets/edgestream/internal/observability"
-	"github.com/edgesets/edgestream/internal/registry"
-	"github.com/edgesets/edgestream/internal/stage"
-	"github.com/edgesets/edgestream/internal/topology"
+	"github.com/riverpod/riverpod/internal/codec"
+	"github.com/riverpod/riverpod/internal/config"
+	"github.com/riverpod/riverpod/internal/message"
+	"github.com/riverpod/riverpod/internal/observability"
+	"github.com/riverpod/riverpod/internal/registry"
+	"github.com/riverpod/riverpod/internal/stage"
+	"github.com/riverpod/riverpod/internal/topology"
 	"github.com/google/uuid"
 )
 

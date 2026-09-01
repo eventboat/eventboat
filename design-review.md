@@ -1,8 +1,8 @@
-# edgestream v2 设计评审报告
+# riverpod v2 设计评审报告
 
-> **注意（2025-06-24）：** 部分建议已被 `edgestream-design.md` v2.0-draft 吸收或推翻（如独立 `edges:`、`Planner` 层、`StageIR.predicate` 等）。以 `edgestream-design.md` 为准；下文保留历史评审脉络。
+> **注意（2025-06-24）：** 部分建议已被 `riverpod-design.md` v2.0-draft 吸收或推翻（如独立 `edges:`、`Planner` 层、`StageIR.predicate` 等）。以 `riverpod-design.md` 为准；下文保留历史评审脉络。
 
-> 评审对象：`edgestreamouter-v2-design.md`（v2.0-draft，2025-06-24）
+> 评审对象：`riverpodouter-v2-design.md`（v2.0-draft，2025-06-24）
 > 评审方法：文档逐节细读 + 6 大主流开源竞品深度对比
 > 竞品：Benthos/Redpanda Connect、Vector、Kafka Connect、Knative Eventing、Argo Events、Fluentd、Flume、OpenTelemetry Collector、CloudEvents CESQL、Cloudera Envelope
 
@@ -82,7 +82,7 @@
 **修正建议：**
 - 直接借鉴 **CESQL 的错误契约**：filter/condition 求值出错 → 默认 false（不通过），同时记一个 `dsl_error` metric + 可选投递到 error channel。
 - mapping 出错 → 默认整条 mapping 失败、消息标记 errored、走 stage 级 retry/DLQ；提供 `try() / catch()` 操作符让用户在 DSL 内兜底（参考 Bloblang `.catch()`、VRL `?`/`??`）。
-- **强烈建议引入 VRL 的 fallibility 标记**：编译期区分 fallible / infallible 操作，未处理的 fallible 调用编译失败。这是 VRL 相对所有 DSL 的最大优势，edgestream 应抢占。
+- **强烈建议引入 VRL 的 fallibility 标记**：编译期区分 fallible / infallible 操作，未处理的 fallible 调用编译失败。这是 VRL 相对所有 DSL 的最大优势，riverpod 应抢占。
 - 文档应新增 §8.8 "错误语义"，把以上四类显式写清。
 
 ### 2.6 eql 与 CESQL 重复造轮子【高优先级】
@@ -94,7 +94,7 @@
 **修正建议：**
 - **eql 的 predicate 子集直接实现 CESQL**，并跑通官方 TCK；
 - eql 的 mapping 部分保留自有语法（CESQL 不覆盖赋值/管道），但作为 CESQL 的超集；
-- 把 `data.*` 路径访问作为 CESQL 的 edgestream 扩展命名空间（CESQL 明确不覆盖 `data` 字段，留了扩展口）；
+- 把 `data.*` 路径访问作为 CESQL 的 riverpod 扩展命名空间（CESQL 明确不覆盖 `data` 字段，留了扩展口）；
 - 在文档里明确写"eql = CESQL + mapping 扩展"，而非"自研 DSL"。
 
 ### 2.7 次要问题
@@ -105,7 +105,7 @@
 - **§7.5 推导模式不支持 fan-in**：合理，但应在 §7.2 简单示例旁注明限制，避免用户踩坑。
 - **§11.3 每 Pipeline 一个 Deployment**：资源浪费严重。Benthos streams mode 单进程多 pipeline、Vector aggregator 单 StatefulSet 多 pipeline 都是更优解。文档应把"聚合模式"作为默认，"独立 Deployment"作为需显式开启的隔离选项。
 - **§6.5 优雅停机第 5 步 "Transform.Stop() → Source 资源释放"**：顺序写反了，Source 应最先停（已停产出），最后释放资源；Transform.Stop 应在 Sink.Stop 之前或并行。
-- **§10 指标命名 `er2_` 前缀**：项目已更名 edgestream，前缀应改为 `edgestream_` 或 `evr_`，避免遗留 v2 命名债。
+- **§10 指标命名前缀**：前缀应统一为 `riverpod_`，避免命名债。
 
 ---
 
@@ -130,7 +130,7 @@
 
 **竞品做法：** Benthos 的**一切皆 batch**——`message.Batch` 是 `[]*Message`，所有 processor 接收和返回 batch，`group_by`/`for_each`/`archive`/windowed 聚合都是一等公民。
 
-**建议：** 配合 §2.2 的 Transform 接口改造，让 batch 贯穿全链路。否则 edgestream 永远只能做"逐条事件路由"，做不了窗口聚合、跨消息去重、批量丰富——而这正是 Benthos/Vector 的核心场景之一。
+**建议：** 配合 §2.2 的 Transform 接口改造，让 batch 贯穿全链路。否则 riverpod 永远只能做"逐条事件路由"，做不了窗口聚合、跨消息去重、批量丰富——而这正是 Benthos/Vector 的核心场景之一。
 
 ### 3.3 【P0】CESQL 标准化 — 来自 CloudEvents / Knative
 
@@ -138,14 +138,14 @@
 
 ### 3.4 【P1】OTel Connector 模式：路由边作为一等节点 — 来自 OpenTelemetry Collector
 
-**现状：** edgestream 的"路由 + fan-out"要用 `route` transform + 多条带 condition 的边表达，3 个节点表达 1 个概念。
+**现状：** riverpod 的"路由 + fan-out"要用 `route` transform + 多条带 condition 的边表达，3 个节点表达 1 个概念。
 
 **竞品做法：** OTel Collector 的 `routing` connector 是**同时是 Sink（上游管道的出口）和 Source（下游管道的入口）**的单节点，配 `action: move|copy` + `default_pipelines`：
 - `move` = switch-case 首匹配即走（默认）；
 - `copy` = fan-out 同时走多个下游；
 - `default_pipelines` = 兜底。
 
-**建议：** 在 edgestream 里引入 `Router` 作为一种特殊 Stage（兼具 Sink + Source 语义），用 `action: move|copy` + `default` 表达。常见 fan-out 路由从"1 transform + N 边"压缩为"1 Router 节点"。这与现有 DAG 模型兼容（Router 仍是图中的一个节点）。
+**建议：** 在 riverpod 里引入 `Router` 作为一种特殊 Stage（兼具 Sink + Source 语义），用 `action: move|copy` + `default` 表达。常见 fan-out 路由从"1 transform + N 边"压缩为"1 Router 节点"。这与现有 DAG 模型兼容（Router 仍是图中的一个节点）。
 
 ### 3.5 【P1】VRL 风格的编译期 fallibility — 来自 Vector
 
@@ -157,7 +157,7 @@
 
 ### 3.6 【P1】Kafka Connect 的 predicate-on-transform
 
-**现状：** edgestream 要"条件性应用某个 transform"必须新建一个分支边。
+**现状：** riverpod 要"条件性应用某个 transform"必须新建一个分支边。
 
 **竞品做法：** Kafka Connect SMT 每个 transform 可带 `predicate`，predicate 不匹配则该 transform 跳过该记录，DAG 拓扑不变。
 
@@ -191,15 +191,15 @@
 
 ### 3.10 【P2】Argo 的复合事件触发（join + reset）
 
-**现状：** edgestream 的 DAG 是无状态逐事件路由。
+**现状：** riverpod 的 DAG 是无状态逐事件路由。
 
 **竞品做法：** Argo Sensor 的 `conditions: "dep01 && dep02"` 在多个 Source 的事件间做逻辑join，`conditionsReset` 按时间窗清除陈旧半匹配。
 
-**建议：** 作为 v2.2+ 的高级特性，引入 `Join` Stage——在 DAG 汇聚点上做跨源事件相关，配 `reset` 窗口。这是 edgestream 相对所有竞品可独占的差异化能力（Benthos/Vector 都不原生支持）。
+**建议：** 作为 v2.2+ 的高级特性，引入 `Join` Stage——在 DAG 汇聚点上做跨源事件相关，配 `reset` 窗口。这是 riverpod 相对所有竞品可独占的差异化能力（Benthos/Vector 都不原生支持）。
 
 ### 3.11 【P0】Planner 层 — 来自 Cloudera Envelope
 
-**现状：** edgestream 的 Sink 同时承担"传输"（Kafka/HTTP/Kudu）和"写入语义"（append/upsert）两个职责，耦合在一个插件里。无法声明式表达 SCD Type 2、bi-temporal、merge-into 等常见 ETL 写入模式。
+**现状：** riverpod 的 Sink 同时承担"传输"（Kafka/HTTP/Kudu）和"写入语义"（append/upsert）两个职责，耦合在一个插件里。无法声明式表达 SCD Type 2、bi-temporal、merge-into 等常见 ETL 写入模式。
 
 **竞品做法：** Envelope 在 Transform 和 Output 之间插入 **Planner** 层，专门决定"如何把到达的记录应用到目标"：
 
@@ -226,11 +226,11 @@ planner {
 }
 ```
 
-**建议：** edgestream 引入 Planner 作为 Sink 的装饰层（或 Transform 与 Sink 之间的独立层）。P0：`append`/`upsert`/`drop`。P1：`history`(SCD2)/`merge`。P2：`bitemporal`。这是 edgestream 进入 ETL 场景的**关键缺失**——没有它，SCD2/bi-temporal 必须在每个 Sink 插件里各自实现或交给用户写 Transform，重复且易错。
+**建议：** riverpod 引入 Planner 作为 Sink 的装饰层（或 Transform 与 Sink 之间的独立层）。P0：`append`/`upsert`/`drop`。P1：`history`(SCD2)/`merge`。P2：`bitemporal`。这是 riverpod 进入 ETL 场景的**关键缺失**——没有它，SCD2/bi-temporal 必须在每个 Sink 插件里各自实现或交给用户写 Transform，重复且易错。
 
 ### 3.12 【P0】Translator 层 — 来自 Cloudera Envelope
 
-**现状：** edgestream 的 Source 同时承担"传输"和"解析"——Kafka source 必须知道 payload 是 JSON 还是 Avro。这导致连接器矩阵组合爆炸（`kafka_json`/`kafka_avro`/`http_csv`…）。
+**现状：** riverpod 的 Source 同时承担"传输"和"解析"——Kafka source 必须知道 payload 是 JSON 还是 Avro。这导致连接器矩阵组合爆炸（`kafka_json`/`kafka_avro`/`http_csv`…）。
 
 **竞品做法：** Envelope 在 Input 内部插入 **Translator** 子组件，把字节解析与传输解耦：
 
@@ -249,11 +249,11 @@ input {
 }
 ```
 
-**建议：** edgestream 的 Source 增加可选 `translator` 子配置（或等价的 `decode` Transform 语法糖）。P0：`json`/`raw`。P1：`avro`/`protobuf`/`csv`。连接器矩阵从 N×M 降为 N+M。
+**建议：** riverpod 的 Source 增加可选 `translator` 子配置（或等价的 `decode` Transform 语法糖）。P0：`json`/`raw`。P1：`avro`/`protobuf`/`csv`。连接器矩阵从 N×M 降为 N+M。
 
 ### 3.13 【P1】`dependencies`/`depends_on` 作为无条件边的语法糖 — 来自 Envelope / Vector
 
-**现状：** edgestream §7.3 显式 DAG 模式要求 `stages:` + `edges:` 两段声明，即使是简单的线性链或 fan-in 也要单独列出每条边。
+**现状：** riverpod §7.3 显式 DAG 模式要求 `stages:` + `edges:` 两段声明，即使是简单的线性链或 fan-in 也要单独列出每条边。
 
 **竞品做法：** Envelope 和 Vector 都把边声明**内联到子节点**——Envelope 用 `dependencies = [a, b]`，Vector 用 `inputs = [a, b]`。无条件的线性/fan-in 场景无需单独 `edges:` 段：
 
@@ -268,11 +268,11 @@ pipeline:
     condition: "metadata.channel == 'us'"   # 有 condition 时仍用显式 edge 或内联 condition
 ```
 
-**建议：** StageIR 增加可选 `depends_on: [ids]` 字段，作为无条件边的语法糖。配置加载时展开为 EdgeIR。**保留** `edges:` 段用于需要 per-edge condition/buffer/delivery 的复杂场景。这样简单配置更友好（对标 Envelope/Vector），复杂配置仍显式（保留 edgestream 优势）。
+**建议：** StageIR 增加可选 `depends_on: [ids]` 字段，作为无条件边的语法糖。配置加载时展开为 EdgeIR。**保留** `edges:` 段用于需要 per-edge condition/buffer/delivery 的复杂场景。这样简单配置更友好（对标 Envelope/Vector），复杂配置仍显式（保留 riverpod 优势）。
 
 ### 3.14 【P1】HOCON 配置格式或 HOCON 特性 — 来自 Envelope
 
-**现状：** edgestream 用 YAML，§11.2 需要 `--set-env KAFKA_BROKERS=kafka:9092` CLI 参数手动注入环境变量。
+**现状：** riverpod 用 YAML，§11.2 需要 `--set-env KAFKA_BROKERS=kafka:9092` CLI 参数手动注入环境变量。
 
 **竞品做法：** Envelope 用 [HOCON](https://github.com/typesafehub/config/blob/master/HOCON.md)，天然支持：
 - **环境变量自动覆盖**（Typesafe Config 内置，无需 CLI flag）；
@@ -285,11 +285,11 @@ pipeline:
 
 ### 3.15 【P2】Decision + Task 步骤 — 来自 Envelope
 
-**现状：** edgestream 的路由是逐消息的（per-edge condition），无法在**拓扑层**根据运行时数据决定"整个子图是否执行"。
+**现状：** riverpod 的路由是逐消息的（per-edge condition），无法在**拓扑层**根据运行时数据决定"整个子图是否执行"。
 
 **竞品做法：** Envelope 的 `decision` step 在运行时求值（`literal`/`step_by_key`/`step_by_value`），`if-true-steps: [a, b]` 决定哪些依赖步骤实际运行——**动态拓扑剪枝**。`task` step 是纯副作用步骤（发通知、更新 metastore），与数据流解耦。
 
-**建议：** v2.1+ 引入 `decision` Stage（运行时决定子图执行）和 `task` Stage（生命周期副作用，如启动时预热缓存、停机时写 manifest）。这是 edgestream 走向"管道即应用"的进阶能力。
+**建议：** v2.1+ 引入 `decision` Stage（运行时决定子图执行）和 `task` Stage（生命周期副作用，如启动时预热缓存、停机时写 manifest）。这是 riverpod 走向"管道即应用"的进阶能力。
 
 ---
 
@@ -297,7 +297,7 @@ pipeline:
 
 ### 4.1 连接器广度
 
-Benthos ~100+ 连接器、Vector ~120+、edgestream 计划 35 个。**差距巨大但路线图合理**（先 P0 再 P1/P2）。建议：
+Benthos ~100+ 连接器、Vector ~120+、riverpod 计划 35 个。**差距巨大但路线图合理**（先 P0 再 P1/P2）。建议：
 - P0 阶段就**抄 Benthos 的插件注册模式**（`init()` 注册 + 全局 registry + 公开 `plugin.RegisterSource/Sink/Transform`），降低后续扩展成本；
 - 把 Benthos 的连接器配置 schema 抄过来作为参考实现（Kafka/S3/PubSub 的配置项都是经过生产验证的）。
 
@@ -309,13 +309,13 @@ Benthos ~100+ 连接器、Vector ~120+、edgestream 计划 35 个。**差距巨�
 
 ### 4.3 配置 DX 工具
 
-Benthos 有 `lint`/`echo`/`create`/`blobl`（REPL）/单元测试框架。edgestream §11.5 只列了 `run/validate/test/doc`。
+Benthos 有 `lint`/`echo`/`create`/`blobl`（REPL）/单元测试框架。riverpod §11.5 只列了 `run/validate/test/doc`。
 
-**建议：** 增加 `edgestream eql`（DSL REPL）、`edgestream lint`（配置 lint，未列入 run 前的静态检查）、`edgestream test`（fixture 驱动的管道测试，对标 Benthos 的 `--set`/`test` 框架）。CI 友好度直接影响采纳率。
+**建议：** 增加 `riverpod eql`（DSL REPL）、`riverpod lint`（配置 lint，未列入 run 前的静态检查）、`riverpod test`（fixture 驱动的管道测试，对标 Benthos 的 `--set`/`test` 框架）。CI 友好度直接影响采纳率。
 
 ### 4.4 多 Pipeline 运行时（streams mode）
 
-Benthos `streams` mode 用 REST API 动态增删 pipeline，单进程多 pipeline。edgestream §11 单二进制模式默认单 pipeline，K8s 模式默认每 pipeline 一个 Deployment。
+Benthos `streams` mode 用 REST API 动态增删 pipeline，单进程多 pipeline。riverpod §11 单二进制模式默认单 pipeline，K8s 模式默认每 pipeline 一个 Deployment。
 
 **建议：** 单二进制模式增加 `--streams-dir`（目录内每个文件一个 pipeline，热加载），并提供 `POST /streams/{name}` REST API。这比"每 pipeline 一个进程"或"每 pipeline 一个 Pod"资源效率高一个数量级。
 
@@ -469,4 +469,4 @@ pipeline:
 - Go + wazero WASM 双插件（比 Vector 已废弃的 WASM 更现代）
 - 单二进制 + Operator 双形态
 
-**总体判断：** 设计方向正确，但 §5/§6 的接口定义存在 4 处会导致实现期返工的硬伤，应在新代码动工前修订；DSL 策略应从"自研 eql"调整为"CESQL 兼容 + mapping 扩展 + fallibility 类型系统"以抢占生态位；缓冲层必须补齐磁盘缓冲否则可靠性承诺站不住；**应引入 Envelope 的 Planner/Translator 分层**，否则 edgestream 在 ETL 场景缺乏声明式写入与解析能力，Sink/Source 插件会陷入组合爆炸；配置体验上应吸收 Envelope/Vector 的 `dependencies` 内联边语法糖和 HOCON 的 env 变量自动覆盖特性，让简单场景的配置真正"简单"。完成上述修订后，edgestream 的拓扑模型将显著优于 Benthos 的"线性+嵌套 workflow"，与 Vector 持平，并在 ETL 写入语义（Planner）上补齐相对所有流路由竞品的短板。
+**总体判断：** 设计方向正确，但 §5/§6 的接口定义存在 4 处会导致实现期返工的硬伤，应在新代码动工前修订；DSL 策略应从"自研 eql"调整为"CESQL 兼容 + mapping 扩展 + fallibility 类型系统"以抢占生态位；缓冲层必须补齐磁盘缓冲否则可靠性承诺站不住；**应引入 Envelope 的 Planner/Translator 分层**，否则 riverpod 在 ETL 场景缺乏声明式写入与解析能力，Sink/Source 插件会陷入组合爆炸；配置体验上应吸收 Envelope/Vector 的 `dependencies` 内联边语法糖和 HOCON 的 env 变量自动覆盖特性，让简单场景的配置真正"简单"。完成上述修订后，riverpod 的拓扑模型将显著优于 Benthos 的"线性+嵌套 workflow"，与 Vector 持平，并在 ETL 写入语义（Planner）上补齐相对所有流路由竞品的短板。

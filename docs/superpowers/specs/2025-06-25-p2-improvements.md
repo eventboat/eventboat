@@ -2,7 +2,7 @@
 
 > Date: 2025-06-25
 > Status: Tracked for v2.0-beta and later
-> Reference: Code review against `edgestream-design.md` v2.0-draft
+> Reference: Code review against `riverpod-design.md` v2.0-draft
 
 ## P2 Issues from Code Review
 
@@ -12,11 +12,11 @@ These are deferred improvements that don't block alpha functionality but should 
 
 **Design ref:** §10.1–§10.7
 
-- [x] Implement `edgestream_*` Prometheus metrics endpoint (port 9090)
-  - Pipeline: `edgestream_events_total`, `edgestream_event_latency_seconds`, `edgestream_inflight_events`
-  - Stage: `edgestream_stage_duration_seconds`, `edgestream_stage_errors_total`
-  - Edge: `edgestream_edge_buffer_size`, `edgestream_edge_dropped_total`
-  - DLQ: `edgestream_dlq_enqueued_total`
+- [x] Implement `riverpod_*` Prometheus metrics endpoint (port 9090)
+  - Pipeline: `riverpod_events_total`, `riverpod_event_latency_seconds`, `riverpod_inflight_events`
+  - Stage: `riverpod_stage_duration_seconds`, `riverpod_stage_errors_total`
+  - Edge: `riverpod_edge_buffer_size`, `riverpod_edge_dropped_total`
+  - DLQ: `riverpod_dlq_enqueued_total`
 - [x] OTLP tracing spans skeleton (pipeline → stage granularity; noop tracer)
 - [x] Health endpoints: `/live` (liveness) + `/ready` (readiness with per-stage HealthCheck)
 - [x] Structured JSON logging with dynamic level adjustment

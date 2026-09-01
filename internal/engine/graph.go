@@ -3,10 +3,10 @@ package engine
 import (
 	"fmt"
 
-	"github.com/edgesets/edgestream/internal/buffer"
-	"github.com/edgesets/edgestream/internal/eql"
-	"github.com/edgesets/edgestream/internal/message"
-	"github.com/edgesets/edgestream/internal/topology"
+	"github.com/riverpod/riverpod/internal/buffer"
+	"github.com/riverpod/riverpod/internal/eql"
+	"github.com/riverpod/riverpod/internal/message"
+	"github.com/riverpod/riverpod/internal/topology"
 )
 
 type runtimeNode struct {

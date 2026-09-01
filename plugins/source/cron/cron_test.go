@@ -3,8 +3,8 @@ package cron_test
 import (
 	"testing"
 
-	"github.com/edgesets/edgestream/internal/registry"
-	_ "github.com/edgesets/edgestream/plugins/source/cron"
+	"github.com/riverpod/riverpod/internal/registry"
+	_ "github.com/riverpod/riverpod/plugins/source/cron"
 )
 
 func TestCronSource_InvalidSchedule(t *testing.T) {

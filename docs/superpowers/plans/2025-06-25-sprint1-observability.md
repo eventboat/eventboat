@@ -10,7 +10,7 @@
 
 ## Global Constraints
 
-- Metric prefix: `edgestream_` (not `er2_`)
+- Metric prefix: `riverpod_`
 - Default metrics port: `9090`, path `/metrics`
 - Default health endpoints: `/live`, `/ready`
 - Health `/live` does not query stages; `/ready` aggregates all Stage `HealthCheck`
@@ -51,12 +51,12 @@
 - Modify: `internal/engine/engine.go`
 - Modify: `internal/engine/pipeline.go`
 - Modify: `internal/engine/dispatch.go`
-- Modify: `cmd/edgestream/main.go`
+- Modify: `cmd/riverpod/main.go`
 
 - [x] Wire metrics into pipeline hot paths
-- [x] Start observability server from `edgestream run`
+- [x] Start observability server from `riverpod run`
 
 ### Task 5: Verify
 
 - [x] `go test ./...`
-- [x] `go build ./cmd/edgestream`
+- [x] `go build ./cmd/riverpod`

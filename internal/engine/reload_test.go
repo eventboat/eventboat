@@ -9,11 +9,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/edgesets/edgestream/internal/config"
-	"github.com/edgesets/edgestream/internal/engine"
-	"github.com/edgesets/edgestream/internal/testutil"
-	"github.com/edgesets/edgestream/internal/topology"
-	_ "github.com/edgesets/edgestream/plugins/all"
+	"github.com/riverpod/riverpod/internal/config"
+	"github.com/riverpod/riverpod/internal/engine"
+	"github.com/riverpod/riverpod/internal/testutil"
+	"github.com/riverpod/riverpod/internal/topology"
+	_ "github.com/riverpod/riverpod/plugins/all"
 )
 
 func TestReloadPipeline(t *testing.T) {
@@ -82,7 +82,7 @@ func TestReloadKeepsOldPipelineOnBuildFailure(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "pipe.yaml")
 	// cron ticks once a second so pipeline liveness is observable.
-	good := []byte(`apiVersion: edgestream/v1
+	good := []byte(`apiVersion: riverpod/v1
 kind: Pipeline
 metadata:
   name: live-pipe
@@ -135,7 +135,7 @@ steps:
 
 	// New config passes topology validation but cannot be instantiated
 	// (unknown source plugin). The running pipeline must survive.
-	bad := []byte(`apiVersion: edgestream/v1
+	bad := []byte(`apiVersion: riverpod/v1
 kind: Pipeline
 metadata:
   name: live-pipe
