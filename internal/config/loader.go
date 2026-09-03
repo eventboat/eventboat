@@ -343,6 +343,9 @@ type constantsSubstituter struct {
 	diags     *[]Diagnostic
 }
 
+// substitute expands ${constants.x} references and rejects any other scoped
+// reference ("unknown means error", redesign-v3.md §5.5): only `constants` is
+// a legal scope in the POC; `parameters` arrives with M2 job pipelines.
 func (s *constantsSubstituter) substitute(v any) any {
 	switch t := v.(type) {
 	case string:
@@ -355,8 +358,23 @@ func (s *constantsSubstituter) substitute(v any) any {
 			if m[1] == "?" {
 				continue // optional marker is meaningless for constants
 			}
+			if !strings.Contains(m[2], ".") {
+				continue // plain ${VAR} was handled (or rejected) by the env pass
+			}
 			if !strings.HasPrefix(m[2], "constants.") {
-				continue // not a scoping reference we handle here
+				scope := m[2][:strings.Index(m[2], ".")]
+				msg := fmt.Sprintf("unknown scoped reference ${%s}: scope %q is not defined (allowed: constants)", m[2], scope)
+				hint := "use ${constants.name} or a plain environment variable ${VAR}"
+				if scope == "parameters" {
+					msg = fmt.Sprintf("${%s}: parameters will land in M2 (job pipelines); not available yet", m[2])
+					hint = "pass the value as a constant or environment variable until job pipelines ship"
+				}
+				*s.diags = append(*s.diags, Diagnostic{
+					Severity: "error", Code: "cfg_scope_unknown", File: s.file, Line: 0,
+					Message: msg,
+					Hint:    hint,
+				})
+				continue
 			}
 			name := strings.TrimPrefix(m[2], "constants.")
 			cv, ok := s.constants[name]

@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -216,5 +217,81 @@ func TestLoadFileMissing(t *testing.T) {
 	res := LoadFile(filepath.Join(t.TempDir(), "nope.yaml"))
 	if !res.HasErrors() {
 		t.Fatal("expected io_read error")
+	}
+}
+
+// Unknown scoped substitutions must be errors ("unknown means error",
+// redesign-v3.md §5.5): only `constants` is a legal scope in the POC.
+func TestScopedSubstitutionUnknownScopeErrors(t *testing.T) {
+	res := LoadBytes("p.yaml", []byte(`
+apiVersion: eventboat/v3
+kind: Pipeline
+metadata: { name: x }
+sources:
+  in: { decoder: json, file: { path: a } }
+sinks:
+  out: { from: [in], file: { path: "${bogus.value}.txt" } }
+`))
+	var diag *Diagnostic
+	for i := range res.Diagnostics {
+		if res.Diagnostics[i].Code == "cfg_scope_unknown" {
+			diag = &res.Diagnostics[i]
+		}
+	}
+	if diag == nil {
+		t.Fatalf("expected cfg_scope_unknown, got %+v", res.Diagnostics)
+	}
+	if !strings.Contains(diag.Message, "bogus") {
+		t.Errorf("message should name the offending scope: %q", diag.Message)
+	}
+}
+
+// ${parameters.*} errors with explicit guidance: parameters belong to job
+// pipelines, which land in M2.
+func TestScopedSubstitutionParametersGuided(t *testing.T) {
+	res := LoadBytes("p.yaml", []byte(`
+apiVersion: eventboat/v3
+kind: Pipeline
+metadata: { name: x }
+sources:
+  in: { decoder: json, file: { path: a } }
+sinks:
+  out: { from: [in], file: { path: "run-${parameters.from}.txt" } }
+`))
+	found := false
+	for _, d := range res.Diagnostics {
+		if d.Code == "cfg_scope_unknown" && strings.Contains(d.Message, "parameters.from") {
+			found = true
+			if !strings.Contains(d.Message, "parameters will land in M2 (job pipelines); not available yet") {
+				t.Errorf("missing M2 guidance: %q", d.Message)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("expected cfg_scope_unknown for parameters with guidance, got %+v", res.Diagnostics)
+	}
+}
+
+// constants and plain env vars keep working; dotted references are not
+// mistaken for env vars.
+func TestScopedSubstitutionConstantsAndEnvStillWork(t *testing.T) {
+	os.Setenv("EB_TEST_OK_VAR", "prod")
+	defer os.Unsetenv("EB_TEST_OK_VAR")
+	res := LoadBytes("p.yaml", []byte(`
+apiVersion: eventboat/v3
+kind: Pipeline
+metadata: { name: x }
+constants:
+  tier: gold
+sources:
+  in: { decoder: json, file: { path: a } }
+sinks:
+  out: { from: [in], file: { path: "${constants.tier}-${EB_TEST_OK_VAR}.txt" } }
+`))
+	if res.HasErrors() {
+		t.Fatalf("unexpected errors: %+v", res.Diagnostics)
+	}
+	if got := res.Pipeline.Sinks["out"].PluginConfig["path"]; got != "gold-prod.txt" {
+		t.Errorf("path = %v, want gold-prod.txt", got)
 	}
 }

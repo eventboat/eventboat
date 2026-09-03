@@ -50,8 +50,9 @@ go build -o eventboat ./cmd/eventboat
 eventboat verify --config examples/linear/pipeline.yaml
 eventboat --json verify --config examples/branching/pipeline.yaml   # CI/Agent 用
 
-# 关卡二：合约测试——进程内真实引擎 + fixture 注入 + 捕获
-eventboat test examples/linear/tests examples/branching/tests
+# 关卡二：合约测试——进程内真实引擎 + fixture 注入 + 捕获。
+# 目录模式递归遍历；无顶层 `suite:` 键的 yaml（如 pipeline）跳过并计数。
+eventboat test examples
 
 # 运行（持久：SQLite 存储在 ./data；--ephemeral 为本地开发内存态）
 eventboat run --config examples/linear/pipeline.yaml

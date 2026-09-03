@@ -78,6 +78,23 @@ type specDLQ struct {
 	ReasonContains string `yaml:"reason_contains"`
 }
 
+// IsSuite reports whether the YAML file at path declares a contract test
+// suite (a top-level `suite:` key). Directory mode uses this to run suites
+// and silently skip pipelines and unrelated YAML.
+func IsSuite(path string) bool {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	var probe struct {
+		Suite string `yaml:"suite"`
+	}
+	if err := yaml.Unmarshal(data, &probe); err != nil {
+		return false
+	}
+	return probe.Suite != ""
+}
+
 // RunFile executes one contract test file (redesign-v3.md §3.2). The pipeline
 // runs in-process against the real engine with an ephemeral store, a fixed
 // clock and capture-wrapped sinks.

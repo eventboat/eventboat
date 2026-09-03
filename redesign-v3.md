@@ -1,7 +1,7 @@
 # v3 从零重设计提案 — Agent 原生事件路由器（零自研语言版）
 
 > **状态：POC 阶段**（提案定稿：定名 Eventboat、License Apache-2.0；v3 全新实现，**不向后兼容 v2**——无迁移义务）
-> **日期：2026-09-03**（修订 v1.1：零自研语言 CEL + Starlark + 性能评估；v1.2：吸收 dagu 作业模型（pipeline 级 `run`/`params`）；v1.3：拓扑结构改为**三段式 `sources`/`transforms`/`sinks` + `from` 连边 + 插件名即键**，命名体系定稿——含 DAG 描述模式调研结论，见 §5.1；v1.4：钩子段 `on`→`hooks`（GH Actions 撞形不同义），新增 consts/params 语义小节 §5.9；v1.5：**全称原则**——自造缩写全部展开：`params`→`parameters`、`consts`→`constants`、`dlq`→`dead_letter_queue`、`catchup`→`catchup_window`、`args`→`arguments`、`max_inflight`→`max_in_flight`，见 §5.1；v1.6：全称原则细化——**约定俗成的行业缩写保留**：`dlq`、`args`、`dsn` 维持缩写，回退 v1.5 对前两项的展开；v1.7：**定名 Eventboat**（§8，六轮核查 + 三选一裁决），全文占位符替换；v1.8：**License 定为 Apache-2.0**（仓库 LICENSE 落地，开放问题 #11 关闭）；v1.9：**明确 POC 阶段、不向后兼容 v2**——`convert` 降为按需工具，开放问题 #12 关闭）
+> **日期：2026-09-03**（修订 v1.1：零自研语言 CEL + Starlark + 性能评估；v1.2：吸收 dagu 作业模型（pipeline 级 `run`/`params`）；v1.3：拓扑结构改为**三段式 `sources`/`transforms`/`sinks` + `from` 连边 + 插件名即键**，命名体系定稿——含 DAG 描述模式调研结论，见 §5.1；v1.4：钩子段 `on`→`hooks`（GH Actions 撞形不同义），新增 consts/params 语义小节 §5.9；v1.5：**全称原则**——自造缩写全部展开：`params`→`parameters`、`consts`→`constants`、`dlq`→`dead_letter_queue`、`catchup`→`catchup_window`、`args`→`arguments`、`max_inflight`→`max_in_flight`，见 §5.1；v1.6：全称原则细化——**约定俗成的行业缩写保留**：`dlq`、`args`、`dsn` 维持缩写，回退 v1.5 对前两项的展开；v1.7：**定名 Eventboat**（§8，六轮核查 + 三选一裁决），全文占位符替换；v1.8：**License 定为 Apache-2.0**（仓库 LICENSE 落地，开放问题 #11 关闭）；v1.9：**明确 POC 阶段、不向后兼容 v2**——`convert` 降为按需工具，开放问题 #12 关闭；v1.10：按实现前审查（redesign-v3-review.md R1–R3）修正 §4.3 沙箱表：`while`/递归/顶层控制流的机制归属统一为 `syntax.FileOptions`，删除不存在的 `strings` 模块）
 >
 > 本文回答一个问题：**如果抛开 v2 现有实现，从零重新设计这个产品的方案、功能、配置方式和架构，应该长成什么样。**
 >
@@ -325,10 +325,11 @@ transforms:
 
 | 机制 | 配置 | 效果 |
 |------|------|------|
-| 递归 | `resolve.AllowRecursion = false`（默认） | 禁递归 |
-| `while` 循环 | 挂在 recursion 选项下，默认禁 | 循环只能写有限序列的 `for`，保证终止 |
+| 递归 | `syntax.FileOptions.Recursion = false`（默认） | 禁递归 |
+| `while` 循环 | `FileOptions.While = false`（默认） | 循环只能写有限序列的 `for`，保证终止 |
+| 顶层控制流 | `FileOptions.TopLevelControl = true` | `script` 是语句序列而非函数体，顶层 `if/for` 必须可用（本节示例全部依赖它——实现前审查 R2 抓出的规范遗漏） |
 | 步数预算 | `Thread.SetMaxExecutionSteps(n)`（默认 100k，可配） | 硬性计算上限——**既是安全阀，也是每消息 CPU/延迟上限** |
-| 模块 | 宿主白名单加载：`json`、`math`（确定性子集）、`strings`；**不加载** `time`/任何 I/O | 无网络、无文件、无时钟、无熵源 → 确定性可回放 |
+| 模块 | 宿主白名单加载：`json`、`math`（确定性子集）；go-starlark **没有**可加载的 `strings` 模块——字符串方法内建于 `string` 类型天然可用（实现前审查 R3）；**不加载** `time`/任何 I/O | 无网络、无文件、无时钟、无熵源 → 确定性可回放 |
 | 冻结语义 | Starlark 语言内建 | 模块级全局不可变，多线程安全复用 |
 
 #### 错误模型（Starlark 的"无异常"恰好是优点）

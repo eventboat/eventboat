@@ -55,8 +55,10 @@ go build -o eventboat ./cmd/eventboat
 eventboat verify --config examples/linear/pipeline.yaml
 eventboat --json verify --config examples/branching/pipeline.yaml   # for CI/agents
 
-# gate 2: contract tests — in-process real engine, fixture injection, capture
-eventboat test examples/linear/tests examples/branching/tests
+# gate 2: contract tests — in-process real engine, fixture injection, capture.
+# Directory mode recurses; YAML files without a top-level `suite:` key
+# (pipelines etc.) are skipped and counted.
+eventboat test examples
 
 # run (durable: SQLite store under ./data; or --ephemeral for local dev)
 eventboat run --config examples/linear/pipeline.yaml
