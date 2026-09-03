@@ -124,6 +124,7 @@ Equivalent HOCON, flat `pipeline[]` compatibility, and branch routing details ar
 | [`riverpod-design.md`](riverpod-design.md) | Requirements and design (primary document) |
 | [`competitor-research.md`](competitor-research.md) | Competitive analysis |
 | [`design-review.md`](design-review.md) | Design review (some entries outdated; primary doc takes precedence) |
+| [`redesign-v3.md`](redesign-v3.md) | **v3 from-scratch redesign proposal** (agent-native router, zero-custom-language: CEL + Starlark; proposal, not yet implemented) |
 | [`cmd/riverpod/`](cmd/riverpod/) | CLI (`run` / `validate` / `test`) |
 | [`internal/`](internal/) | Engine, config, topology, eql |
 | [`plugins/`](plugins/) | Source / Transform / Sink / Codec plugins |
@@ -150,6 +151,7 @@ make build test validate pipeline-test
 - [Configuration Reference](docs/configurations.md) — Engine, Steps, Source/Transform/Sink plugins, edges, and variable substitution (Envelope-style layout)
 - [AI/Agent Guide](docs/ai-agent.md) — LLM/Agent transforms, provider abstraction, observability, phased delivery plan
 - [Agent Skill (skills.sh)](skills/README.md) — install with `npx skills add riverpod/riverpod@riverpod`
+- [v3 Redesign Proposal](redesign-v3.md) — agent-native positioning, zero-custom-language (CEL + Starlark), config & architecture redesign (proposal, not implemented)
 - [Background & Goals](riverpod-design.md#1-背景与目标)
 - [Core Interfaces & Message](riverpod-design.md#4-核心接口与-message-模型)
 - [Engine Runtime](riverpod-design.md#6-引擎运行时)

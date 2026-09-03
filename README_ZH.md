@@ -124,6 +124,7 @@ riverpod run --config my-pipeline.yaml
 | [`riverpod-design.md`](riverpod-design.md) | 需求与设计方案（主文档） |
 | [`competitor-research.md`](competitor-research.md) | 竞品调研 |
 | [`design-review.md`](design-review.md) | 设计评审（部分条目已过时，以主文档为准） |
+| [`redesign-v3.md`](redesign-v3.md) | **v3 从零重设计提案**（Agent 原生事件路由器，零自研语言 CEL+Starlark；提案，未实施） |
 | [`cmd/riverpod/`](cmd/riverpod/) | CLI（`run` / `validate` / `test`） |
 | [`internal/`](internal/) | 引擎、配置、拓扑、eql |
 | [`plugins/`](plugins/) | Source / Transform / Sink / Codec 插件 |
@@ -150,6 +151,7 @@ make build test validate pipeline-test
 - [配置规范](docs/configurations.md) — Engine、Steps、Source/Transform/Sink 插件、边与变量替换（参考 Envelope 布局）
 - [AI/Agent 指南](docs/ai-agent.md) — LLM/Agent Transform、Provider 抽象、可观测性与分阶段交付计划
 - [Agent Skill (skills.sh)](skills/README.md) — `npx skills add riverpod/riverpod@riverpod` 安装
+- [v3 从零重设计提案](redesign-v3.md) — Agent 原生定位、零自研语言（CEL+Starlark）、配置与架构重设计（提案，未实施）
 - [背景与目标](riverpod-design.md#1-背景与目标)
 - [核心接口与 Message](riverpod-design.md#4-核心接口与-message-模型)
 - [引擎运行时](riverpod-design.md#6-引擎运行时)
