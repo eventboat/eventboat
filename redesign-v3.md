@@ -1,7 +1,7 @@
 # v3 从零重设计提案 — Agent 原生事件路由器（零自研语言版）
 
-> **状态：提案（proposal / 未实施）**
-> **日期：2026-09-03**（修订 v1.1：零自研语言 CEL + Starlark + 性能评估；v1.2：吸收 dagu 作业模型（pipeline 级 `run`/`params`）；v1.3：拓扑结构改为**三段式 `sources`/`transforms`/`sinks` + `from` 连边 + 插件名即键**，命名体系定稿——含 DAG 描述模式调研结论，见 §5.1；v1.4：钩子段 `on`→`hooks`（GH Actions 撞形不同义），新增 consts/params 语义小节 §5.9；v1.5：**全称原则**——自造缩写全部展开：`params`→`parameters`、`consts`→`constants`、`dlq`→`dead_letter_queue`、`catchup`→`catchup_window`、`args`→`arguments`、`max_inflight`→`max_in_flight`，见 §5.1；v1.6：全称原则细化——**约定俗成的行业缩写保留**：`dlq`、`args`、`dsn` 维持缩写，回退 v1.5 对前两项的展开）
+> **状态：POC 阶段**（提案定稿：定名 Eventboat、License Apache-2.0；v3 全新实现，**不向后兼容 v2**——无迁移义务）
+> **日期：2026-09-03**（修订 v1.1：零自研语言 CEL + Starlark + 性能评估；v1.2：吸收 dagu 作业模型（pipeline 级 `run`/`params`）；v1.3：拓扑结构改为**三段式 `sources`/`transforms`/`sinks` + `from` 连边 + 插件名即键**，命名体系定稿——含 DAG 描述模式调研结论，见 §5.1；v1.4：钩子段 `on`→`hooks`（GH Actions 撞形不同义），新增 consts/params 语义小节 §5.9；v1.5：**全称原则**——自造缩写全部展开：`params`→`parameters`、`consts`→`constants`、`dlq`→`dead_letter_queue`、`catchup`→`catchup_window`、`args`→`arguments`、`max_inflight`→`max_in_flight`，见 §5.1；v1.6：全称原则细化——**约定俗成的行业缩写保留**：`dlq`、`args`、`dsn` 维持缩写，回退 v1.5 对前两项的展开；v1.7：**定名 Eventboat**（§8，六轮核查 + 三选一裁决），全文占位符替换；v1.8：**License 定为 Apache-2.0**（仓库 LICENSE 落地，开放问题 #11 关闭）；v1.9：**明确 POC 阶段、不向后兼容 v2**——`convert` 降为按需工具，开放问题 #12 关闭）
 >
 > 本文回答一个问题：**如果抛开 v2 现有实现，从零重新设计这个产品的方案、功能、配置方式和架构，应该长成什么样。**
 >
@@ -152,7 +152,7 @@ review-2026-08 的核心发现（同日已修复大部分，但暴露的是**机
 
 ### 3.1 关卡一：verify（写完就查）
 
-`<name> verify --config p.yaml [--json]`，CI 与 Agent 共用同一入口。全部检查**静态、确定性、零副作用**：
+`eventboat verify --config p.yaml [--json]`，CI 与 Agent 共用同一入口。全部检查**静态、确定性、零副作用**：
 
 1. **Schema 校验**：管道配置与每个插件配置块都按注册的 JSON Schema 严格校验（未知字段 = 错误，不是警告）；node 层框架字段按白名单枚举（§5.3）。
 2. **拓扑不变量**：node 名跨三段全局唯一；`from` 引用存在；source 无入边、sink 无出边；无环；至少一条 source→sink 通路；无孤立节点。
@@ -198,7 +198,7 @@ cases:
 
 这是 v3 最具差异化的能力：**引擎能解释自己**。
 
-**`<name> explain --config p.yaml --message sample.json`** — 给定一条样例消息，输出确定性推演（不运行引擎，纯静态 IR + 求值）：
+**`eventboat explain --config p.yaml --message sample.json`** — 给定一条样例消息，输出确定性推演（不运行引擎，纯静态 IR + 求值）：
 
 ```
 message sample.json enters at node "ingest" (source kafka / decoder json)
@@ -214,7 +214,7 @@ settle: 1 branch → settles when kafka ack (or retry exhausted → dead letter)
 
 `--message` 可省略，此时输出符号化推演（各边条件的字段依赖与取值域）。`explain --topology` 输出渲染好的 DAG（mermaid/ASCII，nodes + edges 与配置一一对应）。**术语说明**：`node`（节点）是概念词，用于 explain/status/内部 IR；它不是配置键——配置里节点以 `sources/transforms/sinks` 三段的条目存在（§5.3）。
 
-**`<name> replay`** — 事后回放，把"数据面"变成可调试系统：
+**`eventboat replay`** — 事后回放，把"数据面"变成可调试系统：
 
 - `replay --dlq --since 2h --where 'meta.dlq.reason contains "parse"'` → 从死信库筛出死信，重新注入任意 node（可先 `--dry-run` 看路径）；
 - `replay --spool --from <checkpoint-id>` → 按持久化入口重放一段窗口（灾备演练/升级验证）；
@@ -257,17 +257,17 @@ settle: 1 branch → settles when kafka ack (or retry exhausted → dead letter)
 ### 3.6 CLI 命令总览
 
 ```
-<name> run        --config / --config-dir          运行（含热重载信号）
-<name> verify     --config [--strict] [--json]     静态验证（关卡一）
-<name> test       --config / --dir [--json]        合约测试（关卡二）
-<name> explain    --config [--message f.json]      路径推演（关卡三）
-<name> replay     --dlq / --spool / --job [...]    死信/窗口/作业回放（关卡三）
-<name> trigger    <pipeline> [--parameters json]      手动触发作业（§5.8）
-<name> jobs       list | show <run-id>             作业历史
-<name> convert    --from v2 --to v3                配置与 eql 迁移（§7.3）
-<name> repl       [--script f.star] [--cel 'expr'] 脚本/表达式 REPL（§4.4）
-<name> plugin     list | schema <name>             插件清单与 Schema
-<name> mcp        [--stdio | --http]               启动 MCP Server（关卡四）
+eventboat run        --config / --config-dir          运行（含热重载信号）
+eventboat verify     --config [--strict] [--json]     静态验证（关卡一）
+eventboat test       --config / --dir [--json]        合约测试（关卡二）
+eventboat explain    --config [--message f.json]      路径推演（关卡三）
+eventboat replay     --dlq / --spool / --job [...]    死信/窗口/作业回放（关卡三）
+eventboat trigger    <pipeline> [--parameters json]   手动触发作业（§5.8）
+eventboat jobs       list | show <run-id>             作业历史
+eventboat convert    --from v2 --to v3                配置与 eql 迁移（§7.3）
+eventboat repl       [--script f.star] [--cel 'expr'] 脚本/表达式 REPL（§4.4）
+eventboat plugin     list | schema <plugin>           插件清单与 Schema
+eventboat mcp        [--stdio | --http]               启动 MCP Server（关卡四）
 ```
 
 ---
@@ -303,7 +303,7 @@ from: { enrich: { when: 'meta.region == "eu" && payload.total > 100' } }
 
 #### 形态与绑定
 
-`transforms.<name>.script` 是**一段 Starlark 语句序列**（无需函数包装），引擎预绑定全局：
+`transforms.<node>.script` 是**一段 Starlark 语句序列**（无需函数包装），引擎预绑定全局：
 
 ```yaml
 transforms:
@@ -494,7 +494,7 @@ WASM / gRPC  重计算/任意语言/外部依赖（近原生，进程隔离）
 ### 5.3 唯一写法：三段式 + from
 
 ```yaml
-apiVersion: <newname>/v3
+apiVersion: eventboat/v3
 kind: Pipeline
 metadata: { name: orders }
 
@@ -546,7 +546,7 @@ sinks:
 
 - 替换适用于**所有字符串值**（修复 v2 盲区）；`${VAR}` 未设置 = verify 错误；`${?VAR}` 未设置 = 整个键省略。
 - 作用域引用：`${parameters.name}`（作业参数，§5.8/§5.9）、`${constants.name}`（管道常量，§5.9）均可出现在任何字符串值中（含 `when`；脚本内直接读绑定名 `constants.x`/`parameters.x`）。
-- overlay：`<name> verify base.yaml + overlays/prod.yaml`。overlay 是补丁文档（map 深合并、list 整体替换、`<<remove>>` 标记删除），合并结果作为一个整体再走 verify——**永远不存在"未验证的合并结果"**。三段式让补丁路径更短更稳（`sinks.eu-out.kafka.topic` 而非 `nodes.eu-out.sink.config.topic`）。
+- overlay：`eventboat verify base.yaml + overlays/prod.yaml`。overlay 是补丁文档（map 深合并、list 整体替换、`<<remove>>` 标记删除），合并结果作为一个整体再走 verify——**永远不存在"未验证的合并结果"**。三段式让补丁路径更短更稳（`sinks.eu-out.kafka.topic` 而非 `nodes.eu-out.sink.config.topic`）。
 - 密钥：配置里不落密钥；`config` 值支持 `${VAR}` 已覆盖 99% 场景；secret 引用（`secret://`）列 P2。
 
 ### 5.6 插件配置的 JSON Schema
@@ -595,7 +595,7 @@ steps:
 v3（同语义）：
 
 ```yaml
-apiVersion: <newname>/v3
+apiVersion: eventboat/v3
 kind: Pipeline
 metadata: { name: orders }
 sources:
@@ -626,7 +626,7 @@ sinks:
 **方案**：作业是 **pipeline 级**的一等运行形态（dagu 同位设计）。`run` 块出现在管道顶层时，该管道成为**作业管道**——整条管道按作业生命周期运行：
 
 ```yaml
-apiVersion: <newname>/v3
+apiVersion: eventboat/v3
 kind: Pipeline
 metadata: { name: orders-nightly-sync }
 
@@ -836,7 +836,7 @@ spool 表设计要点：append-only 消息表 + checkpoint 表 + 死信表（索
 ### 6.8 模块划分（新 internal/ 布局）
 
 ```
-cmd/<name>/          run verify test explain replay trigger jobs convert repl plugin mcp
+cmd/eventboat/      run verify test explain replay trigger jobs convert repl plugin mcp
 internal/
   config/            typed config、loader、overlay 合并、env 替换
   ir/                静态 IR：DAG(nodes,edges)、编译产物、lint、explain 求值器
@@ -897,6 +897,8 @@ internal/
 
 ### 7.3 `convert` 语义
 
+**POC 阶段无迁移义务**：`convert` 是按需工具，不阻塞任何里程碑——v2 用户可继续留在归档的 v2 上，需要时再迁移。
+
 - 输入：v2 `PipelineConfig`（任意一种写法）+ eql1 程序；
 - 输出：v3 配置（三段式规范形态）+ CEL 谓词 + Starlark 脚本 + 迁移报告；
 - 不可自动项（eql1 自定义函数近似物、HOCON 专属写法等）逐条列出原因与建议改法；
@@ -909,7 +911,7 @@ internal/
 | **M1 内核与语言** | engine（spool/settle/checkpoint/背压）+ **CEL 谓词宿主 + Starlark 映射宿主**（预编译、惰性绑定+COW、沙箱白名单、步数预算、safe_ 糖函数、lint）+ verify/test + 内置 P0 插件（kafka/http_server/cron/file 源；kafka/http/file/drop 汇；json/raw codec）+ CLI（run/verify/test/repl/plugin） | §6.2 七条不变量各有一条专属测试且通过；**§4.6 基准套件（三类脚本 × 速率）进 CI 回归门，数字写进文档**；conformance 语料（CEL/Starlark 行为 + lint 规则）进 CI；`_examples` 全部 verify+test 通过 |
 | **M2 作业管道与操作面** | **作业面（`run`/`parameters`/`hooks`/`catchup_window`/`overlap` + 作业历史 + `sql` 源 + `trigger`/`jobs` 命令）** + explain/replay + MCP server + Admin REST + SSE + 内嵌只读 UI + OTel 全量 | 一个 Agent 仅凭 MCP tools 完成"生成配置→verify→test→explain→deploy→观察→手动触发回补→修错→再部署"闭环（真实 Agent 会话录制验收）；作业中断续传（kill -9 后从水位续跑）有专项测试 |
 | **M3 扩展阶梯** | WASM transform（wazero）+ gRPC source/sink 协议 + 插件 SDK 文档 + CESQL 方言（TCK 进 CI） | 第三方按文档实现一个 gRPC source 插件并跑通全链路；TCK 纯模式 100% 通过；基准证明 WASM 档对重度脚本的收益 |
-| **M4 生态** | Schema 发布（`plugin schema` 独立分发）、LSP、csv/avro/protobuf codec、性能 profile（Pebble 后端）、Operator（薄封装）、convert 工具完善 | IDE 内写管道有补全与诊断；v2 精选示例 convert 后全绿 |
+| **M4 生态** | Schema 发布（`plugin schema` 独立分发）、LSP、csv/avro/protobuf codec、性能 profile（Pebble 后端）、Operator（薄封装）、convert 工具完善 | IDE 内写管道有补全与诊断（v2 示例 convert 仅作为 convert 工具自身的按需验收） |
 
 排序理由：语言与可靠性内核是地基（M1）——零自研语言让 M1 的语言部分缩小为"宿主胶水"；M2 把"Agent 原生"与"作业管道"一起变成可验收的闭环（两者共享 trigger/parameters/history 机制）；M3 才谈扩展；M4 是生态放大器。
 
@@ -928,20 +930,40 @@ internal/
 
 ---
 
-## 8. 命名建议
+## 8. 命名决定：Eventboat
 
-v3 必须换名（理由见 §1.2-6）。候选（按推荐序，**均需在定名前完成占用核查**：GitHub org、pkg.go.dev/npm/crates、域名、商标检索；以及"问三个大模型'X 是什么'"的 LM 语境测试）：
+**定名 Eventboat**（事件船）。经六轮候选生成与逐个核查、最终三选一裁决（候选：Eventboat / Packetboat / 保持 Riverpod），2026-09-03 定稿。
 
-| 候选 | 含义（水系/铁路的"路由"隐喻，延续 eventr/EdgeStream 谱系） | 已知占用（2026-09 检索） |
+### 8.1 方法论：命名铁三角
+
+易读、独特 token、域名可注册——三者通常最多得二：易读的常用词域名全被占（Ferry：.io/.dev/.sh/.tools 四个全占）；独特的造词读不出来（Zaurak/Eridanus，用户直接否决"太难读"）。**"常用词 × 常用词"的复合词是唯一同时满足三者的解**：两个小学词汇拼成全球唯一的 token，读起来零障碍，域名整段空闲。
+
+### 8.2 候选台账（六轮，2026-09 核查）
+
+| 候选 | 判定 | 依据 |
 |------|------|------|
-| **Culvert** | 涵洞——让水流穿过结构物的通道 | 未见显著同名项目 |
-| **Headgate** | 渠首闸门——一切分流的总入口 | 未见显著同名项目 |
-| **Weir** | 堰——溢流与分水的低坝 | 轻微（inconvergent/weir 已弃坑的生成艺术库） |
-| **Shunter** | 调车机车——把车厢分到不同股道 | 未见显著同名项目 |
-| ~~Switchyard~~ | 编组站（语义最贴） | ❌ 已拥挤：NVIDIA-NeMo/Switchyard（LLM 路由器）、JBoss SwitchYard、多个 webhook 项目 |
-| ~~Runnel~~ | 细流 | ❌ mjwestcott/runnel（Python 事件库）、Rust crate |
+| **Eventboat** | ✅ **选定** | 软件/GitHub 空间**零占用**；eventboat.io/.dev/.sh **全部未注册**；唯一同名是 eventboat.ch（瑞士马焦雷湖游船旅游公司，不同行业不同商标类别）；Agent 语境零先验 |
+| Packetboat | ❌ | 语义最美（"packet/数据包"的词源正是邮政班船的包裹）但 packetboat.app 是活跃的开源文件传输客户端（相邻赛道）；10 字母；两词拼写歧义 |
+| 保持 Riverpod | ❌ | §1.2-6 已论证：与 Flutter Riverpod 撞名 → Agent 语境污染，与"Agent 原生"定位自相矛盾；v3 未实现时是改名成本最低的窗口 |
+| Ferry | 决赛圈 | 软件空间干净、易读满分、故事好；域名全占（变体 getferry.dev 可解但先天失分） |
+| Sampan | 决赛圈 | 零占用 + sampan.io 可注册 + 中文词源彩蛋；"小船"意象压体量感 |
+| Ferryman / Mailboat | 出局 | .dev 被占 / "mail"把心智锁死成邮件工具 |
+| Shunter / Headgate / Culvert / Weir | 出局 | 用户判"不够酷"；Weir 拼读硬伤（类 weird） |
+| Zaurak / Ister / Eridanus / Achernar | 出局 | 用户判"太难读"；Ister/Eridanus 域名亦被占 |
+| Valeyard | 出局 | Doctor Who 反派，LLM 语境被 IP 占据（与 Riverpod≈Flutter 同构问题） |
+| Cursa / Confluo / Alpheus / Kaikos / Strymon / Rivus / Plico | 出局 | 任天堂 IP / Berkeley RISE 数据系统 / 同域依赖图工具 / KaiOS 近形 / 知名效果器品牌 / 公司名拥挤（VC、电池、车队）/ 天文台框架 |
+| Trawler / Hydrofoil / Riverboat / Schooner / Skiff / Kayak 等船族 | 出局 | 多重占用（Riverboat 被 theopenlane 基于 riverqueue 的 Go 作业队列占用，River 家族在 Go 生态已占满；Skiff 被 Notion 收购的邮箱产品占用） |
 
-判据：① 全球唯一可注册（GitHub/org/域名/包管理器）；② LLM 语境干净（不与既有知名软件强关联）；③ 单词、可读、无歧义发音；④ 隐喻贴合"分流/路由"。域名建议 `*.dev` / `*.io`；MCP/skills.sh 发布名与二进制名一致。
+### 8.3 语义与用法
+
+- 故事一句话：**"Eventboat 把事件从一岸运到另一岸"**——沿固定航线（DAG）多港停靠（fan-out），把事件卸到对的码头（sink）。水系谱系自然延续（EdgeStream → Eventboat）。
+- 复合模式在英语里完全自然（同族真实词：mailboat / tugboat / fireboat / ferryboat）；中文团队"事件船"零障碍。
+- 二进制名 `eventboat`；CLI：`eventboat verify / test / run / deploy`；指标前缀 `eventboat_*`；`apiVersion: eventboat/v3`；skills.sh 与 MCP 发布名同源。
+- 判据复核：① 全球唯一可注册 ✅（域名/软件空间双空）② LLM 语境干净 ✅（零先验，发布后语料独占）③ 易读无歧义 ✅ ④ 隐喻贴分流/路由 ✅。
+
+### 8.4 定名前置条件（不可逆动作前必须完成）
+
+购域名/改仓库名等不可逆动作前：① 商标检索（软件类，美/欧/中）；② pkg.go.dev / npm / crates.io / PyPI 注册名核查；③ 三模型实测（"eventboat 是什么"确认零先验）；④ GitHub org `eventboat` 可用性。通过后执行：域名注册（io/dev/sh 全购）、仓库与 module path 更名（`github.com/eventboat/eventboat`）、README/文档/占位符全量替换（本文档已完成）。
 
 ---
 
@@ -957,8 +979,8 @@ v3 必须换名（理由见 §1.2-6）。候选（按推荐序，**均需在定�
 8. **跨管道触发与连接器**：`sink: {type: pipeline}`（dagu `dag.run` 对应物）或 OTel 式 `connectors` 第四段（P2）——三段式结构已预留加段演进路径。
 9. **catchup_window 语义细节**：错过多个调度窗口时补跑几次（建议最多一次，带告警）；窗口内作业仍在 running 时的行为。
 10. **部署级配置文件的形态**：全局遥测端点/admin 端口/存储路径的文件命名与结构（资源 vs 运行时分离的另一侧，§5.10）。
-11. **License**：建议 Apache-2.0（含专利授权，利于生态与未来商业化选项）；v2 遗留 TBD 需一并定。
-12. **v2 代码的存续策略**：v3 是新模块树渐进替换还是仓库硬切？倾向新仓库/新模块路径 + convert 工具，v2 归档维护——定名后一并决定。
+11. ~~License~~ **已定（2026-09-03）：Apache-2.0**——含专利授权，利于生态与未来商业化选项；仓库 `LICENSE` 文件与两份 README 已同步。
+12. ~~v2 代码的存续策略~~ **已定（2026-09-03）**：POC 阶段全新实现、**不向后兼容 v2**——v2 代码整体归档（`legacy/`），不导入不修改；`convert` 工具按需，不阻塞任何里程碑。
 
 ---
 

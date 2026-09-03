@@ -5,11 +5,11 @@ description: >-
   create, validate, test, run, debug, or reload Riverpod pipelines; write steps/
   depends_on YAML or HOCON; configure source/transform/sink plugins or eql;
   or work in the riverpod repository.
-license: TBD
+license: Apache-2.0
 metadata:
   author: riverpod
-  repository: https://github.com/riverpod/riverpod
-  homepage: https://github.com/riverpod/riverpod
+  repository: https://github.com/eventboat/eventboat
+  homepage: https://github.com/eventboat/eventboat
   skills-sh: riverpod/riverpod/riverpod
 ---
 

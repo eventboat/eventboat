@@ -124,7 +124,7 @@ riverpod run --config my-pipeline.yaml
 | [`riverpod-design.md`](riverpod-design.md) | 需求与设计方案（主文档） |
 | [`competitor-research.md`](competitor-research.md) | 竞品调研 |
 | [`design-review.md`](design-review.md) | 设计评审（部分条目已过时，以主文档为准） |
-| [`redesign-v3.md`](redesign-v3.md) | **v3 从零重设计提案**（Agent 原生事件路由器，零自研语言 CEL+Starlark；提案，未实施） |
+| [`redesign-v3.md`](redesign-v3.md) | **v3 从零重设计提案**（定名 **Eventboat**；Agent 原生事件路由器，零自研语言 CEL+Starlark；提案，未实施） |
 | [`cmd/riverpod/`](cmd/riverpod/) | CLI（`run` / `validate` / `test`） |
 | [`internal/`](internal/) | 引擎、配置、拓扑、eql |
 | [`plugins/`](plugins/) | Source / Transform / Sink / Codec 插件 |
@@ -165,4 +165,4 @@ riverpod **不向后兼容** Riverpod v1。v1 为线性 `Input → Processor →
 
 ## License
 
-待定（实现阶段确定）。
+Apache-2.0 — 见 [LICENSE](LICENSE)。

@@ -124,7 +124,7 @@ Equivalent HOCON, flat `pipeline[]` compatibility, and branch routing details ar
 | [`riverpod-design.md`](riverpod-design.md) | Requirements and design (primary document) |
 | [`competitor-research.md`](competitor-research.md) | Competitive analysis |
 | [`design-review.md`](design-review.md) | Design review (some entries outdated; primary doc takes precedence) |
-| [`redesign-v3.md`](redesign-v3.md) | **v3 from-scratch redesign proposal** (agent-native router, zero-custom-language: CEL + Starlark; proposal, not yet implemented) |
+| [`redesign-v3.md`](redesign-v3.md) | **v3 from-scratch redesign proposal** (renamed **Eventboat**; agent-native router, zero-custom-language: CEL + Starlark; proposal, not yet implemented) |
 | [`cmd/riverpod/`](cmd/riverpod/) | CLI (`run` / `validate` / `test`) |
 | [`internal/`](internal/) | Engine, config, topology, eql |
 | [`plugins/`](plugins/) | Source / Transform / Sink / Codec plugins |
@@ -165,4 +165,4 @@ riverpod is **not** backward compatible with Riverpod v1. v1 used a linear `Inpu
 
 ## License
 
-TBD (to be determined during implementation).
+Apache-2.0 — see [LICENSE](LICENSE).
