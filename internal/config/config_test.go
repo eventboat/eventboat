@@ -295,3 +295,93 @@ sinks:
 		t.Errorf("path = %v, want gold-prod.txt", got)
 	}
 }
+
+// The optional marker is only meaningful for environment variables: any
+// dotted scope reference combined with `?` is an error (round-2 review #1).
+func TestOptionalScopedReferencesAreErrors(t *testing.T) {
+	cases := []struct {
+		ref      string
+		wantPart string
+	}{
+		{"${?parameters.from}", "parameters will land in M2 (job pipelines); not available yet"},
+		{"${?bogus.v}", "bogus"},
+		{"${?constants.tier}", "optional marker"},
+	}
+	for _, tc := range cases {
+		res := LoadBytes("p.yaml", []byte(`
+apiVersion: eventboat/v3
+kind: Pipeline
+metadata: { name: x }
+constants:
+  tier: gold
+sources:
+  in: { decoder: json, file: { path: a } }
+sinks:
+  out: { from: [in], file: { path: "out-`+tc.ref+`.txt" } }
+`))
+		found := false
+		for _, d := range res.Diagnostics {
+			if d.Code == "cfg_scope_unknown" && strings.Contains(d.Message, tc.wantPart) {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("%s: expected cfg_scope_unknown mentioning %q, got %+v", tc.ref, tc.wantPart, res.Diagnostics)
+		}
+	}
+}
+
+// Regression guard: ${?SOME_ENV} (no dot, optional, unset) still omits the
+// key silently — optionality remains valid for plain environment variables.
+func TestOptionalEnvStillOmitsKey(t *testing.T) {
+	res := LoadBytes("p.yaml", []byte(`
+apiVersion: eventboat/v3
+kind: Pipeline
+metadata: { name: x }
+sources:
+  in: { decoder: json, file: { path: a } }
+sinks:
+  out:
+    from: [in]
+    file:
+      path: fixed.txt
+      ${?EB_TEST_OPTIONAL_UNSET}: omit-me
+`))
+	if res.HasErrors() {
+		t.Fatalf("unexpected errors: %+v", res.Diagnostics)
+	}
+	if _, present := res.Pipeline.Sinks["out"].PluginConfig["EB_TEST_OPTIONAL_UNSET"]; present {
+		t.Errorf("optional env key not omitted: %+v", res.Pipeline.Sinks["out"].PluginConfig)
+	}
+}
+
+// One unset ${VAR} reference in a nested value must produce exactly one
+// cfg_env_unset diagnostic (round-2 review #4: it used to be reported
+// twice — once per traversal pass over the same scalar).
+func TestEnvUnsetDiagnosticReportedOnce(t *testing.T) {
+	for _, placement := range []string{
+		`file: { path: "${EB_TEST_MISSING_ONCE}" }`,               // mapping value
+		`file: { brokers: ["${EB_TEST_MISSING_ONCE}"], path: a }`, // sequence element (kafka-style)
+	} {
+		res := LoadBytes("p.yaml", []byte(`
+apiVersion: eventboat/v3
+kind: Pipeline
+metadata: { name: x }
+sources:
+  in:
+    decoder: json
+    `+placement+`
+sinks:
+  out: { from: [in], file: { path: b } }
+`))
+		count := 0
+		for _, d := range res.Diagnostics {
+			if d.Code == "cfg_env_unset" {
+				count++
+			}
+		}
+		if count != 1 {
+			t.Errorf("placement %q: cfg_env_unset reported %d times, want 1 (diags: %+v)", placement, count, res.Diagnostics)
+		}
+	}
+}

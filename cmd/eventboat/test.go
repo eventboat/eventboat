@@ -25,15 +25,23 @@ type testOutputJSON struct {
 	Cases []testCaseJSON `json:"cases"`
 }
 
+type testParseErrorJSON struct {
+	File  string `json:"file"`
+	Error string `json:"error"`
+}
+
 type testCommandOutputJSON struct {
-	Skipped int              `json:"skipped"`
-	Suites  []testOutputJSON `json:"suites"`
+	Skipped     int                  `json:"skipped"`
+	ParseErrors []testParseErrorJSON `json:"parse_errors,omitempty"`
+	Suites      []testOutputJSON     `json:"suites"`
 }
 
 // cmdTest runs contract suites. Directory arguments are walked recursively;
 // a YAML file counts as a suite only when it declares a top-level `suite:`
-// key — pipelines and unrelated YAML are skipped and counted (output goes to
-// out; hard errors go to stderr).
+// key — pipelines and unrelated YAML are skipped and counted. YAML that
+// cannot be parsed is a hard error: the run reports it (human output and the
+// --json parse_errors field), still runs the valid suites, and exits
+// non-zero (round-2 review #2). Output goes to out; walk errors go to stderr.
 func cmdTest(args []string, jsonOut bool, out io.Writer) int {
 	if len(args) == 0 {
 		fmt.Fprintln(os.Stderr, "test: give test file(s) or directory(ies)")
@@ -47,6 +55,7 @@ func cmdTest(args []string, jsonOut bool, out io.Writer) int {
 
 	var files []string
 	skipped := 0
+	var parseErrors []testParseErrorJSON
 	for _, arg := range args {
 		info, err := os.Stat(arg)
 		if err != nil {
@@ -68,7 +77,12 @@ func cmdTest(args []string, jsonOut bool, out io.Writer) int {
 			if !strings.HasSuffix(name, ".yaml") && !strings.HasSuffix(name, ".yml") {
 				return nil
 			}
-			if !testrun.IsSuite(path) {
+			isSuite, parseErr := testrun.IsSuite(path)
+			if parseErr != nil {
+				parseErrors = append(parseErrors, testParseErrorJSON{File: path, Error: parseErr.Error()})
+				return nil
+			}
+			if !isSuite {
 				skipped++
 				return nil
 			}
@@ -80,9 +94,14 @@ func cmdTest(args []string, jsonOut bool, out io.Writer) int {
 			return 2
 		}
 	}
+	if len(parseErrors) > 0 && !jsonOut {
+		for _, pe := range parseErrors {
+			fmt.Fprintf(out, "parse error: %s: %s\n", pe.File, pe.Error)
+		}
+	}
 	if len(files) == 0 {
 		if jsonOut {
-			b, _ := json.MarshalIndent(testCommandOutputJSON{Skipped: skipped}, "", "  ")
+			b, _ := json.MarshalIndent(testCommandOutputJSON{Skipped: skipped, ParseErrors: parseErrors}, "", "  ")
 			fmt.Fprintln(out, string(b))
 		} else {
 			fmt.Fprintln(os.Stderr, "test: no test files found")
@@ -128,12 +147,12 @@ func cmdTest(args []string, jsonOut bool, out io.Writer) int {
 		fmt.Fprintf(out, "  suite %s\n", status)
 	}
 	if jsonOut {
-		b, _ := json.MarshalIndent(testCommandOutputJSON{Skipped: skipped, Suites: outputs}, "", "  ")
+		b, _ := json.MarshalIndent(testCommandOutputJSON{Skipped: skipped, ParseErrors: parseErrors, Suites: outputs}, "", "  ")
 		fmt.Fprintln(out, string(b))
 	} else if skipped > 0 {
 		fmt.Fprintf(out, "skipped %d non-suite yaml file(s)\n", skipped)
 	}
-	if !allOK {
+	if !allOK || len(parseErrors) > 0 {
 		return 1
 	}
 	return 0

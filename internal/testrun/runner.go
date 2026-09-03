@@ -80,19 +80,22 @@ type specDLQ struct {
 
 // IsSuite reports whether the YAML file at path declares a contract test
 // suite (a top-level `suite:` key). Directory mode uses this to run suites
-// and silently skip pipelines and unrelated YAML.
-func IsSuite(path string) bool {
+// and silently skip pipelines and unrelated YAML. A file that cannot be read
+// or parsed yields a non-nil parseErr: callers must treat that as a hard
+// error, never as "not a suite" — a broken suite must not vanish behind the
+// skipped count (round-2 review #2).
+func IsSuite(path string) (isSuite bool, parseErr error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return false
+		return false, err
 	}
 	var probe struct {
 		Suite string `yaml:"suite"`
 	}
 	if err := yaml.Unmarshal(data, &probe); err != nil {
-		return false
+		return false, err
 	}
-	return probe.Suite != ""
+	return probe.Suite != "", nil
 }
 
 // RunFile executes one contract test file (redesign-v3.md §3.2). The pipeline

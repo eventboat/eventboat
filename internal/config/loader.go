@@ -231,29 +231,40 @@ type envSubstituter struct {
 	diags *[]Diagnostic
 }
 
-// walk applies ${VAR}/${?VAR} to every string scalar. Keys whose whole value
-// is an unset ${?VAR} are dropped from their parent mapping/sequence.
+// walk applies ${VAR}/${?VAR} to every string scalar exactly once. Keys
+// whose whole value is an unset ${?VAR} are dropped from their parent
+// mapping/sequence. Collection loops substitute their scalar members
+// themselves (they own drop handling) and recurse only into non-scalars —
+// the default branch covers the bare scalar root. Visiting a scalar from
+// both a loop and the recursion used to substitute it twice, duplicating
+// diagnostics (round-2 review #4).
 func (s *envSubstituter) walk(n *yaml.Node, parent *yaml.Node) {
 	switch n.Kind {
 	case yaml.MappingNode:
 		kept := n.Content[:0:0]
 		for i := 0; i+1 < len(n.Content); i += 2 {
 			k, v := n.Content[i], n.Content[i+1]
-			if drop := s.substituteScalar(v); drop {
-				continue // omit key
+			if v.Kind == yaml.ScalarNode {
+				if s.substituteScalar(v) {
+					continue // omit key
+				}
+			} else {
+				s.walk(v, n)
 			}
 			kept = append(kept, k, v)
-			s.walk(v, n)
 		}
 		n.Content = kept
 	case yaml.SequenceNode:
 		kept := n.Content[:0:0]
 		for _, el := range n.Content {
-			if drop := s.substituteScalar(el); drop {
-				continue // omit element
+			if el.Kind == yaml.ScalarNode {
+				if s.substituteScalar(el) {
+					continue // omit element
+				}
+			} else {
+				s.walk(el, n)
 			}
 			kept = append(kept, el)
-			s.walk(el, n)
 		}
 		n.Content = kept
 	default:
@@ -345,7 +356,9 @@ type constantsSubstituter struct {
 
 // substitute expands ${constants.x} references and rejects any other scoped
 // reference ("unknown means error", redesign-v3.md §5.5): only `constants` is
-// a legal scope in the POC; `parameters` arrives with M2 job pipelines.
+// a legal scope in the POC; `parameters` arrives with M2 job pipelines. The
+// optional marker `?` is only meaningful for plain environment variables —
+// any dotted reference combined with `?` is an error (round-2 review #1).
 func (s *constantsSubstituter) substitute(v any) any {
 	switch t := v.(type) {
 	case string:
@@ -355,38 +368,41 @@ func (s *constantsSubstituter) substitute(v any) any {
 		}
 		out := t
 		for _, m := range matches {
-			if m[1] == "?" {
-				continue // optional marker is meaningless for constants
-			}
 			if !strings.Contains(m[2], ".") {
-				continue // plain ${VAR} was handled (or rejected) by the env pass
+				continue // plain ${VAR}/${?VAR} was handled (or rejected) by the env pass
 			}
-			if !strings.HasPrefix(m[2], "constants.") {
-				scope := m[2][:strings.Index(m[2], ".")]
-				msg := fmt.Sprintf("unknown scoped reference ${%s}: scope %q is not defined (allowed: constants)", m[2], scope)
-				hint := "use ${constants.name} or a plain environment variable ${VAR}"
-				if scope == "parameters" {
-					msg = fmt.Sprintf("${%s}: parameters will land in M2 (job pipelines); not available yet", m[2])
-					hint = "pass the value as a constant or environment variable until job pipelines ship"
+			ref := m[0] // full reference text, including any optional marker
+			scope := m[2][:strings.Index(m[2], ".")]
+			optional := m[1] == "?"
+			if scope == "constants" && !optional {
+				name := strings.TrimPrefix(m[2], "constants.")
+				cv, ok := s.constants[name]
+				if !ok {
+					*s.diags = append(*s.diags, Diagnostic{
+						Severity: "error", Code: "cfg_constant_unknown", File: s.file, Line: 0,
+						Message: fmt.Sprintf("unknown constant %q", name),
+						Hint:    "declare it under constants:",
+					})
+					continue
 				}
-				*s.diags = append(*s.diags, Diagnostic{
-					Severity: "error", Code: "cfg_scope_unknown", File: s.file, Line: 0,
-					Message: msg,
-					Hint:    hint,
-				})
+				out = strings.ReplaceAll(out, m[0], fmt.Sprintf("%v", cv))
 				continue
 			}
-			name := strings.TrimPrefix(m[2], "constants.")
-			cv, ok := s.constants[name]
-			if !ok {
-				*s.diags = append(*s.diags, Diagnostic{
-					Severity: "error", Code: "cfg_constant_unknown", File: s.file, Line: 0,
-					Message: fmt.Sprintf("unknown constant %q", name),
-					Hint:    "declare it under constants:",
-				})
-				continue
+			msg := fmt.Sprintf("unknown scoped reference %s: scope %q is not defined (allowed: constants)", ref, scope)
+			hint := "use ${constants.name} or a plain environment variable ${VAR}"
+			switch {
+			case scope == "parameters":
+				msg = fmt.Sprintf("%s: parameters will land in M2 (job pipelines); not available yet", ref)
+				hint = "pass the value as a constant or environment variable until job pipelines ship"
+			case scope == "constants" && optional:
+				msg = fmt.Sprintf("%s: the optional marker '?' is only valid for environment variables; constants are always defined in configuration", ref)
+				hint = "reference it as ${constants.name} (it is always present)"
 			}
-			out = strings.ReplaceAll(out, m[0], fmt.Sprintf("%v", cv))
+			*s.diags = append(*s.diags, Diagnostic{
+				Severity: "error", Code: "cfg_scope_unknown", File: s.file, Line: 0,
+				Message: msg,
+				Hint:    hint,
+			})
 		}
 		return out
 	case map[string]any:
