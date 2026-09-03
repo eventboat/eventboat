@@ -7,7 +7,7 @@ import (
 
 func newTestEnv(t *testing.T) *Env {
 	t.Helper()
-	env, err := NewEnv(map[string]any{"region": "eu"})
+	env, err := NewEnv(map[string]any{"region": "eu"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,7 +65,7 @@ func TestEvalErrorMeansNotPassed(t *testing.T) {
 }
 
 func TestConstantsVisible(t *testing.T) {
-	env, err := NewEnv(map[string]any{"vip": float64(10000)})
+	env, err := NewEnv(map[string]any{"vip": float64(10000)}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +92,7 @@ func TestEvalString(t *testing.T) {
 }
 
 func BenchmarkPredicateEval(b *testing.B) {
-	env, _ := NewEnv(map[string]any{"vip": float64(10000)})
+	env, _ := NewEnv(map[string]any{"vip": float64(10000)}, nil)
 	pred, err := env.Compile(`meta.region == "eu" && payload.total > constants.vip`)
 	if err != nil {
 		b.Fatal(err)

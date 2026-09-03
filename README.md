@@ -64,6 +64,16 @@ eventboat test examples
 # run (durable: SQLite store under ./data; or --ephemeral for local dev)
 eventboat run --config examples/linear/pipeline.yaml
 eventboat run --config my.yaml --ephemeral
+
+# job pipelines (§5.8): scheduled/triggered runs with run history
+eventboat run --config examples/job-sync/pipeline.yaml              # scheduler + catchup
+eventboat trigger --config examples/job-sync/pipeline.yaml \
+  --parameters '{"from":"2026-09-01T00:00:00Z","to":"2026-09-02T00:00:00Z"}'   # backfill
+eventboat jobs list --config examples/job-sync/pipeline.yaml        # history
+eventboat jobs show <run-id> --config examples/job-sync/pipeline.yaml
+
+# the example's sqlite source database regenerates with:
+go run ./examples/job-sync/seed
 ```
 
 A pipeline is three sections joined by `from`; the plugin name is the key:
@@ -161,9 +171,8 @@ Other recorded trims:
 - **Trimmed:** `repl` / `plugin` CLI commands, the conformance corpus and the
   full benchmark suite of §7.4 M1 (minimal Go benchmarks exist:
   CEL predicate ≈ 290 ns/op, simple Starlark transform ≈ 1.4 µs/op on the
-  dev machine). `explain`, `replay`, job pipelines (`run`/`parameters`),
-  MCP server and observability stack are M2 (redesign-v3.md §7.4) — see the
-  M2 review for their implementation rulings.
+  dev machine). MCP server, explain/replay and the observability stack are
+  the remaining M2 steps (redesign-v3.md §7.4) — see the M2 review.
 - **`limits` section** (M2): `max_in_flight` maps to the engine's spool
   admission high watermark and `drain_timeout` bounds graceful shutdown
   (replacing a hardcoded 10s); a `workers` total quota is trimmed (P2).
@@ -172,6 +181,65 @@ Other recorded trims:
   as unused.
 - **Deployment-level config** (open question #10) is CLI flags for now:
   `--data-dir`, `--ephemeral`.
+
+### Job pipelines (M2, §5.8) — implemented semantics and decisions
+
+- **Lifecycle**: `pending → running → settling → success | partial | failed |
+  canceled`, one `job_run` history row per run (run-id, trigger,
+  trigger-provided parameters, scheduled_for tick, counts, error) in the
+  same SQLite store, pruned by `run.retention.history`.
+- **Per-run engines**: each run resolves its parameters and builds its own
+  IR/engine over the shared store (`${parameters.x}` substitution happens at
+  trigger time, §5.9). `overlap: all` runs engines concurrently with
+  per-engine backpressure; `skip` rejects with a counter; `latest` cancels
+  the active run.
+- **Cancel semantics** (review R2): a canceled run waits at most
+  `limits.drain_timeout` for in-flight work, then dead-letters the
+  outstanding set with reason `job canceled` — terminal, auditable,
+  replayable; the checkpoint prefix never wedges.
+- **Crash recovery**: runs found in `pending/running/settling` resume on
+  startup: the engine replays the spool beyond the checkpoint (invariant 3)
+  while pull sources re-pull after the settled watermark (invariant 7) —
+  the kill-9 resume test (`TestJobKill9ResumeFromWatermark`) covers the
+  combination.
+- **catchup_window** (review §三.2 / open question #9): at most ONE catchup
+  run — the latest missed tick inside the window; older missed ticks are
+  counted (`eventboat_jobs_catchup_skipped_total`) and skipped. A pipeline
+  with no history never catch-runs.
+- **skip_if_successful** keys on the tick identity (`scheduled_for`),
+  which also makes catchup idempotent across restarts.
+- **Hooks** (review R14): `hooks.failure` fires on failed AND partial runs,
+  `hooks.success` on success; hook sinks are inline plugin blocks validated
+  by their JSON Schema; delivery is best-effort (3 attempts) and carries the
+  run summary JSON. Hooks are notifications, not pipeline data.
+- **Parameters**: typed declarations validated at verify (self-consistent
+  defaults, enum/pattern/min/max) and at trigger time; `${parameters.x}`
+  substitutes anywhere in job pipelines only; scripts/predicates read the
+  frozen `parameters.x` binding. The `cursor` binding resolves per pull
+  source against that source's own settled watermark (no watermark yet →
+  empty string); `now` resolves to the run start. Multi-source job
+  pipelines are legal but single-source is recommended (script-side `cursor`
+  binds the first source's watermark).
+- **sql source** (`capabilities: [pull]`): drivers `mysql | postgres |
+  sqlite` — all pure Go (go-sql-driver/mysql, jackc/pgx/v5 stdlib,
+  modernc.org/sqlite). Named `:arg` bindings are rewritten per dialect
+  (string literals, quoted identifiers and PG `::` casts are respected);
+  keyset pagination wraps the user query as a derived table comparing the
+  key tuple; `cursor.column` is the resume watermark; `emit: row|page` (page
+  payloads are arrays for `transform.split`). The sqlite dialect exists so
+  examples and CI run without a server; mysql/postgres need no config
+  changes beyond `driver`/`dsn`.
+- **Job history records the trigger-provided parameters** (operator intent,
+  auditable backfills); resumes re-resolve `cursor`/`now` against the
+  current watermark rather than re-using stale resolved values.
+- **Contract suites on job pipelines** inject at the pull node with the
+  real sources disabled (deterministic); the real sql pull path is covered
+  by `TestJobTriggerAndHistoryCLI` against the example's sqlite database.
+- **Spec erratum found** (recorded against redesign-v3.md §5.8): the spec's
+  own example script line `payload.amount_txt = "%.2f" % payload.amount`
+  does not run on go-starlark — its `%` interpolation supports neither
+  float-precision nor width conversions (`"unknown conversion"`). The
+  shipped example rounds via `math.floor` instead.
 - **Modules:** the load whitelist is `json` + `math`; there is no loadable
   `strings` module in go-starlark — string methods are built into the string
   type (review R3).
@@ -192,17 +260,18 @@ Other recorded trims:
 ## Repository layout
 
 ```
-cmd/eventboat/        CLI: verify / test / run
-internal/config/      typed config, strict loader, env+constants substitution
-internal/ir/          static IR: DAG, compiled CEL/Starlark, topology checks, lint
+cmd/eventboat/        CLI: verify / test / run / trigger / jobs
+internal/config/      typed config, strict loader, env+constants+parameters substitution
+internal/ir/          static IR: DAG, compiled CEL/Starlark, topology checks, job semantics, lint
 internal/lang/        celhost (predicates), starhost (Starlark sandbox host)
-internal/engine/      spool admission, DAG execution, settle, delivery, DLQ
-internal/store/       SQLite + in-memory spool/checkpoint/dead-letter stores
+internal/engine/      spool admission, DAG execution, settle, delivery, DLQ, pull sources
+internal/jobs/        job runtime: scheduler, catchup, overlap, run lifecycle, hooks
+internal/store/       SQLite + in-memory spool/checkpoint/dead-letter/job-history stores
 internal/registry/    plugin registration with mandatory JSON Schemas
-internal/registry/builtin/  kafka/http_server/cron/file sources, kafka/http/file/drop sinks, json/raw codecs
-internal/testkit/     injection/capture/fault-injection primitives
+internal/registry/builtin/  kafka/http_server/cron/file/sql sources, kafka/http/file/drop sinks, json/raw codecs
+internal/testkit/     injection/capture/fault-injection primitives + fakepull test source
 internal/testrun/     §3.2 contract-test runner
-examples/             linear, branching (CEL), fan-in pipelines + suites
+examples/             linear, branching (CEL), fan-in, job-sync (sql + run/parameters)
 legacy/               archived v2 implementation (not imported, not modified)
 ```
 

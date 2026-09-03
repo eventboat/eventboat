@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/robfig/cron/v3"
 	"go.starlark.net/starlark"
 
 	"github.com/eventboat/eventboat/internal/config"
@@ -47,28 +48,49 @@ type Node struct {
 
 // Pipeline is the compiled, ready-to-run form.
 type Pipeline struct {
-	Config          *config.Pipeline
-	Nodes           map[string]*Node
-	Order           []string // topological order
-	Constants       map[string]any
-	FrozenConstants starlark.Value
-	StarOptions     starhost.Options
+	Config            *config.Pipeline
+	Nodes             map[string]*Node
+	Order             []string // topological order
+	Constants         map[string]any
+	FrozenConstants   starlark.Value
+	Parameters        map[string]any // resolved parameter values (job pipelines)
+	FrozenParameters  starlark.Value
+	StarOptions       starhost.Options
 }
 
 // Build compiles a configuration into the static IR, producing diagnostics
 // for every verify finding (schema, topology, expression and script errors,
 // plus lint warnings).
-func Build(cfg *config.Pipeline, reg *registry.Registry, starOpts starhost.Options) (*Pipeline, []config.Diagnostic) {
+//
+// parameters carries resolved parameter values for job pipelines (verify
+// passes the declared defaults; the jobs runner passes trigger-time
+// actuals). A nil map means no parameters.
+func Build(cfg *config.Pipeline, reg *registry.Registry, starOpts starhost.Options, parameters map[string]any) (*Pipeline, []config.Diagnostic) {
 	var diags []config.Diagnostic
 	file := cfg.File
 	add := func(d config.Diagnostic) { diags = append(diags, d) }
 
+	if parameters == nil {
+		parameters = map[string]any{}
+	}
+	if cfg.IsJob() {
+		// Fill unspecified parameters with declared defaults for static
+		// compilation; the jobs runner substitutes actuals per run.
+		for name, spec := range cfg.Parameters {
+			if _, ok := parameters[name]; !ok && spec != nil {
+				parameters[name] = spec.Default
+			}
+		}
+	}
+
 	p := &Pipeline{
-		Config:          cfg,
-		Nodes:           map[string]*Node{},
-		Constants:       cfg.Constants,
-		FrozenConstants: starhost.FreezeConstants(cfg.Constants),
-		StarOptions:     starOpts,
+		Config:           cfg,
+		Nodes:            map[string]*Node{},
+		Constants:        cfg.Constants,
+		FrozenConstants:  starhost.FreezeConstants(cfg.Constants),
+		Parameters:       parameters,
+		FrozenParameters: starhost.FreezeConstants(parameters),
+		StarOptions:      starOpts,
 	}
 
 	// Materialize nodes.
@@ -88,7 +110,7 @@ func Build(cfg *config.Pipeline, reg *registry.Registry, starOpts starhost.Optio
 	}
 
 	// Resolve edges, compile conditions, apply edge defaults.
-	celEnv, err := celhost.NewEnv(cfg.Constants)
+	celEnv, err := celhost.NewEnv(cfg.Constants, parameters)
 	if err != nil {
 		add(config.Diagnostic{Severity: "error", Code: "expr_cel_env", File: file, Message: err.Error()})
 	}
@@ -267,6 +289,9 @@ func Build(cfg *config.Pipeline, reg *registry.Registry, starOpts starhost.Optio
 	// Topological order for execution.
 	p.Order = topoSort(p)
 
+	// Job pipeline semantics (§3.1 item 4, §5.8).
+	checkJobSemantics(p, reg, parameters, file, add)
+
 	lint(p, file, add)
 
 	if hasError(diags) {
@@ -283,6 +308,174 @@ func sectionOf(cfg *config.Pipeline, name string) config.Section {
 		return config.SectionTransform
 	}
 	return config.SectionSink
+}
+
+// parametersRefPattern matches ${parameters.name} tokens in any string value.
+var parametersRefPattern = regexp.MustCompile(`\$\{parameters\.([A-Za-z_][A-Za-z0-9_]*)\}`)
+
+// parametersBindingPattern matches parameters.<name> bindings surviving in
+// script and predicate text (the ${...} form was substituted at load). RE2
+// has no lookbehind: the match includes one leading char when present.
+var parametersBindingPattern = regexp.MustCompile(`(?:^|[^A-Za-z0-9_.])parameters\.[A-Za-z_][A-Za-z0-9_]*`)
+
+// bindingParameterNames extracts the parameter names from parameters.<name>
+// bindings matched by parametersBindingPattern.
+func bindingParameterNames(text string) []string {
+	var out []string
+	for _, m := range parametersBindingPattern.FindAllString(text, -1) {
+		idx := strings.Index(m, "parameters.")
+		if idx < 0 {
+			continue
+		}
+		name := m[idx+len("parameters."):]
+		out = append(out, name)
+	}
+	return out
+}
+
+// checkJobSemantics enforces the job-pipeline rules of §5.8 (M2 review):
+// pull-capability sources, cron syntax, parameter reference legality, hook
+// sink schemas and the continuous-pipeline rejections.
+func checkJobSemantics(p *Pipeline, reg *registry.Registry, parameters map[string]any, file string, add func(config.Diagnostic)) {
+	cfg := p.Config
+	job := cfg.IsJob()
+
+	// Cron syntax.
+	if job && cfg.Run.Schedule != "" {
+		if _, err := cron.ParseStandard(cfg.Run.Schedule); err != nil {
+			add(config.Diagnostic{Severity: "error", Code: "job_bad_schedule", File: file,
+				Line: 0, Message: fmt.Sprintf("run.schedule %q is not a valid 5-field cron expression: %v", cfg.Run.Schedule, err)})
+		}
+	}
+
+	// Source capability + sql-in-continuous lint.
+	for _, name := range p.Order {
+		n := p.Nodes[name]
+		if n.Section != config.SectionSource {
+			continue
+		}
+		meta, ok := reg.LookupSource(n.Config.Plugin)
+		if !ok {
+			continue // unknown plugin already diagnosed
+		}
+		pull := false
+		for _, c := range meta.Capabilities {
+			if c == "pull" {
+				pull = true
+			}
+		}
+		if job && !pull {
+			add(config.Diagnostic{Severity: "error", Code: "job_source_not_pull", File: file,
+				Line: n.Config.Line,
+				Message: fmt.Sprintf("job pipeline source %q uses plugin %q which has no pull capability", name, n.Config.Plugin),
+				Hint:    "job pipelines need sources that page through data and signal exhaustion (capabilities: [pull])"})
+		}
+		if !job && n.Config.Plugin == "sql" {
+			add(config.Diagnostic{Severity: "warning", Code: "lint_sql_continuous", File: file,
+				Line: n.Config.Line,
+				Message: fmt.Sprintf("source %q uses the sql (pull) source in a continuous pipeline: it pulls once from the last watermark at startup, then idles", name),
+				Hint:    "job pipelines (run.mode: job) are the intended home for sql sources"})
+		}
+	}
+
+	// Parameters legality.
+	if !job {
+		for _, name := range p.Order {
+			n := p.Nodes[name]
+			for _, text := range []string{n.Config.Script, n.Config.OrderKey} {
+				if text != "" && parametersBindingPattern.MatchString(text) {
+					add(config.Diagnostic{Severity: "error", Code: "job_parameters_in_continuous", File: file,
+						Line: n.Config.Line,
+						Message: fmt.Sprintf("node %q references parameters in a continuous pipeline; parameters exist only in job pipelines (run.mode: job)", name),
+						Hint:    "use constants (load-time) or add a run block"})
+				}
+			}
+			for _, e := range n.In {
+				if e.WhenSource != "" && parametersBindingPattern.MatchString(e.WhenSource) {
+					add(config.Diagnostic{Severity: "error", Code: "job_parameters_in_continuous", File: file,
+						Line: e.Line,
+						Message: fmt.Sprintf("edge %s -> %s references parameters in a continuous pipeline", e.From, e.To),
+						Hint:    "parameters are job-pipeline only (run.mode: job)"})
+				}
+			}
+		}
+		return
+	}
+
+	// Job pipeline: every ${parameters.x} reference must name a declared
+	// parameter (the loader lets the tokens through).
+	declared := map[string]bool{}
+	for name := range cfg.Parameters {
+		declared[name] = true
+	}
+	var scanRefs func(v any, where string, line int)
+	scanRefs = func(v any, where string, line int) {
+		switch t := v.(type) {
+		case string:
+			for _, m := range parametersRefPattern.FindAllStringSubmatch(t, -1) {
+				if !declared[m[1]] {
+					add(config.Diagnostic{Severity: "error", Code: "job_parameter_unknown", File: file, Line: line,
+						Message: fmt.Sprintf("%s references undeclared parameter %q", where, m[1]),
+						Hint:    "declare it under parameters:"})
+				}
+			}
+			if parametersBindingPattern.MatchString(t) && !declaredAnyBinding(t, declared) {
+				add(config.Diagnostic{Severity: "error", Code: "job_parameter_unknown", File: file, Line: line,
+					Message: fmt.Sprintf("%s references parameters.* but no parameters are declared", where),
+					Hint:    "declare parameters under parameters: or use constants"})
+			}
+		case []any:
+			for _, el := range t {
+				scanRefs(el, where, line)
+			}
+		case map[string]any:
+			for _, el := range t {
+				scanRefs(el, where, line)
+			}
+		}
+	}
+	for _, name := range p.Order {
+		n := p.Nodes[name]
+		scanRefs(n.Config.PluginConfig, fmt.Sprintf("source/transform/sink %q", name), n.Config.Line)
+		scanRefs(n.Config.Script, fmt.Sprintf("script of %q", name), n.Config.Line)
+		scanRefs(n.Config.OrderKey, fmt.Sprintf("order_key of %q", name), n.Config.Line)
+		for _, e := range n.In {
+			scanRefs(e.WhenSource, fmt.Sprintf("edge %s -> %s", e.From, e.To), e.Line)
+		}
+	}
+
+	// Hook sinks validate against their plugin schemas (R14).
+	if cfg.Hooks != nil {
+		for _, hk := range []struct {
+			label string
+			sink  *config.HookSink
+		}{{"hooks.failure", cfg.Hooks.Failure}, {"hooks.success", cfg.Hooks.Success}} {
+			if hk.sink == nil {
+				continue
+			}
+			if _, ok := reg.LookupSink(hk.sink.Plugin); !ok {
+				add(config.Diagnostic{Severity: "error", Code: "plugin_unknown", File: file, Line: hk.sink.Line,
+					Message: fmt.Sprintf("%s references unknown sink plugin %q", hk.label, hk.sink.Plugin)})
+				continue
+			}
+			if _, err := reg.NewSink(hk.sink.Plugin, hk.sink.PluginConfig); err != nil {
+				add(config.Diagnostic{Severity: "error", Code: "plugin_schema", File: file, Line: hk.sink.Line,
+					Message: fmt.Sprintf("%s: %s", hk.label, strings.ReplaceAll(err.Error(), "\n", "; ")),
+					Hint:    "hooks are inline sinks: the plugin block is validated against the plugin's JSON Schema"})
+			}
+		}
+	}
+}
+
+// declaredAnyBinding reports whether a parameters.* binding in text names at
+// least one declared parameter.
+func declaredAnyBinding(text string, declared map[string]bool) bool {
+	for _, name := range bindingParameterNames(text) {
+		if declared[name] {
+			return true
+		}
+	}
+	return false
 }
 
 func hasError(diags []config.Diagnostic) bool {

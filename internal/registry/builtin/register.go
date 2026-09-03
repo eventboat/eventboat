@@ -14,6 +14,7 @@ func RegisterAll(reg *registry.Registry) error {
 		registerCronSource,
 		registerHTTPServerSource,
 		registerKafkaSource,
+		registerSQLSource,
 		registerFileSink,
 		registerHTTPSink,
 		registerKafkaSink,

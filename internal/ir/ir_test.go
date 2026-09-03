@@ -25,7 +25,7 @@ func build(t *testing.T, yamlText string) (*Pipeline, []config.Diagnostic) {
 	if lr.HasErrors() {
 		return nil, lr.Diagnostics
 	}
-	return Build(lr.Pipeline, testReg(t), starhost.DefaultOptions())
+	return Build(lr.Pipeline, testReg(t), starhost.DefaultOptions(), nil)
 }
 
 func hasCode(diags []config.Diagnostic, code string) bool {

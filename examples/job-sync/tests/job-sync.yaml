@@ -1,0 +1,30 @@
+suite: orders-nightly-sync
+pipeline: ../pipeline.yaml
+cases:
+  # The transform contract: default region, amount formatting, the constant
+  # stamp. Contract tests inject rows at the pull node (job pipelines keep
+  # their real sources off during suites — see README).
+  - name: row-enriched-and-delivered
+    inject:
+      at: pull
+      messages:
+        - fixtures/order.json
+    expect:
+      capture:
+        at: out
+        messages:
+          - payload.order_no: ord-0001
+            payload.amount_txt: "120.5"
+            payload.region: eu
+            payload.source_system: nightly-sync
+      dlq: { count: 0 }
+  - name: null-region-falls-back-to-constant
+    inject:
+      at: pull
+      raw: '{"id":3,"order_no":"ord-0003","amount":999.99,"region":null,"updated_at":"2026-09-01T12:00:00Z"}'
+    expect:
+      capture:
+        at: out
+        messages:
+          - payload.region: unknown
+            payload.amount_txt: "999.99"

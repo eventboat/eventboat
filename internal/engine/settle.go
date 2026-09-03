@@ -62,12 +62,32 @@ func (t *settleTracker) arrived(seq int64, node string, srcSeq int64) {
 }
 
 // add applies a delta to the outstanding count of a message (fan-out adds,
-// terminal events subtract).
+// terminal events subtract). A delta for an unknown seq is a no-op: the
+// message was already terminal (forceTerminal/Abandon removed it), and a
+// late done() from a racing worker must not resurrect it.
 func (t *settleTracker) add(seq int64, delta int) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	if _, open := t.outstanding[seq]; !open {
+		return
+	}
 	t.outstanding[seq] += delta
 	t.maybeAdvanceLocked()
+}
+
+// forceTerminal removes a message from the outstanding set without a terminal
+// branch event (canceled runs dead-letter outstanding messages directly,
+// M2 review R2). It reports whether the message was actually outstanding.
+// The checkpoint prefix may then advance past it.
+func (t *settleTracker) forceTerminal(seq int64) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if _, open := t.outstanding[seq]; !open {
+		return false
+	}
+	delete(t.outstanding, seq)
+	t.maybeAdvanceLocked()
+	return true
 }
 
 // done marks one branch terminal.
@@ -122,6 +142,14 @@ func (t *settleTracker) maybeAdvanceLocked() {
 	if advanced && t.onAdvance != nil {
 		t.onAdvance(through, frontiers)
 	}
+}
+
+// isOutstanding reports whether a message still has open branches.
+func (t *settleTracker) isOutstanding(seq int64) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	n, open := t.outstanding[seq]
+	return open && n > 0
 }
 
 // snapshot reports counters for tests and status output.

@@ -65,6 +65,9 @@ type Pipeline struct {
 	ConstantsUsed map[string]bool // constants referenced via ${constants.x} (pre-substitution truth)
 	EdgeDefaults  EdgeAttrs
 	Limits        *Limits
+	Run           *RunSpec
+	Parameters    map[string]*ParameterSpec // declared job parameters (nil without a run block)
+	Hooks         *HooksSpec
 	Sources       map[string]*Node
 	Transforms    map[string]*Node
 	Sinks         map[string]*Node
@@ -76,6 +79,48 @@ type Pipeline struct {
 type Limits struct {
 	MaxInFlight  int           // engine spool admission high watermark
 	DrainTimeout time.Duration // graceful drain bound on shutdown
+}
+
+// RunSpec is the pipeline-level job policy (redesign-v3.md §5.8). A pipeline
+// with a run block in mode job executes as a job: scheduled or triggered
+// runs with catchup, overlap control and run history.
+type RunSpec struct {
+	Mode             string        // "continuous" (default) | "job"
+	Schedule         string        // 5-field cron; empty = manual/trigger only
+	Overlap          string        // skip (default) | all | latest
+	CatchupWindow    time.Duration // missed-tick compensation window; 0 = no catchup
+	SkipIfSuccessful bool
+	Retention        time.Duration // run history retention (retention.history); 0 = keep forever
+}
+
+// IsJob reports whether the pipeline runs in job mode.
+func (p *Pipeline) IsJob() bool { return p.Run != nil && p.Run.Mode == "job" }
+
+// ParameterSpec is one typed job parameter declaration (§5.8/§5.9).
+type ParameterSpec struct {
+	Name     string
+	Type     string // string | integer | number | boolean
+	Default  any    // engine-bound sentinel strings allowed: "cursor", "now"
+	Required bool
+	Enum     []any
+	Pattern  string
+	Min      *float64
+	Max      *float64
+	Line     int
+}
+
+// HooksSpec holds lifecycle hooks (failure/success), each an inline sink
+// (plugin name as key, reviewed R14).
+type HooksSpec struct {
+	Failure *HookSink
+	Success *HookSink
+}
+
+// HookSink is one inline hook sink: plugin name + its config block.
+type HookSink struct {
+	Plugin       string
+	PluginConfig map[string]any
+	Line         int
 }
 
 // Node is one entry of one section.

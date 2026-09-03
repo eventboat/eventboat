@@ -1,8 +1,11 @@
 package store
 
 import (
+	"database/sql"
 	"testing"
 	"time"
+
+	_ "modernc.org/sqlite"
 
 	"github.com/eventboat/eventboat/internal/registry"
 )
@@ -101,6 +104,194 @@ func TestSQLiteStore(t *testing.T) {
 		t.Fatal(err)
 	}
 	exerciseStore(t, st)
+}
+
+// exerciseJobStore covers the M2 surface: job run history, run-attributed
+// dead letters, since-filters and windowed replay pagination.
+func exerciseJobStore(t *testing.T, st Store) {
+	t.Helper()
+	defer st.Close()
+
+	now := time.Date(2026, 9, 3, 12, 0, 0, 0, time.UTC)
+	// Spool 5 rows for pagination.
+	for i := 0; i < 5; i++ {
+		if _, err := st.AppendSpool("p", registry.Message{ID: "m", Raw: []byte(`{}`)}, now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// ReplayPage windows without materializing everything.
+	last, more, err := st.ReplayPage("p", 0, 2, func(seq int64, m registry.Message, _ time.Time) error {
+		return nil
+	})
+	if err != nil || last != 2 || !more {
+		t.Fatalf("page1: last=%d more=%v err=%v", last, more, err)
+	}
+	last, more, err = st.ReplayPage("p", last, 2, func(seq int64, m registry.Message, _ time.Time) error {
+		return nil
+	})
+	if err != nil || last != 4 || !more {
+		t.Fatalf("page2: last=%d more=%v err=%v", last, more, err)
+	}
+	last, more, err = st.ReplayPage("p", last, 2, func(seq int64, m registry.Message, _ time.Time) error {
+		return nil
+	})
+	if err != nil || last != 5 || more {
+		t.Fatalf("page3: last=%d more=%v err=%v", last, more, err)
+	}
+
+	// Job run lifecycle records.
+	jr := JobRun{
+		RunID: "run-1", Pipeline: "p", Status: JobPending, TriggerType: "schedule",
+		Parameters:   map[string]any{"from": "cursor", "to": "2026-09-03T12:00:00Z"},
+		ScheduledFor: "2026-09-03T01:00:00Z", StartedAt: now,
+	}
+	if err := st.CreateJobRun(jr); err != nil {
+		t.Fatal(err)
+	}
+	jr.Status = JobRunning
+	jr.RowsRead = 10
+	if err := st.UpdateJobRun(jr); err != nil {
+		t.Fatal(err)
+	}
+	got, err := st.GetJobRun("p", "run-1")
+	if err != nil || got.Status != JobRunning || got.RowsRead != 10 {
+		t.Fatalf("get: %+v %v", got, err)
+	}
+	if got.Parameters["from"] != "cursor" {
+		t.Errorf("parameters roundtrip: %+v", got.Parameters)
+	}
+	runnable, err := st.RunnableJobRuns("p")
+	if err != nil || len(runnable) != 1 || !runnable[0].Runnable() {
+		t.Fatalf("runnable: %+v %v", runnable, err)
+	}
+	if ok, _ := st.HasSuccessfulRunFor("p", "2026-09-03T01:00:00Z"); ok {
+		t.Error("no successful run yet for the tick")
+	}
+	if last, _ := st.LastScheduledFor("p"); last != "2026-09-03T01:00:00Z" {
+		t.Errorf("last scheduled_for = %q", last)
+	}
+	jr.Status = JobSuccess
+	jr.EndedAt = now
+	if err := st.UpdateJobRun(jr); err != nil {
+		t.Fatal(err)
+	}
+	if ok, _ := st.HasSuccessfulRunFor("p", "2026-09-03T01:00:00Z"); !ok {
+		t.Error("successful run for the tick not found")
+	}
+	if runnable, _ := st.RunnableJobRuns("p"); len(runnable) != 0 {
+		t.Errorf("finished run still runnable: %+v", runnable)
+	}
+	runs, err := st.JobRuns("p", 10)
+	if err != nil || len(runs) != 1 || runs[0].Status != JobSuccess {
+		t.Fatalf("job runs: %+v %v", runs, err)
+	}
+
+	// Run-attributed dead letters.
+	if err := st.WriteDeadLetter(DeadLetter{Pipeline: "p", MessageID: "m1", RunID: "run-1", Node: "out", Reason: "parse", Raw: []byte(`{}`), CreatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.WriteDeadLetter(DeadLetter{Pipeline: "p", MessageID: "m2", RunID: "run-2", Node: "out", Reason: "delivery", Raw: []byte(`{}`), CreatedAt: now.Add(time.Minute)}); err != nil {
+		t.Fatal(err)
+	}
+	forRun, err := st.DeadLettersForRun("p", "run-1")
+	if err != nil || len(forRun) != 1 || forRun[0].MessageID != "m1" {
+		t.Fatalf("for run: %+v %v", forRun, err)
+	}
+	since, err := st.DeadLettersSince("p", now.Add(30*time.Second))
+	if err != nil || len(since) != 1 || since[0].MessageID != "m2" {
+		t.Fatalf("since: %+v %v", since, err)
+	}
+	if n, err := st.DeleteDeadLetters("p", []int64{forRun[0].ID}); err != nil || n != 1 {
+		t.Fatalf("delete: n=%d err=%v", n, err)
+	}
+	if all, _ := st.DeadLetters("p"); len(all) != 1 {
+		t.Errorf("dead letters after delete: %+v", all)
+	}
+
+	// Retention: finished runs before the cutoff vanish, runnable ones stay.
+	old := JobRun{RunID: "run-0", Pipeline: "p", Status: JobFailed, TriggerType: "manual", StartedAt: now.Add(-100 * time.Hour), EndedAt: now.Add(-96 * time.Hour)}
+	if err := st.CreateJobRun(old); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := st.DeleteJobRunsBefore("p", now.Add(-48*time.Hour)); err != nil || n != 1 {
+		t.Fatalf("retention: n=%d err=%v", n, err)
+	}
+	if _, err := st.GetJobRun("p", "run-0"); err == nil {
+		t.Error("old run survived retention")
+	}
+	if _, err := st.GetJobRun("p", "run-1"); err != nil {
+		t.Error("recent run deleted by retention")
+	}
+}
+
+func TestMemoryJobStore(t *testing.T) {
+	exerciseJobStore(t, NewMemory("p"))
+}
+
+func TestSQLiteJobStore(t *testing.T) {
+	st, err := OpenSQLite(t.TempDir() + "/jobs.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	exerciseJobStore(t, st)
+}
+
+// A database created by the M1 schema (no job_run_id column) migrates in
+// place on open (M2 review R6).
+func TestSQLiteMigratesM1DeadLetterTable(t *testing.T) {
+	path := t.TempDir() + "/m1.db"
+	st, err := OpenSQLite(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.Close()
+
+	// Simulate an M1 database: drop the column by recreating the table
+	// without it, as the M1 schema did.
+	if err := rewriteM1DeadLetter(path); err != nil {
+		t.Fatal(err)
+	}
+	st2, err := OpenSQLite(path)
+	if err != nil {
+		t.Fatalf("reopen with migration: %v", err)
+	}
+	defer st2.Close()
+	if err := st2.WriteDeadLetter(DeadLetter{Pipeline: "p", MessageID: "m", RunID: "run-9", Node: "out", Reason: "x", Raw: []byte(`{}`)}); err != nil {
+		t.Fatal(err)
+	}
+	forRun, err := st2.DeadLettersForRun("p", "run-9")
+	if err != nil || len(forRun) != 1 {
+		t.Fatalf("run-attributed dead letter after migration: %+v %v", forRun, err)
+	}
+}
+
+func rewriteM1DeadLetter(path string) error {
+	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=journal_mode(WAL)")
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	_, err = db.Exec(`
+		DROP TABLE dead_letter;
+		CREATE TABLE dead_letter (
+		  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+		  pipeline    TEXT    NOT NULL,
+		  message_id  TEXT    NOT NULL,
+		  node        TEXT    NOT NULL,
+		  edge        TEXT    NOT NULL DEFAULT '',
+		  reason      TEXT    NOT NULL,
+		  backtrace   TEXT    NOT NULL DEFAULT '',
+		  origin_node TEXT    NOT NULL DEFAULT '',
+		  raw         BLOB    NOT NULL,
+		  codec       TEXT    NOT NULL DEFAULT '',
+		  meta        TEXT    NOT NULL DEFAULT '{}',
+		  cursor      TEXT    NOT NULL DEFAULT '',
+		  src_name    TEXT    NOT NULL DEFAULT '',
+		  src_seq     INTEGER NOT NULL DEFAULT 0,
+		  retry_count INTEGER NOT NULL DEFAULT 0,
+		  created_at  TEXT    NOT NULL
+		)`)
+	return err
 }
 
 func TestSQLitePersistsAcrossReopen(t *testing.T) {

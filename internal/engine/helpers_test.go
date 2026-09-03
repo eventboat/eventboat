@@ -133,7 +133,7 @@ func (h *harness) build(yamlText string) *ir.Pipeline {
 	if lr.HasErrors() {
 		h.t.Fatalf("config errors:\n%+v", lr.Diagnostics)
 	}
-	pip, diags := ir.Build(lr.Pipeline, h.reg, starhost.DefaultOptions())
+	pip, diags := ir.Build(lr.Pipeline, h.reg, starhost.DefaultOptions(), nil)
 	if pip == nil {
 		h.t.Fatalf("ir build errors:\n%+v", diags)
 	}

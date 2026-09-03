@@ -210,6 +210,10 @@ func (w *StoreWrapper) ReplayFrom(pipeline string, afterSeq int64, fn func(int64
 	return w.Inner.ReplayFrom(pipeline, afterSeq, fn)
 }
 
+func (w *StoreWrapper) ReplayPage(pipeline string, afterSeq int64, limit int, fn func(int64, registry.Message, time.Time) error) (int64, bool, error) {
+	return w.Inner.ReplayPage(pipeline, afterSeq, limit, fn)
+}
+
 func (w *StoreWrapper) SetCheckpoint(pipeline string, seq int64) error {
 	if w.SetCheckpointHook != nil {
 		if err := w.SetCheckpointHook(seq); err != nil {
@@ -242,6 +246,46 @@ func (w *StoreWrapper) WriteDeadLetter(dl store.DeadLetter) error {
 
 func (w *StoreWrapper) DeadLetters(pipeline string) ([]store.DeadLetter, error) {
 	return w.Inner.DeadLetters(pipeline)
+}
+
+func (w *StoreWrapper) DeadLettersSince(pipeline string, since time.Time) ([]store.DeadLetter, error) {
+	return w.Inner.DeadLettersSince(pipeline, since)
+}
+
+func (w *StoreWrapper) DeadLettersForRun(pipeline, runID string) ([]store.DeadLetter, error) {
+	return w.Inner.DeadLettersForRun(pipeline, runID)
+}
+
+func (w *StoreWrapper) DeleteDeadLetters(pipeline string, ids []int64) (int64, error) {
+	return w.Inner.DeleteDeadLetters(pipeline, ids)
+}
+
+func (w *StoreWrapper) CreateJobRun(jr store.JobRun) error { return w.Inner.CreateJobRun(jr) }
+
+func (w *StoreWrapper) UpdateJobRun(jr store.JobRun) error { return w.Inner.UpdateJobRun(jr) }
+
+func (w *StoreWrapper) GetJobRun(pipeline, runID string) (*store.JobRun, error) {
+	return w.Inner.GetJobRun(pipeline, runID)
+}
+
+func (w *StoreWrapper) JobRuns(pipeline string, limit int) ([]store.JobRun, error) {
+	return w.Inner.JobRuns(pipeline, limit)
+}
+
+func (w *StoreWrapper) RunnableJobRuns(pipeline string) ([]store.JobRun, error) {
+	return w.Inner.RunnableJobRuns(pipeline)
+}
+
+func (w *StoreWrapper) HasSuccessfulRunFor(pipeline, scheduledFor string) (bool, error) {
+	return w.Inner.HasSuccessfulRunFor(pipeline, scheduledFor)
+}
+
+func (w *StoreWrapper) LastScheduledFor(pipeline string) (string, error) {
+	return w.Inner.LastScheduledFor(pipeline)
+}
+
+func (w *StoreWrapper) DeleteJobRunsBefore(pipeline string, cutoff time.Time) (int64, error) {
+	return w.Inner.DeleteJobRunsBefore(pipeline, cutoff)
 }
 
 func (w *StoreWrapper) Close() error { return w.Inner.Close() }

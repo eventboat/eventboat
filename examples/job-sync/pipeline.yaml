@@ -1,0 +1,60 @@
+apiVersion: eventboat/v3
+kind: Pipeline
+metadata: { name: orders-nightly-sync }
+
+run:
+  mode: job
+  schedule: "0 1 * * *"       # nightly at 01:00; missing ticks catch up within 2h
+  overlap: skip
+  catchup_window: 2h
+  skip_if_successful: true
+  retention: { history: 90d }
+
+constants:
+  source_system: nightly-sync
+  default_region: unknown
+
+parameters:
+  from: { type: string, default: cursor }   # engine binding: last settled watermark
+  to:   { type: string, default: now }      # engine binding: run start time
+
+edge_defaults:
+  delivery: { retries: 3, backoff: exponential }
+
+limits:
+  max_in_flight: 5000
+  drain_timeout: 15s
+
+sources:
+  pull:
+    decoder: json
+    sql:
+      driver: sqlite                          # examples use the sqlite dialect; mysql/postgres identical modulo driver+dsn
+      dsn: file:./examples/job-sync/data/orders.db
+      query: |
+        SELECT id, order_no, amount, region, updated_at
+        FROM orders
+        WHERE updated_at >= :from AND updated_at < :to
+      args: { from: "${parameters.from}", to: "${parameters.to}" }
+      cursor: { column: updated_at }                    # watermark for from: cursor
+      pagination: { key: [updated_at, id], page_size: 2 } # tiny pages so the example paginates visibly
+      emit: row
+
+transforms:
+  enrich:
+    from: [pull]
+    script: |
+      load("math", "floor")
+      payload.source_system = constants.source_system
+      if not payload.region:
+          payload.region = constants.default_region
+      # Starlark string % interpolation has no float-precision conversions
+      # ("%.2f" fails with "unknown conversion"); round via integer math.
+      payload.amount = floor(payload.amount * 100 + 0.5) / 100
+      payload.amount_txt = str(payload.amount)
+
+sinks:
+  out:
+    from: [enrich]
+    encoder: json
+    file: { path: ./examples/job-sync/out/orders-sync.jsonl }

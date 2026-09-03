@@ -43,7 +43,7 @@ func TestExamplesVerifyAndTest(t *testing.T) {
 			t.Errorf("%s: verify errors:\n%s", pipelinePath, diagsString(lr.Diagnostics))
 			continue
 		}
-		_, diags := ir.Build(lr.Pipeline, reg, starhost.DefaultOptions())
+		_, diags := ir.Build(lr.Pipeline, reg, starhost.DefaultOptions(), nil)
 		for _, d := range diags {
 			if d.Severity == "error" {
 				t.Errorf("%s: verify errors:\n%s", pipelinePath, diagsString(diags))

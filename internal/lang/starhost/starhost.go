@@ -61,7 +61,7 @@ func fileOptions() *syntax.FileOptions {
 
 func isPredeclared(name string) bool {
 	switch name {
-	case "payload", "meta", "constants", "safe_json_decode":
+	case "payload", "meta", "constants", "parameters", "safe_json_decode":
 		return true
 	}
 	return false
@@ -121,12 +121,24 @@ func (e *ScriptError) Error() string {
 // (copy-on-write) message states; constants must be a frozen value from
 // FreezeConstants. Run returns nil on success.
 func (p *Program) Run(payload, meta *MsgState, constants starlark.Value) *ScriptError {
+	return p.RunWithParams(payload, meta, constants, nil)
+}
+
+// RunWithParams additionally binds `parameters` (frozen job parameters,
+// §5.9). A nil params binds an empty frozen dict: continuous pipelines reject
+// parameters references at verify time, so scripts never see a value here
+// unless the pipeline is a job.
+func (p *Program) RunWithParams(payload, meta *MsgState, constants, params starlark.Value) *ScriptError {
+	if params == nil {
+		params = FreezeConstants(nil)
+	}
 	thread := &starlark.Thread{Name: p.name, Load: loadModule}
 	thread.SetMaxExecutionSteps(p.opts.MaxSteps)
 	predeclared := starlark.StringDict{
 		"payload":          payload.Binding(),
 		"meta":             meta.Binding(),
 		"constants":        constants,
+		"parameters":       params,
 		"safe_json_decode": p.safeDec,
 	}
 	if _, err := p.prog.Init(thread, predeclared); err != nil {

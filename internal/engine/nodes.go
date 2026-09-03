@@ -46,7 +46,7 @@ func (e *Engine) processTransform(node *ir.Node, inst *instance) {
 			// must not leak into the retry.
 			ps := starhost.NewMsgState("payload", inst.msg.Decoded)
 			ms := starhost.NewMsgState("meta", inst.msg.Meta)
-			serr = node.Script.Run(ps, ms, e.IR.FrozenConstants)
+			serr = node.Script.RunWithParams(ps, ms, e.IR.FrozenConstants, e.IR.FrozenParameters)
 			if serr == nil {
 				payloadState, metaState = ps, ms
 				break
@@ -237,9 +237,21 @@ func (e *Engine) deadLetter(inst *instance, node, reason, backtrace string) {
 }
 
 func (e *Engine) deadLetterMsg(seq int64, msg registry.Message, node, edge, reason, backtrace string) {
+	runID := ""
+	if e.Opts.MetaStamps != nil {
+		if v, ok := e.Opts.MetaStamps["job_run_id"].(string); ok {
+			runID = v
+		}
+	}
+	if runID == "" {
+		if m, ok := msg.Meta["job_run_id"].(string); ok {
+			runID = m // replayed message keeps its original run attribution
+		}
+	}
 	dl := store.DeadLetter{
 		Pipeline:  e.IR.Config.Name,
 		MessageID: msg.ID,
+		RunID:     runID,
 		Node:      node,
 		Edge:      edge,
 		Reason:    reason,

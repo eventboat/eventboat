@@ -57,6 +57,18 @@ type Source interface {
 	Close() error
 }
 
+// PullSource is a source with job-pipeline pull semantics (redesign-v3.md
+// §5.8, M2 review R1): the engine calls Pull instead of Run. Pull emits rows
+// synchronously (the engine's admission gate applies backpressure between
+// pages) and returns nil when the source is exhausted for this run — the job
+// then settles — or an error when the source itself failed (run failed,
+// distinct from per-message dead letters). Sources declaring the "pull"
+// capability must implement this interface.
+type PullSource interface {
+	Source
+	Pull(ctx context.Context, emit func(Message)) error
+}
+
 // Sink is implemented by sink plugins. Batching is owned by the engine; Write
 // receives one batch and reports success or failure per delivery policy.
 type Sink interface {

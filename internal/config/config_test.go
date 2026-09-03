@@ -66,7 +66,7 @@ func TestUnknownTopLevelAndNodeFieldsAreErrors(t *testing.T) {
 apiVersion: eventboat/v3
 kind: Pipeline
 metadata: { name: x }
-run: { mode: job }
+bogus_section: { mode: job }
 sources:
   in: { decoder: json, fil: { path: x } }
 sinks:
@@ -247,8 +247,8 @@ sinks:
 	}
 }
 
-// ${parameters.*} errors with explicit guidance: parameters belong to job
-// pipelines, which land in M2.
+// ${parameters.*} in a continuous pipeline errors with explicit guidance;
+// in a job pipeline the token passes through unresolved (resolved per run).
 func TestScopedSubstitutionParametersGuided(t *testing.T) {
 	res := LoadBytes("p.yaml", []byte(`
 apiVersion: eventboat/v3
@@ -263,13 +263,35 @@ sinks:
 	for _, d := range res.Diagnostics {
 		if d.Code == "cfg_scope_unknown" && strings.Contains(d.Message, "parameters.from") {
 			found = true
-			if !strings.Contains(d.Message, "parameters will land in M2 (job pipelines); not available yet") {
-				t.Errorf("missing M2 guidance: %q", d.Message)
+			if !strings.Contains(d.Message, "parameters are only available in job pipelines") {
+				t.Errorf("missing job-pipeline guidance: %q", d.Message)
 			}
 		}
 	}
 	if !found {
 		t.Fatalf("expected cfg_scope_unknown for parameters with guidance, got %+v", res.Diagnostics)
+	}
+
+	// Job pipeline: the token survives for the jobs runner.
+	res = LoadBytes("job.yaml", []byte(`
+apiVersion: eventboat/v3
+kind: Pipeline
+metadata: { name: x }
+run:
+  mode: job
+sources:
+  in:
+    decoder: json
+    file: { path: a }
+sinks:
+  out: { from: [in], file: { path: "run-${parameters.from}.txt" } }
+`))
+	if res.HasErrors() {
+		t.Fatalf("job pipeline with ${parameters.x} rejected at load: %+v", res.Diagnostics)
+	}
+	got := res.Pipeline.Sinks["out"].PluginConfig["path"]
+	if got != "run-${parameters.from}.txt" {
+		t.Errorf("parameters token did not pass through: %v", got)
 	}
 }
 
@@ -304,7 +326,7 @@ func TestOptionalScopedReferencesAreErrors(t *testing.T) {
 		ref      string
 		wantPart string
 	}{
-		{"${?parameters.from}", "parameters will land in M2 (job pipelines); not available yet"},
+		{"${?parameters.from}", "parameters are only available in job pipelines"},
 		{"${?bogus.v}", "bogus"},
 		{"${?constants.tier}", "optional marker"},
 	}

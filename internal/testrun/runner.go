@@ -2,6 +2,7 @@ package testrun
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -124,7 +125,7 @@ func RunFile(testFile string, reg *registry.Registry) (*Report, error) {
 	if lr.HasErrors() {
 		return nil, fmt.Errorf("%s: pipeline %s has verify errors:\n%s", testFile, pipelinePath, formatDiags(lr.Diagnostics))
 	}
-	piplineIR, diags := ir.Build(lr.Pipeline, reg, starhost.DefaultOptions())
+	piplineIR, diags := ir.Build(lr.Pipeline, reg, starhost.DefaultOptions(), nil)
 	if hasErrDiags(diags) {
 		return nil, fmt.Errorf("%s: pipeline %s has verify errors:\n%s", testFile, pipelinePath, formatDiags(diags))
 	}
@@ -158,6 +159,10 @@ func runCase(baseDir, pipelinePath string, pip *ir.Pipeline, c specCase, reg *re
 		recorders[node] = capture.Rec
 		return capture
 	}
+	// Job pipelines: sources are disabled so cases inject at the pull node
+	// deterministically (a real pull source would race the injections and
+	// read whatever data sits behind the plugin config).
+	opts.DisableSources = pip.Config.IsJob()
 
 	st := store.NewMemory(pip.Config.Name)
 	eng, err := engine.New(pip, st, reg, opts.WithLimits(pip.Config.Limits))
@@ -276,18 +281,40 @@ func matchExpectations(expected []map[string]any, captured []registry.Message) e
 	pos := 0
 	for i, exp := range expected {
 		matched := -1
+		var why string
 		for j := pos; j < len(captured); j++ {
-			if ok, _ := subsetMatch(exp, captured[j]); ok {
+			ok, reason := subsetMatch(exp, captured[j])
+			if ok {
 				matched = j
 				break
 			}
+			if j == pos {
+				why = reason // first candidate's mismatch reason
+			}
 		}
 		if matched < 0 {
-			return fmt.Errorf("expectation %d matched no captured message (from position %d)", i+1, pos)
+			return fmt.Errorf("expectation %d matched no captured message (from position %d): %s; captured payloads: %s",
+				i+1, pos, why, summarize(captured))
 		}
 		pos = matched + 1
 	}
 	return nil
+}
+
+func summarize(captured []registry.Message) string {
+	parts := make([]string, 0, len(captured))
+	for _, m := range captured {
+		if len(m.Out) > 0 {
+			parts = append(parts, string(m.Out))
+			continue
+		}
+		b, err := json.Marshal(m.Decoded)
+		if err != nil {
+			b = []byte(fmt.Sprintf("%v", m.Decoded))
+		}
+		parts = append(parts, string(b))
+	}
+	return "[" + strings.Join(parts, ", ") + "]"
 }
 
 // subsetMatch checks dotted-path expectations ("payload.total", "meta.tier")

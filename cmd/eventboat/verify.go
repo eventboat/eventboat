@@ -39,7 +39,7 @@ func cmdVerify(args []string, jsonOut bool) int {
 	lr := config.LoadFile(*configPath)
 	diags := append([]config.Diagnostic{}, lr.Diagnostics...)
 	if !lr.HasErrors() {
-		_, buildDiags := ir.Build(lr.Pipeline, reg, starhost.DefaultOptions())
+		_, buildDiags := ir.Build(lr.Pipeline, reg, starhost.DefaultOptions(), nil)
 		diags = append(diags, buildDiags...)
 	}
 

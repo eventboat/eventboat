@@ -12,7 +12,9 @@ import (
 	"github.com/eventboat/eventboat/internal/config"
 	"github.com/eventboat/eventboat/internal/engine"
 	"github.com/eventboat/eventboat/internal/ir"
+	"github.com/eventboat/eventboat/internal/jobs"
 	"github.com/eventboat/eventboat/internal/lang/starhost"
+	"github.com/eventboat/eventboat/internal/registry"
 	"github.com/eventboat/eventboat/internal/store"
 )
 
@@ -41,13 +43,19 @@ func cmdRun(args []string, jsonOut bool) int {
 		fmt.Fprintln(os.Stderr, "run: pipeline failed verify (run verify for details)")
 		return 1
 	}
-	pip, diags := ir.Build(lr.Pipeline, reg, starhost.DefaultOptions())
+	pip, diags := ir.Build(lr.Pipeline, reg, starhost.DefaultOptions(), nil)
 	for _, d := range diags {
 		if d.Severity == "error" {
 			printDiagsStderr(diags)
 			fmt.Fprintln(os.Stderr, "run: pipeline failed verify")
 			return 1
 		}
+	}
+
+	// Job pipelines run under the jobs manager (scheduler + admission + run
+	// history, §5.8); continuous pipelines run the plain engine.
+	if pip.Config.IsJob() {
+		return runJobPipeline(*configPath, pip, reg, *dataDir, *ephemeral, jsonOut)
 	}
 
 	var st store.Store
@@ -92,7 +100,8 @@ func cmdRun(args []string, jsonOut bool) int {
 				"settled_through": settledThrough,
 				"arrived_max":     arrived,
 				"messages_in":     m.MessagesIn.Load(),
-				"settled":         m.Settled.Load(),
+				"settled":         m.SettledCount.Load(),
+				"checkpoint":      m.CheckpointPtr.Load(),
 				"dead_lettered":   m.DeadLettered.Load(),
 				"cel_eval_errors": m.CelEvalErrors.Load(),
 				"no_match":        m.NoMatch.Load(),
@@ -104,7 +113,7 @@ func cmdRun(args []string, jsonOut bool) int {
 		}
 		fmt.Printf("eventboat: pipeline %q stopped: settledThrough=%d outstanding=%d arrivedMax=%d in=%d settled=%d deadLettered=%d celErrors=%d noMatch=%d retries=%d\n",
 			pip.Config.Name, settledThrough, outstanding, arrived,
-			m.MessagesIn.Load(), m.Settled.Load(), m.DeadLettered.Load(),
+			m.MessagesIn.Load(), m.SettledCount.Load(), m.DeadLettered.Load(),
 			m.CelEvalErrors.Load(), m.NoMatch.Load(), m.Retries.Load())
 	}
 
@@ -131,6 +140,57 @@ func storeLabel(ephemeral bool, dataDir string) string {
 		return "ephemeral (in-memory)"
 	}
 	return dataDir + string(os.PathSeparator) + "eventboat.db (SQLite, WAL)"
+}
+
+// runJobPipeline executes a job pipeline under the jobs manager until the
+// context is canceled: crash recovery of in-flight runs, catchup for missed
+// schedule ticks, then the cron scheduler (§5.8).
+func runJobPipeline(configPath string, pip *ir.Pipeline, reg *registry.Registry, dataDir string, ephemeral bool, jsonOut bool) int {
+	var st store.Store
+	if ephemeral {
+		st = store.NewMemory(pip.Config.Name)
+	} else {
+		if err := os.MkdirAll(dataDir, 0o755); err != nil {
+			fmt.Fprintf(os.Stderr, "run: data dir: %v\n", err)
+			return 2
+		}
+		sqlite, err := store.OpenSQLite(filepath.Join(dataDir, "eventboat.db"))
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "run: open store: %v\n", err)
+			return 2
+		}
+		st = sqlite
+	}
+	defer st.Close()
+
+	opts := jobs.Options{}
+	opts.EngineOptions = engine.DefaultOptions().WithLimits(pip.Config.Limits)
+	m, err := jobs.New(pip.Config, configPath, st, reg, opts)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "run: %v\n", err)
+		return 2
+	}
+
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer cancel()
+	if err := m.Start(ctx); err != nil {
+		fmt.Fprintf(os.Stderr, "run: %v\n", err)
+		return 1
+	}
+	if !jsonOut {
+		schedule := pip.Config.Run.Schedule
+		if schedule == "" {
+			schedule = "manual/trigger only"
+		}
+		fmt.Printf("eventboat: job pipeline %q (schedule: %s, overlap: %s, store: %s)\n",
+			pip.Config.Name, schedule, pip.Config.Run.Overlap, storeLabel(ephemeral, dataDir))
+	}
+	<-ctx.Done()
+	m.Stop()
+	if !jsonOut {
+		fmt.Println("eventboat: stopped")
+	}
+	return 0
 }
 
 func printDiagsStderr(diags []config.Diagnostic) {

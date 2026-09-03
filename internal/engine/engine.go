@@ -34,6 +34,19 @@ type Options struct {
 	DrainTimeout   time.Duration // graceful drain bound before hard cancel
 	StarOptions    starhost.Options
 
+	// OnSourceError reports a pull-source failure (job pipelines route this
+	// to a failed run; continuous sources have no error channel).
+	OnSourceError func(node string, err error)
+
+	// MetaStamps are stamped into every accepted message's metadata (e.g.
+	// job_run_id for job runs).
+	MetaStamps map[string]any
+
+	// DisableSources keeps registered sources from running (testkit/
+	// contract tests drive injections instead). Injection at source nodes
+	// still goes through the full accept path.
+	DisableSources bool
+
 	// SinkWrapper lets testkits capture or fault-inject around real sinks.
 	SinkWrapper func(node string, s registry.Sink) registry.Sink
 }
@@ -71,9 +84,12 @@ func (o Options) WithLimits(l *config.Limits) Options {
 }
 
 // Metrics holds engine counters (POC observability: expvar-style atomics).
+// SettledCount counts messages settled this engine instance; CheckpointPtr
+// mirrors the durable checkpoint position (M2 review R5 split them apart).
 type Metrics struct {
 	MessagesIn    atomic.Int64
-	Settled       atomic.Int64
+	SettledCount  atomic.Int64
+	CheckpointPtr atomic.Int64
 	DeadLettered  atomic.Int64
 	CelEvalErrors atomic.Int64
 	NoMatch       atomic.Int64
@@ -107,6 +123,13 @@ type Engine struct {
 
 	persistMu        sync.Mutex
 	persistedThrough int64
+
+	srcWG    sync.WaitGroup // live source goroutines (exhaustion tracking)
+	srcErrMu sync.Mutex
+	srcErr   map[string]error // first error per pull source
+	srcDone  map[string]bool  // sources that returned (exhausted or failed)
+	srcTotal int
+	srcStart atomic.Bool // Run counted the sources; SourcesDone is meaningful
 
 	ctx     context.Context
 	cancel  context.CancelFunc
@@ -163,6 +186,8 @@ func New(p *ir.Pipeline, st store.Store, reg *registry.Registry, opts Options) (
 		codecs:   map[string]registry.Codec{},
 		sources:  map[string]registry.Source{},
 		acquired: map[int64]bool{},
+		srcErr:   map[string]error{},
+		srcDone:  map[string]bool{},
 	}
 
 	for _, name := range p.Order {
@@ -227,9 +252,16 @@ func New(p *ir.Pipeline, st store.Store, reg *registry.Registry, opts Options) (
 			sourceNames = append(sourceNames, name)
 		}
 	}
-	e.settle = newSettleTracker(p.Config.Name, sourceNames, e.releaseAdmission, e.persistCheckpoint)
+	e.settle = newSettleTracker(p.Config.Name, sourceNames, e.onSettled, e.persistCheckpoint)
 	e.admitSem = make(chan struct{}, opts.HighWatermark)
 	return e, nil
+}
+
+// onSettled releases the backpressure slot of one settled message and counts
+// it (R5: a count, distinct from the checkpoint pointer).
+func (e *Engine) onSettled(seq int64) {
+	e.Metrics.SettledCount.Add(1)
+	e.releaseAdmission(seq)
 }
 
 // persistCheckpoint advances the durable checkpoint (invariant 2) and pushes
@@ -247,7 +279,7 @@ func (e *Engine) persistCheckpoint(settledThrough int64, frontiers map[string]in
 		}
 		e.persistedThrough = settledThrough
 	}
-	e.Metrics.Settled.Store(settledThrough)
+	e.Metrics.CheckpointPtr.Store(settledThrough)
 	for name, src := range e.sources {
 		frontier := frontiers[name]
 		if frontier <= 0 {
@@ -335,20 +367,47 @@ func (e *Engine) Run(ctx context.Context) error {
 		}
 	}
 
-	// Sources last: fresh state, then run.
-	for name, src := range e.sources {
-		state, _, err := e.Store.SourceState(e.IR.Config.Name, name)
-		if err == nil && len(state) > 0 {
-			_ = src.Init(state)
+	// Sources last: fresh state, then run. Pull sources (job pipelines) use
+	// Pull and signal exhaustion or failure; the job runner watches
+	// SourcesDone/SourceErrors for run completion (M2 review R1).
+	if e.Opts.DisableSources {
+		e.srcErrMu.Lock()
+		e.srcTotal = len(e.sources)
+		for name := range e.sources {
+			e.srcDone[name] = true
 		}
-		e.wg.Add(1)
-		go func(name string, src registry.Source) {
-			defer e.wg.Done()
-			src.Run(e.ctx, func(msg registry.Message) {
-				_ = e.accept(msg, name)
-			})
-			_ = src.Close()
-		}(name, src)
+		e.srcStart.Store(true)
+		e.srcErrMu.Unlock()
+	} else {
+		e.srcErrMu.Lock()
+		e.srcTotal = len(e.sources)
+		e.srcStart.Store(true) // set before goroutines spawn: SourcesDone is only meaningful once counted
+		e.srcErrMu.Unlock()
+		for name, src := range e.sources {
+			state, _, err := e.Store.SourceState(e.IR.Config.Name, name)
+			if err == nil && len(state) > 0 {
+				_ = src.Init(state)
+			}
+			e.srcWG.Add(1)
+			go func(name string, src registry.Source) {
+				defer e.srcWG.Done()
+				if ps, ok := src.(registry.PullSource); ok {
+					err := ps.Pull(e.ctx, func(msg registry.Message) {
+						_ = e.accept(msg, name)
+					})
+					e.markSourceDone(name, err)
+					if err != nil && e.Opts.OnSourceError != nil {
+						e.Opts.OnSourceError(name, err)
+					}
+				} else {
+					src.Run(e.ctx, func(msg registry.Message) {
+						_ = e.accept(msg, name)
+					})
+					e.markSourceDone(name, nil)
+				}
+				_ = src.Close()
+			}(name, src)
+		}
 	}
 
 	<-e.ctx.Done()
@@ -359,7 +418,7 @@ func (e *Engine) Run(ctx context.Context) error {
 // drain waits up to DrainTimeout for in-flight work, then hard-cancels.
 func (e *Engine) drain() {
 	done := make(chan struct{})
-	go func() { e.wg.Wait(); close(done) }()
+	go func() { e.wg.Wait(); e.srcWG.Wait(); close(done) }()
 	select {
 	case <-done:
 	case <-time.After(e.Opts.DrainTimeout):
@@ -385,6 +444,96 @@ func (e *Engine) Close() {
 // Ready reports whether Run has begun accepting injections.
 func (e *Engine) Ready() bool { return e.started.Load() }
 
+// markSourceDone records that one source goroutine returned (exhausted pull,
+// failed pull, or stopped continuous source).
+func (e *Engine) markSourceDone(name string, err error) {
+	e.srcErrMu.Lock()
+	defer e.srcErrMu.Unlock()
+	e.srcDone[name] = true
+	if err != nil {
+		if _, had := e.srcErr[name]; !had {
+			e.srcErr[name] = err
+		}
+	}
+}
+
+// SourcesDone reports whether every registered source has stopped (job
+// completion detection: sources exhausted AND settle outstanding == 0).
+// False until Run has counted the sources — a poll racing engine startup
+// must not read "all done" from a zero total.
+func (e *Engine) SourcesDone() bool {
+	e.srcErrMu.Lock()
+	defer e.srcErrMu.Unlock()
+	return e.srcStart.Load() && len(e.srcDone) >= e.srcTotal
+}
+
+// SourceErrors returns the first failure per pull source (empty when none).
+func (e *Engine) SourceErrors() map[string]error {
+	e.srcErrMu.Lock()
+	defer e.srcErrMu.Unlock()
+	out := make(map[string]error, len(e.srcErr))
+	for k, v := range e.srcErr {
+		out[k] = v
+	}
+	return out
+}
+
+// Quiesced reports whether the pipeline has no outstanding execution work:
+// all sources stopped and nothing unsettled. Job runners poll this to move a
+// run into its terminal state.
+func (e *Engine) Quiesced() bool {
+	if !e.SourcesDone() {
+		return false
+	}
+	outstanding, _, _ := e.settle.snapshot()
+	return outstanding == 0
+}
+
+// Abandon terminal-settles every outstanding message by dead-lettering it
+// (M2 review R2: a canceled run must not leave unsettled spool rows wedging
+// the checkpoint's contiguous prefix forever). Ordering preserves the
+// invariants: the dead letter is written first, and only then does the
+// tracker clear the message (any leftover branches from a mid-flight fan-out
+// are force-terminated after the durable record exists).
+func (e *Engine) Abandon(reason string) int {
+	abandoned := 0
+	_, settledThrough, _ := e.settle.snapshot()
+	after := settledThrough
+	for {
+		var seqs []int64
+		msgs := map[int64]registry.Message{}
+		last, more, ferr := e.Store.ReplayPage(e.IR.Config.Name, after, 256,
+			func(seq int64, msg registry.Message, _ time.Time) error {
+				if e.settle.isOutstanding(seq) {
+					seqs = append(seqs, seq)
+					msgs[seq] = msg
+				}
+				return nil
+			})
+		if ferr != nil {
+			break
+		}
+		for _, seq := range seqs {
+			msg := msgs[seq]
+			e.deadLetterMsg(seq, msg, firstNonEmpty(msg.SrcName, "unknown"), "", reason, "")
+			e.settle.forceTerminal(seq)
+			abandoned++
+		}
+		if !more || last == after {
+			break
+		}
+		after = last
+	}
+	return abandoned
+}
+
+func firstNonEmpty(a, b string) string {
+	if a != "" {
+		return a
+	}
+	return b
+}
+
 // accept is the single entry point for source emissions: backpressure gate,
 // engine stamping, durable spool append, then DAG visibility (invariant 1:
 // nothing is visible before the append succeeds).
@@ -407,6 +556,11 @@ func (e *Engine) accept(raw registry.Message, sourceNode string) error {
 	meta["message_id"] = msg.ID
 	meta["ingest_time"] = ingest.UTC().Format(time.RFC3339Nano)
 	meta["source"] = sourceNode
+	for k, v := range e.Opts.MetaStamps {
+		if _, exists := meta[k]; !exists {
+			meta[k] = v
+		}
+	}
 	msg.Meta = meta
 	node := e.IR.Nodes[sourceNode]
 	codecName := node.Config.Decoder
@@ -516,6 +670,11 @@ func (e *Engine) InjectAt(node string, raw []byte, meta map[string]any) (int64, 
 	m["ingest_time"] = ingest.UTC().Format(time.RFC3339Nano)
 	m["source"] = node
 	m["injected_at"] = node
+	for k, v := range e.Opts.MetaStamps {
+		if _, exists := m[k]; !exists {
+			m[k] = v
+		}
+	}
 	msg.Meta = m
 	msg.Codec = "json"
 	select {
@@ -532,6 +691,8 @@ func (e *Engine) InjectAt(node string, raw []byte, meta map[string]any) (int64, 
 	e.acquired[seq] = true
 	e.acquiredMu.Unlock()
 	e.settle.arrived(seq, "", 0)
+	// Decode once so the sink's encoder can re-encode (writeBatch encodes
+	// from Decoded; Raw is the spooled truth and stays untouched).
 	codec, cerr := e.codec("json", e.Reg)
 	if cerr != nil {
 		e.deadLetterMsg(seq, msg, node, "", "codec: "+cerr.Error(), "")
@@ -543,6 +704,14 @@ func (e *Engine) InjectAt(node string, raw []byte, meta map[string]any) (int64, 
 		return seq, nil
 	}
 	msg.Decoded = v
+	// Sinks have no out-edges: deliver straight into the sink's batcher and
+	// settle via its delivery policy (M2 review R4: replay can target any
+	// node, sinks included). The single outstanding branch registered by
+	// arrived is exactly this one delivery.
+	if n.Section == config.SectionSink {
+		e.deliver(&ir.Edge{From: node, To: node}, seq, msg)
+		return seq, nil
+	}
 	e.fanOut(n, seq, msg)
 	return seq, nil
 }
