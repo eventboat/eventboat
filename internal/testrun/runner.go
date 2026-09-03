@@ -160,7 +160,7 @@ func runCase(baseDir, pipelinePath string, pip *ir.Pipeline, c specCase, reg *re
 	}
 
 	st := store.NewMemory(pip.Config.Name)
-	eng, err := engine.New(pip, st, reg, opts)
+	eng, err := engine.New(pip, st, reg, opts.WithLimits(pip.Config.Limits))
 	if err != nil {
 		fail("engine build: %v", err)
 		return result

@@ -4,6 +4,13 @@
 // full-field ${VAR} substitution (redesign-v3.md §5).
 package config
 
+import (
+	"fmt"
+	"strconv"
+	"strings"
+	"time"
+)
+
 // Section identifies which of the three topology sections a node belongs to.
 type Section string
 
@@ -52,15 +59,23 @@ func itoa(n int) string {
 
 // Pipeline is the typed form of a pipeline configuration file.
 type Pipeline struct {
-	File         string
-	Name         string
-	Constants    map[string]any
-	EdgeDefaults EdgeAttrs
-	Sources      map[string]*Node
-	Transforms   map[string]*Node
-	Sinks        map[string]*Node
+	File          string
+	Name          string
+	Constants     map[string]any
+	ConstantsUsed map[string]bool // constants referenced via ${constants.x} (pre-substitution truth)
+	EdgeDefaults  EdgeAttrs
+	Limits        *Limits
+	Sources       map[string]*Node
+	Transforms    map[string]*Node
+	Sinks         map[string]*Node
 	// Order preserves a deterministic listing of all node names.
 	Order []string
+}
+
+// Limits is the optional per-pipeline resource ceiling (redesign-v3.md §5.10).
+type Limits struct {
+	MaxInFlight  int           // engine spool admission high watermark
+	DrainTimeout time.Duration // graceful drain bound on shutdown
 }
 
 // Node is one entry of one section.
@@ -123,4 +138,30 @@ type SplitConfig struct{}
 type BufferConfig struct {
 	Type      string // "memory"
 	MaxEvents int
+}
+
+// ParseDuration extends time.ParseDuration with a "d" (24h) unit so spec
+// examples like "90d" (retention) parse. All other units are standard Go.
+func ParseDuration(s string) (time.Duration, error) {
+	if s == "" {
+		return 0, fmt.Errorf("config: empty duration")
+	}
+	// days suffix (possibly fractional, e.g. "1d12h")
+	if i := strings.IndexByte(s, 'd'); i >= 0 {
+		days, err := strconv.ParseFloat(s[:i], 64)
+		if err != nil {
+			return 0, fmt.Errorf("config: bad duration %q", s)
+		}
+		rest := s[i+1:]
+		base := time.Duration(days * 24 * float64(time.Hour))
+		if rest == "" {
+			return base, nil
+		}
+		tail, err := time.ParseDuration(rest)
+		if err != nil {
+			return 0, fmt.Errorf("config: bad duration %q", s)
+		}
+		return base + tail, nil
+	}
+	return time.ParseDuration(s)
 }

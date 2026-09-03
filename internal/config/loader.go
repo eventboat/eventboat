@@ -82,12 +82,16 @@ func LoadBytes(file string, data []byte) *Result {
 		return res
 	}
 
-	// Pass 3: ${constants.x} substitution over decoded values.
+	// Pass 3: ${constants.x} substitution over decoded values. Successful
+	// substitutions are recorded: the substituted tree no longer carries the
+	// reference text, so lint_constant_unused must count usage on this record
+	// plus the binding-form (constants.x) references that survive in
+	// scripts and predicates (M1 debt fix).
 	constants := map[string]any{}
 	if c, ok := raw["constants"].(map[string]any); ok {
 		constants = c
 	}
-	cs := &constantsSubstituter{file: file, constants: constants, diags: &res.Diagnostics}
+	cs := &constantsSubstituter{file: file, constants: constants, diags: &res.Diagnostics, used: map[string]bool{}}
 	for key, val := range raw {
 		if key == "constants" {
 			continue
@@ -99,26 +103,27 @@ func LoadBytes(file string, data []byte) *Result {
 
 	// Pass 4: structural validation with whitelists.
 	p := &Pipeline{
-		File:         file,
-		Constants:    constants,
-		EdgeDefaults: EdgeAttrs{},
-		Sources:      map[string]*Node{},
-		Transforms:   map[string]*Node{},
-		Sinks:        map[string]*Node{},
+		File:          file,
+		Constants:     constants,
+		ConstantsUsed: cs.used,
+		EdgeDefaults:  EdgeAttrs{},
+		Sources:       map[string]*Node{},
+		Transforms:    map[string]*Node{},
+		Sinks:         map[string]*Node{},
 	}
 	res.Pipeline = p
 
 	allowedTop := map[string]bool{
 		"apiVersion": true, "kind": true, "metadata": true,
-		"edge_defaults": true, "constants": true,
+		"edge_defaults": true, "constants": true, "limits": true,
 		"sources": true, "transforms": true, "sinks": true,
 	}
 	for _, kv := range mappingPairs(root) {
 		key := kv.key
 		if !allowedTop[key] {
-			hint := "supported top-level keys in the POC: apiVersion, kind, metadata, edge_defaults, constants, sources, transforms, sinks"
-			if key == "run" || key == "parameters" || key == "hooks" || key == "limits" || key == "codecs" || key == "dlq" || key == "telemetry" {
-				hint = key + " is defined by redesign-v3.md §5.10 but not implemented in the POC yet"
+			hint := "supported top-level keys: apiVersion, kind, metadata, edge_defaults, constants, limits, sources, transforms, sinks"
+			if key == "run" || key == "parameters" || key == "hooks" || key == "codecs" || key == "dlq" || key == "telemetry" {
+				hint = key + " is defined by redesign-v3.md §5.10 but not implemented yet (run/parameters/hooks arrive with job pipelines)"
 			}
 			res.Diagnostics = append(res.Diagnostics, Diagnostic{
 				Severity: "error", Code: "cfg_unknown_top_section", File: file, Line: kv.line,
@@ -154,6 +159,56 @@ func LoadBytes(file string, data []byte) *Result {
 	if ed, ok := raw["edge_defaults"].(map[string]any); ok {
 		e := parseEdgeAttrs(file, "edge_defaults", nil, ed, lines.line("edge_defaults"), res)
 		p.EdgeDefaults = EdgeAttrs{Delivery: e.Delivery, Required: e.Required, Buffer: e.Buffer}
+	}
+
+	if lim, ok := raw["limits"]; ok {
+		lm, ok := lim.(map[string]any)
+		if !ok {
+			res.Diagnostics = append(res.Diagnostics, Diagnostic{
+				Severity: "error", Code: "cfg_limits_type", File: file, Line: lines.line("limits"),
+				Message: "limits must be a mapping", Hint: "limits: { max_in_flight: 10000, drain_timeout: 10s }",
+			})
+		} else {
+			l := &Limits{}
+			for k := range lm {
+				if k != "max_in_flight" && k != "drain_timeout" {
+					res.Diagnostics = append(res.Diagnostics, Diagnostic{
+						Severity: "error", Code: "cfg_unknown_field", File: file, Line: lines.line("limits"),
+						Message: fmt.Sprintf("unknown limits field %q", k), Hint: "allowed: max_in_flight, drain_timeout",
+					})
+				}
+			}
+			if v, ok := lm["max_in_flight"]; ok {
+				l.MaxInFlight = asInt(v, 0)
+				if l.MaxInFlight < 1 {
+					res.Diagnostics = append(res.Diagnostics, Diagnostic{
+						Severity: "error", Code: "cfg_limits_range", File: file, Line: lines.line("limits"),
+						Message: "limits.max_in_flight must be >= 1", Hint: "",
+					})
+					l.MaxInFlight = 0
+				}
+			}
+			if v, ok := lm["drain_timeout"]; ok {
+				s, ok := v.(string)
+				if !ok {
+					res.Diagnostics = append(res.Diagnostics, Diagnostic{
+						Severity: "error", Code: "cfg_limits_type", File: file, Line: lines.line("limits"),
+						Message: "limits.drain_timeout must be a duration string (e.g. 10s, 2m)", Hint: "",
+					})
+				} else {
+					d, err := ParseDuration(s)
+					if err != nil || d <= 0 {
+						res.Diagnostics = append(res.Diagnostics, Diagnostic{
+							Severity: "error", Code: "cfg_limits_range", File: file, Line: lines.line("limits"),
+							Message: fmt.Sprintf("limits.drain_timeout %q is not a positive duration", s), Hint: "",
+						})
+					} else {
+						l.DrainTimeout = d
+					}
+				}
+			}
+			p.Limits = l
+		}
 	}
 
 	parseSection(file, raw, "sources", SectionSource, p, lines, res)
@@ -352,6 +407,7 @@ type constantsSubstituter struct {
 	file      string
 	constants map[string]any
 	diags     *[]Diagnostic
+	used      map[string]bool // constants referenced via ${constants.x}
 }
 
 // substitute expands ${constants.x} references and rejects any other scoped
@@ -385,6 +441,7 @@ func (s *constantsSubstituter) substitute(v any) any {
 					})
 					continue
 				}
+				s.used[name] = true
 				out = strings.ReplaceAll(out, m[0], fmt.Sprintf("%v", cv))
 				continue
 			}

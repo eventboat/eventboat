@@ -11,11 +11,12 @@ transforms are [Starlark](https://github.com/google/starlark-go) (a Python
 dialect): zero custom language to learn, maximal training corpus for the
 agents that write your pipelines.
 
-> **Status: v3 POC** (milestone M1 of [redesign-v3.md](redesign-v3.md)). The
-> v2 implementation is archived under [legacy/](legacy/) and is not
-> compatible. The pre-implementation design review lives in
-> [redesign-v3-review.md](redesign-v3-review.md) (verdict: pass, 13 findings).
-> License: Apache-2.0. 中文说明见 [README_ZH.md](README_ZH.md).
+> **Status: v3 POC** (milestones M1 + M2 of [redesign-v3.md](redesign-v3.md)).
+> The v2 implementation is archived under [legacy/](legacy/) and is not
+> compatible. Pre-implementation design reviews: [redesign-v3-review.md](redesign-v3-review.md)
+> (M1, verdict: pass, 13 findings) and [redesign-v3-review-m2.md](redesign-v3-review-m2.md)
+> (M2, verdict: pass, no blockers). License: Apache-2.0.
+> 中文说明见 [README_ZH.md](README_ZH.md).
 
 ## How it works
 
@@ -134,11 +135,41 @@ cron, file; sinks: kafka, http, file, drop; codecs: json, raw); CLI
 
 Trimmed or decided beyond the spec (recorded per redesign-v3-review.md):
 
+### Decision ledger (M1)
+
+The four behavioral gap-decisions the pre-implementation review required
+(redesign-v3-review.md R6–R9), numbering used in commits:
+
+- **D1 — transform failure retries on the incoming edge** (`when` delivery
+  policy of the edge that delivered the message to the failing node; fan-in
+  takes the strictest policy), then dead letters with the Starlark backtrace
+  (review R6).
+- **D2 — fan-out with zero matching edges settles as filtered**: it is a
+  normal outcome of conditional routing, counted in
+  `eventboat_fanout_no_match_total`; it never dead letters silently (review R7).
+- **D3 — `split` turns a JSON array payload into one message per element**;
+  children share the parent's spool identity and `message_id`, and the parent
+  settles only when all children settle (review R8).
+- **D4 — the spool stores raw bytes + codec marker**, not the decoded form:
+  replay stays compatible with codec upgrades (review R9; spec open question
+  #6). Sources resume from their settled watermark after a crash; the
+  unsettled tail may be re-emitted on top of the spool replay — duplicate
+  delivery, never loss.
+
+Other recorded trims:
+
 - **Trimmed:** `repl` / `plugin` CLI commands, the conformance corpus and the
   full benchmark suite of §7.4 M1 (minimal Go benchmarks exist:
   CEL predicate ≈ 290 ns/op, simple Starlark transform ≈ 1.4 µs/op on the
   dev machine). `explain`, `replay`, job pipelines (`run`/`parameters`),
-  MCP server and observability stack are M2+ (redesign-v3.md §7.4).
+  MCP server and observability stack are M2 (redesign-v3.md §7.4) — see the
+  M2 review for their implementation rulings.
+- **`limits` section** (M2): `max_in_flight` maps to the engine's spool
+  admission high watermark and `drain_timeout` bounds graceful shutdown
+  (replacing a hardcoded 10s); a `workers` total quota is trimmed (P2).
+- **`lint_constant_unused`** counts `${constants.x}` references on the
+  loader's pre-substitution record, so substituted references no longer read
+  as unused.
 - **Deployment-level config** (open question #10) is CLI flags for now:
   `--data-dir`, `--ephemeral`.
 - **Modules:** the load whitelist is `json` + `math`; there is no loadable

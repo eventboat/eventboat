@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/eventboat/eventboat/internal/config"
 	"github.com/eventboat/eventboat/internal/store"
 )
 
@@ -374,6 +375,75 @@ sinks:
 type errString string
 
 func (e errString) Error() string { return string(e) }
+
+// Options.WithLimits maps the limits section onto engine options; nil limits
+// preserve the defaults. drain() itself uses DrainTimeout instead of the old
+// hardcoded 10s (M1 debt).
+func TestOptionsWithLimits(t *testing.T) {
+	base := DefaultOptions()
+	keep := base.WithLimits(nil)
+	if keep.HighWatermark != base.HighWatermark || keep.DrainTimeout != base.DrainTimeout {
+		t.Error("nil limits must not alter options")
+	}
+	got := base.WithLimits(&config.Limits{MaxInFlight: 42, DrainTimeout: 3 * time.Second})
+	if got.HighWatermark != 42 {
+		t.Errorf("HighWatermark = %d, want 42", got.HighWatermark)
+	}
+	if got.DrainTimeout != 3*time.Second {
+		t.Errorf("DrainTimeout = %v, want 3s", got.DrainTimeout)
+	}
+	// Zero values keep the base option (limits validation guarantees >= 1,
+	// but WithLimits stays defensive).
+	got = base.WithLimits(&config.Limits{})
+	if got.HighWatermark != base.HighWatermark || got.DrainTimeout != base.DrainTimeout {
+		t.Error("empty limits must not alter options")
+	}
+}
+
+// A sink write that outlasts DrainTimeout must not wedge shutdown past the
+// bound: drain hard-cancels and Run returns once the (uncancellable) writer
+// eventually finishes, instead of the pre-M2 fixed 10-second wait plus a
+// wedged wait group.
+func TestEngineDrainBoundedByDrainTimeout(t *testing.T) {
+	h := newHarness(t)
+	pip := h.build(`
+apiVersion: eventboat/v3
+kind: Pipeline
+metadata: { name: drainlim }
+limits: { drain_timeout: 50ms }
+sources:
+  in:
+    decoder: json
+    manual: { id: in }
+sinks:
+  out:
+    from: [in]
+    mem: { id: out }
+`)
+	// The write sleeps 150ms and ignores ctx, longer than the 50ms drain
+	// bound but far below the old 10s default.
+	h.sink("out").block = func(attempt int) (<-chan struct{}, bool) {
+		ch := make(chan struct{})
+		time.AfterFunc(150*time.Millisecond, func() { close(ch) })
+		return ch, true
+	}
+
+	opts := fastOptions().WithLimits(pip.Config.Limits)
+	if opts.DrainTimeout != 50*time.Millisecond {
+		t.Fatalf("drain timeout not applied: %v", opts.DrainTimeout)
+	}
+	st := store.NewMemory("drainlim")
+	eng, stop := runEngine(t, pip, st, h.reg, opts)
+	h.source("in").Emit([]byte(`{"i":1}`), "")
+
+	start := time.Now()
+	stop() // cancels ctx; drain waits DrainTimeout then hard-cancels
+	elapsed := time.Since(start)
+	if elapsed > 3*time.Second {
+		t.Fatalf("shutdown took %v; drain bound not honored", elapsed)
+	}
+	_ = eng
+}
 
 func waitFor(t *testing.T, cond func() bool) {
 	t.Helper()

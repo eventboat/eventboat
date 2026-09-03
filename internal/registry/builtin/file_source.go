@@ -20,7 +20,7 @@ const fileSourceSchema = `{
   "type": "object",
   "required": ["path"],
   "properties": {
-    "path":       { "type": "string", "description": "file to tail, one message per line" },
+    "path":       { "type": "string", "minLength": 1, "description": "file to tail, one message per line" },
     "poll_every_ms": { "type": "integer", "minimum": 10, "default": 250 },
     "start_at":   { "type": "string", "enum": ["beginning", "end"], "default": "beginning" }
   },

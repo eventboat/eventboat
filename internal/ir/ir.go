@@ -438,8 +438,17 @@ func lint(p *Pipeline, file string, add func(config.Diagnostic)) {
 			}
 		}
 	}
-	// Unused constants.
+	// Unused constants. Usage has two sources: binding-form references
+	// (constants.x) that survive in script/predicate text, and ${constants.x}
+	// references that the loader already substituted — the latter are counted
+	// on the loader's pre-substitution record (Pipeline.ConstantsUsed),
+	// otherwise every substituted reference reads as unused.
 	used := map[string]bool{}
+	for name, ok := range p.Config.ConstantsUsed {
+		if ok {
+			used[name] = true
+		}
+	}
 	var scan func(v any)
 	scan = func(v any) {
 		switch t := v.(type) {

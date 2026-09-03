@@ -67,7 +67,7 @@ func cmdRun(args []string, jsonOut bool) int {
 		st = sqlite
 	}
 
-	eng, err := engine.New(pip, st, reg, engine.DefaultOptions())
+	eng, err := engine.New(pip, st, reg, engine.DefaultOptions().WithLimits(pip.Config.Limits))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "run: %v\n", err)
 		return 2

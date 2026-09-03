@@ -281,3 +281,53 @@ sinks:
 		}
 	}
 }
+
+// A constant referenced only via ${constants.x} is USED: the loader replaces
+// the reference before the IR sees the tree, so unused-detection must count
+// it on the loader's pre-substitution record (M1 debt regression test).
+func TestLintCountsSubstitutedConstantReferences(t *testing.T) {
+	_, diags := build(t, `
+apiVersion: eventboat/v3
+kind: Pipeline
+metadata: { name: x }
+constants:
+  out_dir: /tmp/out
+  truly_unused: 3
+sources:
+  in: { decoder: json, file: { path: a } }
+sinks:
+  out: { from: [in], file: { path: "${constants.out_dir}/events.jsonl" } }
+`)
+	// out_dir must NOT be flagged (referenced via substitution); truly_unused
+	// must be (it is genuinely unreferenced).
+	for _, d := range diags {
+		if d.Code != "lint_constant_unused" {
+			continue
+		}
+		if strings.Contains(d.Message, "out_dir") {
+			t.Fatalf("substituted reference flagged unused: %+v", d)
+		}
+		if !strings.Contains(d.Message, "truly_unused") {
+			t.Errorf("unexpected unused-constant message: %+v", d)
+		}
+	}
+}
+
+// Constant referenced via ${constants.x} inside a when predicate counts too
+// (substitution happens in the loader, before CEL compilation).
+func TestLintCountsSubstitutedConstantInWhen(t *testing.T) {
+	_, diags := build(t, `
+apiVersion: eventboat/v3
+kind: Pipeline
+metadata: { name: x }
+constants:
+  min_total: 100
+sources:
+  in: { decoder: json, file: { path: a } }
+sinks:
+  out: { from: { in: { when: 'payload.total > ${constants.min_total}' } }, file: { path: o } }
+`)
+	if hasCode(diags, "lint_constant_unused") {
+		t.Fatalf("constant referenced via ${...} in when flagged unused: %+v", diags)
+	}
+}

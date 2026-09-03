@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestLoadValidThreeSection(t *testing.T) {
@@ -382,6 +383,84 @@ sinks:
 		}
 		if count != 1 {
 			t.Errorf("placement %q: cfg_env_unset reported %d times, want 1 (diags: %+v)", placement, count, res.Diagnostics)
+		}
+	}
+}
+
+// The limits section parses into typed values (M1 debt: wiring into engine
+// Options happens via engine.Options.WithLimits).
+func TestLimitsSection(t *testing.T) {
+	res := LoadBytes("p.yaml", []byte(`
+apiVersion: eventboat/v3
+kind: Pipeline
+metadata: { name: x }
+limits:
+  max_in_flight: 500
+  drain_timeout: 45s
+sources:
+  in: { decoder: json, file: { path: a } }
+sinks:
+  out: { from: [in], file: { path: o } }
+`))
+	if res.HasErrors() {
+		t.Fatalf("unexpected errors: %+v", res.Diagnostics)
+	}
+	l := res.Pipeline.Limits
+	if l == nil || l.MaxInFlight != 500 || l.DrainTimeout != 45*time.Second {
+		t.Errorf("limits = %+v", l)
+	}
+
+	// Unknown fields, bad ranges and bad durations are errors.
+	for _, tc := range []struct {
+		name string
+		body string
+		code string
+	}{
+		{"unknown field", "limits: { max_in_flight: 5, workers: 2 }", "cfg_unknown_field"},
+		{"zero range", "limits: { max_in_flight: 0 }", "cfg_limits_range"},
+		{"bad duration", "limits: { drain_timeout: soon }", "cfg_limits_range"},
+		{"non-string duration", "limits: { drain_timeout: 10 }", "cfg_limits_type"},
+		{"not a mapping", "limits: 10", "cfg_limits_type"},
+	} {
+		res := LoadBytes("p.yaml", []byte(`
+apiVersion: eventboat/v3
+kind: Pipeline
+metadata: { name: x }
+`+tc.body+`
+sources:
+  in: { decoder: json, file: { path: a } }
+sinks:
+  out: { from: [in], file: { path: o } }
+`))
+		found := false
+		for _, d := range res.Diagnostics {
+			if d.Code == tc.code {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("%s: expected %s, got %+v", tc.name, tc.code, res.Diagnostics)
+		}
+	}
+}
+
+func TestParseDurationWithDays(t *testing.T) {
+	cases := map[string]time.Duration{
+		"90d":   90 * 24 * time.Hour,
+		"1d":    24 * time.Hour,
+		"2h":    2 * time.Hour,
+		"1d12h": 36 * time.Hour,
+		"500ms": 500 * time.Millisecond,
+	}
+	for in, want := range cases {
+		got, err := ParseDuration(in)
+		if err != nil || got != want {
+			t.Errorf("ParseDuration(%q) = %v, %v; want %v", in, got, err, want)
+		}
+	}
+	for _, bad := range []string{"", "xd", "d", "1x"} {
+		if _, err := ParseDuration(bad); err == nil {
+			t.Errorf("ParseDuration(%q) unexpectedly ok", bad)
 		}
 	}
 }

@@ -31,6 +31,7 @@ type Options struct {
 	ChannelSize    int           // default per-node channel capacity
 	BatchFlush     time.Duration // sink batch flush interval
 	DefaultTimeout time.Duration // per sink-write attempt when unset on edge
+	DrainTimeout   time.Duration // graceful drain bound before hard cancel
 	StarOptions    starhost.Options
 
 	// SinkWrapper lets testkits capture or fault-inject around real sinks.
@@ -48,8 +49,25 @@ func DefaultOptions() Options {
 		ChannelSize:    128,
 		BatchFlush:     time.Second,
 		DefaultTimeout: 30 * time.Second,
+		DrainTimeout:   10 * time.Second,
 		StarOptions:    starhost.DefaultOptions(),
 	}
+}
+
+// WithLimits applies the pipeline-level limits section on top of base options
+// (redesign-v3.md §5.10: max_in_flight caps spool admission, drain_timeout
+// bounds graceful shutdown).
+func (o Options) WithLimits(l *config.Limits) Options {
+	if l == nil {
+		return o
+	}
+	if l.MaxInFlight > 0 {
+		o.HighWatermark = l.MaxInFlight
+	}
+	if l.DrainTimeout > 0 {
+		o.DrainTimeout = l.DrainTimeout
+	}
+	return o
 }
 
 // Metrics holds engine counters (POC observability: expvar-style atomics).
@@ -130,6 +148,9 @@ func New(p *ir.Pipeline, st store.Store, reg *registry.Registry, opts Options) (
 	}
 	if opts.DefaultTimeout <= 0 {
 		opts.DefaultTimeout = 30 * time.Second
+	}
+	if opts.DrainTimeout <= 0 {
+		opts.DrainTimeout = 10 * time.Second
 	}
 
 	e := &Engine{
@@ -335,13 +356,13 @@ func (e *Engine) Run(ctx context.Context) error {
 	return nil
 }
 
-// drain waits briefly for in-flight work, then stops.
+// drain waits up to DrainTimeout for in-flight work, then hard-cancels.
 func (e *Engine) drain() {
 	done := make(chan struct{})
 	go func() { e.wg.Wait(); close(done) }()
 	select {
 	case <-done:
-	case <-time.After(10 * time.Second):
+	case <-time.After(e.Opts.DrainTimeout):
 		e.cancel()
 		<-done
 	}
