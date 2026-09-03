@@ -1,0 +1,29 @@
+apiVersion: eventboat/v3
+kind: Pipeline
+metadata: { name: linear-etl }
+
+constants:
+  currency: EUR
+
+sources:
+  ingest:
+    decoder: json
+    file:
+      path: input/orders.jsonl
+
+transforms:
+  enrich:
+    from: [ingest]
+    workers: 2
+    script: |
+      payload.total = payload.price * payload.qty
+      payload.currency = constants.currency
+      meta.label = "order-%s" % payload.id
+
+sinks:
+  out:
+    from: [enrich]
+    encoder: json
+    batch: { size: 10, timeout_ms: 500 }
+    file:
+      path: output/orders.out.jsonl

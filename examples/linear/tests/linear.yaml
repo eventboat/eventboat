@@ -1,0 +1,26 @@
+suite: linear-etl
+pipeline: ../pipeline.yaml
+cases:
+  - name: order-is-enriched
+    inject:
+      at: ingest
+      messages:
+        - fixtures/order.json
+    expect:
+      capture:
+        at: out
+        messages:
+          - payload.total: 120
+            payload.currency: EUR
+            meta.label: order-A1
+  - name: malformed-json-to-dlq
+    inject:
+      at: ingest
+      raw: "{not json"
+    expect:
+      dlq:
+        count: 1
+        reason_contains: decode
+      capture:
+        at: out
+        count: 0

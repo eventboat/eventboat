@@ -1,0 +1,49 @@
+suite: order-branching
+pipeline: ../pipeline.yaml
+cases:
+  - name: eu-order-routed-to-eu-only
+    inject:
+      at: ingest
+      messages:
+        - fixtures/eu-order.json
+    expect:
+      capture:
+        at: eu-out
+        messages:
+          - payload.total: 12000
+            meta.tier: vip
+      dlq:
+        count: 0
+  - name: us-basic-order-routed-to-us-only
+    inject:
+      at: ingest
+      messages:
+        - fixtures/us-order.json
+    expect:
+      capture:
+        at: us-out
+        messages:
+          - payload.total: 90
+            meta.tier: basic
+  - name: other-region-is-filtered
+    inject:
+      at: ingest
+      messages:
+        - fixtures/apac-order.json
+    expect:
+      capture:
+        at: eu-out
+        count: 0
+      dlq:
+        count: 0
+  - name: malformed-json-to-dlq
+    inject:
+      at: ingest
+      raw: "{not json"
+    expect:
+      dlq:
+        count: 1
+        reason_contains: decode
+      capture:
+        at: eu-out
+        count: 0

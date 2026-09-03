@@ -1,168 +1,188 @@
-# Riverpod
+# Eventboat
 
-English | [中文](README_ZH.md)
+**Agent-native event routing data plane.** Pipelines as code, verified by
+machines, operated by agents.
 
-A Go-based DAG event router. Built around a generic `Message` (`[]byte` payload + metadata), it processes streaming data through a **Source → Transform → Sink** directed acyclic graph, with conditional routing, per-edge buffering and delivery policies, retry/DLQ, and at-least-once Ack.
+Eventboat is a single Go binary: events come in (Kafka / HTTP / cron / file),
+flow through an explicit DAG (filter, map, route), and land at their
+destinations — at-least-once, verifiable, replayable. Predicates are plain
+[CEL](https://github.com/google/cel-go) (the Kubernetes expression language),
+transforms are [Starlark](https://github.com/google/starlark-go) (a Python
+dialect): zero custom language to learn, maximal training corpus for the
+agents that write your pipelines.
 
-> **Current status:** v2.0-alpha observability is complete; now in **v2.0-beta** (Sprint 2+). See the [development roadmap](riverpod-design.md#12-开发路线图).
+> **Status: v3 POC** (milestone M1 of [redesign-v3.md](redesign-v3.md)). The
+> v2 implementation is archived under [legacy/](legacy/) and is not
+> compatible. The pre-implementation design review lives in
+> [redesign-v3-review.md](redesign-v3-review.md) (verdict: pass, 13 findings).
+> License: Apache-2.0. 中文说明见 [README_ZH.md](README_ZH.md).
 
-## Features
-
-| Capability | Description |
-|------------|-------------|
-| **DAG topology** | Branching, fan-in/fan-out; edges declared via `depends_on` (including `route` / `buffer` / `delivery`) |
-| **Protocol-agnostic** | The engine does not parse payloads; encoding/decoding is handled by Codec plugins (Source `decoder` / Sink `encoder`) |
-| **eql** | CEL expressions plus assignment extensions (`payload.x = expr`, `del()`) for map / filter / edge conditions |
-| **Reliability** | Automatic backpressure propagation, refCount Ack, edge-level retry/DLQ, optional disk buffer |
-| **Observability** | `riverpod_*` Prometheus metrics, health checks; OTLP tracing and notifications planned |
-| **Extensibility** | Go compile-time registration; WASM (wazero) and gRPC out-of-process plugins planned for v2.1 |
-| **AI / Agent** | **Agent-first:** [skills.sh skill](skills/riverpod/SKILL.md) (`npx skills add riverpod/riverpod@riverpod`) + CLI/Admin API; in-pipeline `llm`/`agent` transforms planned v2.1+ — [AI/Agent Guide](docs/ai-agent.md) |
-| **Deployment** | Single binary, multiple Pipelines; K8s Operator planned for v2.1 |
-| **Configuration** | **YAML** (CRD / CI) + **HOCON** (Envelope-style local config), parsed into a unified IR; see [Configuration Reference](docs/configurations.md) |
-
-## Architecture
+## How it works
 
 ```
-YAML / HOCON / CRD  →  PipelineConfig  →  TopologyIR  →  Engine (fanOut/fanIn/Ack)
-                              ↓
-                    Source / Transform / Sink / Codec plugins
+                YAML (sources/transforms/sinks + from)
+                                  │
+                          loader ─┴─ ${VAR} substitution, strict whitelists
+                                  │
+                          verify  ─┴─ plugin JSON Schemas, topology rules,
+                                  │   CEL + Starlark compilation, lint
+                                  │
+                        Static IR (DAG + compiled programs)
+                                  │
+        ┌─────────────────────────┼──────────────────────────┐
+        ▼                         ▼                          ▼
+   Engine (per pipeline)                              CLI / future MCP
+   source ─▶ spool (SQLite) ─▶ in-memory DAG ─▶ sinks
+                  │              settle tracking      │
+                  └─ checkpoint ◀──── terminal states ┘
+                        (sink ok / dead letter / optional drop)
 ```
 
-**Terminology:** config-layer **step** (`steps.{name}`) → runtime **stage** (`StageIR`) → **edge** (expanded from `depends_on`).
+Reliability model (redesign-v3.md §6.2): every inbound message is durably
+spooled *before* it becomes visible to the DAG; a settle tracker counts
+execution branches to terminal states; the checkpoint only advances over
+settled messages; crash recovery replays the spool beyond the checkpoint.
+Each of the seven invariants has a dedicated test (`TestInvariant_*` in
+[internal/engine](internal/engine/invariants_test.go)).
 
-## Configuration Example
+## Quick start
 
-Recommended `steps` style (YAML):
+```bash
+# build
+go build -o eventboat ./cmd/eventboat
+
+# gate 1: verify (static, deterministic, zero side effects)
+eventboat verify --config examples/linear/pipeline.yaml
+eventboat --json verify --config examples/branching/pipeline.yaml   # for CI/agents
+
+# gate 2: contract tests — in-process real engine, fixture injection, capture
+eventboat test examples/linear/tests examples/branching/tests
+
+# run (durable: SQLite store under ./data; or --ephemeral for local dev)
+eventboat run --config examples/linear/pipeline.yaml
+eventboat run --config my.yaml --ephemeral
+```
+
+A pipeline is three sections joined by `from`; the plugin name is the key:
 
 ```yaml
-apiVersion: riverpod/v1
+apiVersion: eventboat/v3
 kind: Pipeline
-metadata:
-  name: order-processing
+metadata: { name: order-branching }
 
-steps:
-  kafka-in:
-    source:
-      type: kafka
-      decoder: json
-      config:
-        brokers: ["${KAFKA_BROKERS}"]
-        topics: [orders]
+constants:
+  vip_threshold: 10000
 
+sources:
+  ingest:
+    decoder: json
+    file: { path: input/events.jsonl }
+
+transforms:
   enrich:
-    depends_on: [kafka-in]
-    transform:
-      type: map
-      config:
-        dsl: |
-          payload.total = payload.price * payload.quantity
+    from: [ingest]
+    script: |
+      payload.total = payload.price * payload.qty
+      if payload.total > constants.vip_threshold:
+          meta.tier = "vip"
+      else:
+          meta.tier = "basic"
 
-  orders-out:
-    depends_on: [enrich]
-    sink:
-      type: kafka
-      encoder: json
-      batch: { size: 100, timeout: 1s }
-      config:
-        topic: orders-enriched
+sinks:
+  eu-out:
+    from: { enrich: { when: 'payload.region == "eu"' } }   # CEL predicate
+    encoder: json
+    file: { path: output/eu.jsonl }
 ```
 
-Branch routing is declared on downstream steps via `route` in `depends_on`:
+Contract tests (gate 2, §3.2 format):
 
 ```yaml
-  us-sink:
-    depends_on:
-      splitter: { route: us }
-    sink:
-      type: http
-      config: { url: https://us-api.example.com/orders }
-```
-
-### Agent-first AI integration
-
-**Step 1** is letting AI agents *operate* riverpod (write configs, validate, test, run) — not embedding LLM inside pipelines yet.
-
-The repo ships an [Agent Skill](skills/riverpod/SKILL.md) compatible with [skills.sh](https://skills.sh/):
-
-```bash
-npx skills add riverpod/riverpod@riverpod
-```
-
-It teaches agents the CLI workflow, plugin catalog, and `depends_on` patterns. Example agent loop:
-
-```bash
-riverpod validate --config my-pipeline.yaml
-riverpod test --config testdata/tests/my-suite.yaml
-riverpod run --config my-pipeline.yaml
-```
-
-In-pipeline LLM classification (future `llm` transform + `route`) will build on the same DAG model — see [AI/Agent Guide](docs/ai-agent.md).
-
-```yaml
-# Planned v2.1+ — not available yet
-  llm-classify:
-    transform:
-      type: llm
-      config:
-        provider: openai
-        model: gpt-4o-mini
+suite: order-branching
+pipeline: ../pipeline.yaml
+cases:
+  - name: eu-order-routed-to-eu-only
+    inject: { at: ingest, messages: [fixtures/eu-order.json] }
+    expect:
+      capture:
+        at: eu-out
         messages:
-          - role: user
-            content: "Classify: ${payload.body}"
+          - payload.total: 12000     # subset match
+            meta.tier: vip
+  - name: malformed-json-to-dlq
+    inject: { at: ingest, raw: "{not json" }
+    expect:
+      dlq: { count: 1, reason_contains: decode }
 ```
 
-Equivalent HOCON, flat `pipeline[]` compatibility, and branch routing details are in the [Configuration Reference](docs/configurations.md); design background in the [Configuration Model](riverpod-design.md#8-配置模型).
+See [examples/](examples/) for the three shipped pipelines (linear,
+CEL branching, fan-in).
 
-## Repository Layout
+## POC scope (M1) and recorded trims
 
-| Path | Description |
-|------|-------------|
-| [`docs/configurations.md`](docs/configurations.md) | **Configuration reference** (Engine / Steps / plugins / edges / variable substitution) |
-| [`docs/ai-agent.md`](docs/ai-agent.md) | **AI/Agent guide** (Agent Skill, MCP roadmap, in-pipeline LLM phases) |
-| [`skills/riverpod/`](skills/riverpod/) | **Agent Skill** ([skills.sh](https://skills.sh/riverpod/riverpod/riverpod)) for pipeline authoring |
-| [`skills/README.md`](skills/README.md) | Skills catalog and install commands |
-| [`riverpod-design.md`](riverpod-design.md) | Requirements and design (primary document) |
-| [`competitor-research.md`](competitor-research.md) | Competitive analysis |
-| [`design-review.md`](design-review.md) | Design review (some entries outdated; primary doc takes precedence) |
-| [`redesign-v3.md`](redesign-v3.md) | **v3 from-scratch redesign proposal** (renamed **Eventboat**; agent-native router, zero-custom-language: CEL + Starlark; proposal, not yet implemented) |
-| [`cmd/riverpod/`](cmd/riverpod/) | CLI (`run` / `validate` / `test`) |
-| [`internal/`](internal/) | Engine, config, topology, eql |
-| [`plugins/`](plugins/) | Source / Transform / Sink / Codec plugins |
-| [`_examples/`](_examples/) | Demo configs for common patterns (linear ETL, branching, fan-in, edge policies, etc.) |
-| [`testdata/pipelines/`](testdata/pipelines/) | Minimal configs for CI / unit tests |
+Implemented: three-section config with strict whitelists and `${VAR}` /
+`${?VAR}` substitution; CEL predicate host (zero custom functions, error =
+not-passed + counter); Starlark host (precompiled programs, lazy + COW
+payload/meta bindings, `json`/`math` whitelist, 100k step budget, backtraces
+into dead letters); engine with spool/settle/checkpoint/backpressure/replay
+on SQLite (`modernc.org/sqlite`, pure Go — no hand-written WAL); dead letter
+store; JSON-Schema-enforced plugin registry (sources: kafka, http_server,
+cron, file; sinks: kafka, http, file, drop; codecs: json, raw); CLI
+`verify` / `test` / `run` with `--json`.
 
-## Build & Verify
+Trimmed or decided beyond the spec (recorded per redesign-v3-review.md):
+
+- **Trimmed:** `repl` / `plugin` CLI commands, the conformance corpus and the
+  full benchmark suite of §7.4 M1 (minimal Go benchmarks exist:
+  CEL predicate ≈ 290 ns/op, simple Starlark transform ≈ 1.4 µs/op on the
+  dev machine). `explain`, `replay`, job pipelines (`run`/`parameters`),
+  MCP server and observability stack are M2+ (redesign-v3.md §7.4).
+- **Deployment-level config** (open question #10) is CLI flags for now:
+  `--data-dir`, `--ephemeral`.
+- **Modules:** the load whitelist is `json` + `math`; there is no loadable
+  `strings` module in go-starlark — string methods are built into the string
+  type (review R3).
+- **Transform failures** retry on the incoming edge's delivery policy, then
+  dead letter (review R6). A fan-out with zero matching edges settles the
+  message as filtered and counts it (review R7). `split` turns a JSON array
+  payload into one message per element; children share the parent
+  message_id (review R8).
+- **Spool stores raw bytes + codec marker** (review R9). Sources resume from
+  their settled watermark after a crash; the unsettled tail may be re-emitted
+  in addition to the spool replay — duplicate delivery, never loss.
+- **`order_key`** is evaluated at sinks into the message key (e.g. Kafka
+  partition key); full per-key ordered sharding is P1. `workers` gives
+  transforms per-node concurrency.
+- **Plugin names colliding with framework fields** are rejected at
+  registration (review R5).
+
+## Repository layout
+
+```
+cmd/eventboat/        CLI: verify / test / run
+internal/config/      typed config, strict loader, env+constants substitution
+internal/ir/          static IR: DAG, compiled CEL/Starlark, topology checks, lint
+internal/lang/        celhost (predicates), starhost (Starlark sandbox host)
+internal/engine/      spool admission, DAG execution, settle, delivery, DLQ
+internal/store/       SQLite + in-memory spool/checkpoint/dead-letter stores
+internal/registry/    plugin registration with mandatory JSON Schemas
+internal/registry/builtin/  kafka/http_server/cron/file sources, kafka/http/file/drop sinks, json/raw codecs
+internal/testkit/     injection/capture/fault-injection primitives
+internal/testrun/     §3.2 contract-test runner
+examples/             linear, branching (CEL), fan-in pipelines + suites
+legacy/               archived v2 implementation (not imported, not modified)
+```
+
+## Development
 
 ```bash
-go test ./...
-go build -o bin/riverpod ./cmd/riverpod
-bin/riverpod validate --config testdata/pipelines/linear.yaml
-bin/riverpod test --dir testdata/tests
+go build ./...
+go test ./...          # includes the seven TestInvariant_* reliability tests
+go test -race ./...
 ```
 
-Or use the Makefile:
-
-```bash
-make build test validate pipeline-test
-```
-
-## Documentation
-
-- [Configuration Reference](docs/configurations.md) — Engine, Steps, Source/Transform/Sink plugins, edges, and variable substitution (Envelope-style layout)
-- [AI/Agent Guide](docs/ai-agent.md) — LLM/Agent transforms, provider abstraction, observability, phased delivery plan
-- [Agent Skill (skills.sh)](skills/README.md) — install with `npx skills add riverpod/riverpod@riverpod`
-- [v3 Redesign Proposal](redesign-v3.md) — agent-native positioning, zero-custom-language (CEL + Starlark), config & architecture redesign (proposal, not implemented)
-- [Background & Goals](riverpod-design.md#1-背景与目标)
-- [Core Interfaces & Message](riverpod-design.md#4-核心接口与-message-模型)
-- [Engine Runtime](riverpod-design.md#6-引擎运行时)
-- [eql DSL](riverpod-design.md#7-dsl-语言设计-eql)
-- [Configuration Model (Design)](riverpod-design.md#8-配置模型)
-- [v2.0 Finalization Checklist](riverpod-design.md#13-v20-定稿检查清单)
-
-## Relationship to v1
-
-riverpod is **not** backward compatible with Riverpod v1. v1 used a linear `Input → Processor → Output` model with CloudEvents binding; v2 is a ground-up redesign with DAG topology, generic Message, CEL/eql, Codec system, and dual deployment modes.
-
-## License
-
-Apache-2.0 — see [LICENSE](LICENSE).
+Design documents: [redesign-v3.md](redesign-v3.md) (the v3 spec — the single
+source of truth), [redesign-v3-review.md](redesign-v3-review.md)
+(pre-implementation review). Historical: [riverpod-design.md](riverpod-design.md),
+[competitor-research.md](competitor-research.md), [review-2026-08.md](review-2026-08.md),
+[design-review.md](design-review.md).

@@ -1,4 +1,9 @@
 bin/
 buffers/
-'.zcode/
-'
+.zcode/
+data/
+*.db
+*.db-wal
+*.db-shm
+eventboat
+eventboat.exe

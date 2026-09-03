@@ -1,168 +1,173 @@
-# Riverpod
+# Eventboat（事件船）
 
-[English](README.md) | 中文
+**Agent 原生的事件路由数据面。** Pipelines as code, verified by machines,
+operated by agents.
 
-Go 实现的 DAG 事件路由器。以通用 `Message`（`[]byte` payload + metadata）为中心，通过 **Source → Transform → Sink** 有向无环图处理流式数据，支持条件路由、per-edge 缓冲与投递策略、重试/DLQ 与 at-least-once Ack。
+Eventboat 是一个 Go 单二进制：事件进来（Kafka / HTTP / cron / file），沿显式
+DAG 流动（过滤、映射、路由），落到目的地——全程 at-least-once、可验证、可
+回放。谓词就是 [CEL](https://github.com/google/cel-go)（Kubernetes 的表达式
+语言），映射就是 [Starlark](https://github.com/google/starlark-go)（Python
+方言）：零自研语言，Agent 语料最大化。
 
-> **当前状态：** v2.0-alpha 可观测性已闭合，进入 **v2.0-beta**（Sprint 2+）；详见 [开发路线图](riverpod-design.md#12-开发路线图)。
+> **状态：v3 POC**（[redesign-v3.md](redesign-v3.md) 的 M1 里程碑）。
+> v2 实现已整体归档至 [legacy/](legacy/)，互不兼容。实现前的独立设计审查见
+> [redesign-v3-review.md](redesign-v3-review.md)（结论：通过，13 项发现）。
+> License：Apache-2.0。English readme: [README.md](README.md)。
 
-## 特性概览
-
-| 能力 | 说明 |
-|------|------|
-| **DAG 拓扑** | 分支、fan-in/fan-out；边通过 `depends_on` 声明（含 `route` / `buffer` / `delivery`） |
-| **协议无关** | 引擎不解析 payload；编解码由 Codec 插件完成（Source `decoder` / Sink `encoder`） |
-| **eql** | CEL 表达式 + 赋值扩展（`payload.x = expr`、`del()`），用于 map / filter / 边 condition |
-| **可靠性** | 背压自动传播、refCount Ack、边级 retry/DLQ、可选 disk buffer |
-| **可观测性** | `riverpod_*` Prometheus 指标、健康检查；OTLP tracing 与通知为规划中能力 |
-| **扩展** | Go 编译时注册；WASM（wazero）与 gRPC 进程外插件计划 v2.1 |
-| **AI / Agent** | **Agent 优先：** [skills.sh Skill](skills/riverpod/SKILL.md)（`npx skills add riverpod/riverpod@riverpod`）+ CLI/Admin API；管道内 `llm`/`agent` Transform 计划 v2.1+ — 详见 [AI/Agent 指南](docs/ai-agent.md) |
-| **部署** | 单二进制多 Pipeline；K8s Operator 计划 v2.1 |
-| **配置** | **YAML**（CRD / CI）+ **HOCON**（Envelope 风格本地配置），解析为统一 IR；详见 [配置规范](docs/configurations.md) |
-
-## 架构
+## 工作原理
 
 ```
-YAML / HOCON / CRD  →  PipelineConfig  →  TopologyIR  →  Engine (fanOut/fanIn/Ack)
-                              ↓
-                    Source / Transform / Sink / Codec 插件
+                YAML（sources/transforms/sinks + from）
+                                  │
+                          loader ─┴─ ${VAR} 替换、严格白名单
+                                  │
+                          verify  ─┴─ 插件 JSON Schema、拓扑规则、
+                                  │   CEL + Starlark 编译、lint
+                                  │
+                        静态 IR（DAG + 编译产物）
+                                  │
+        ┌─────────────────────────┼──────────────────────────┐
+        ▼                         ▼                          ▼
+   Engine（每管道）                                    CLI / 未来 MCP
+   source ─▶ spool（SQLite）─▶ 内存 DAG ─▶ sinks
+                  │              settle 跟踪           │
+                  └─ checkpoint ◀──── 各分支终态 ┘
+                    （sink 成功 / 死信 / 可选边丢弃）
 ```
 
-**术语：** 配置层 **step**（`steps.{name}`）→ 运行时 **stage**（`StageIR`）→ **edge**（由 `depends_on` 展开）。
+可靠性模型（redesign-v3.md §6.2）：入口消息**先落 spool 再对 DAG 可见**；
+settle 跟踪器统计每条消息到终态的执行分支；checkpoint 只在消息 settle 后
+前进；崩溃恢复 = 从 checkpoint 重放 spool。七条不变量每条一个专属测试
+（`TestInvariant_*`，位于 [internal/engine](internal/engine/invariants_test.go)）。
 
-## 配置示例
+## 快速上手
 
-推荐 `steps` 写法（YAML）：
+```bash
+# 构建
+go build -o eventboat ./cmd/eventboat
+
+# 关卡一：verify（静态、确定性、零副作用）
+eventboat verify --config examples/linear/pipeline.yaml
+eventboat --json verify --config examples/branching/pipeline.yaml   # CI/Agent 用
+
+# 关卡二：合约测试——进程内真实引擎 + fixture 注入 + 捕获
+eventboat test examples/linear/tests examples/branching/tests
+
+# 运行（持久：SQLite 存储在 ./data；--ephemeral 为本地开发内存态）
+eventboat run --config examples/linear/pipeline.yaml
+eventboat run --config my.yaml --ephemeral
+```
+
+管道 = 三段式 + `from` 连边；插件名即键：
 
 ```yaml
-apiVersion: riverpod/v1
+apiVersion: eventboat/v3
 kind: Pipeline
-metadata:
-  name: order-processing
+metadata: { name: order-branching }
 
-steps:
-  kafka-in:
-    source:
-      type: kafka
-      decoder: json
-      config:
-        brokers: ["${KAFKA_BROKERS}"]
-        topics: [orders]
+constants:
+  vip_threshold: 10000
 
+sources:
+  ingest:
+    decoder: json
+    file: { path: input/events.jsonl }
+
+transforms:
   enrich:
-    depends_on: [kafka-in]
-    transform:
-      type: map
-      config:
-        dsl: |
-          payload.total = payload.price * payload.quantity
+    from: [ingest]
+    script: |
+      payload.total = payload.price * payload.qty
+      if payload.total > constants.vip_threshold:
+          meta.tier = "vip"
+      else:
+          meta.tier = "basic"
 
-  orders-out:
-    depends_on: [enrich]
-    sink:
-      type: kafka
-      encoder: json
-      batch: { size: 100, timeout: 1s }
-      config:
-        topic: orders-enriched
+sinks:
+  eu-out:
+    from: { enrich: { when: 'payload.region == "eu"' } }   # CEL 谓词
+    encoder: json
+    file: { path: output/eu.jsonl }
 ```
 
-分支路由在下游 step 的 `depends_on` 中声明 `route`：
+合约测试（关卡二，§3.2 格式）：
 
 ```yaml
-  us-sink:
-    depends_on:
-      splitter: { route: us }
-    sink:
-      type: http
-      config: { url: https://us-api.example.com/orders }
-```
-
-### Agent 优先的 AI 集成
-
-**第一步**是让 AI Agent **操作** riverpod（写配置、校验、测试、运行），而非先在管道内嵌 LLM。
-
-仓库提供兼容 [skills.sh](https://skills.sh/) 的 [Agent Skill](skills/riverpod/SKILL.md)：
-
-```bash
-npx skills add riverpod/riverpod@riverpod
-```
-
-教 Agent 使用 CLI、插件清单与 `depends_on` 模式。典型 Agent 工作流：
-
-```bash
-riverpod validate --config my-pipeline.yaml
-riverpod test --config testdata/tests/my-suite.yaml
-riverpod run --config my-pipeline.yaml
-```
-
-管道内 LLM 分类（未来 `llm` transform + `route`）将沿用同一 DAG 模型 — 见 [AI/Agent 指南](docs/ai-agent.md)。
-
-```yaml
-# 计划 v2.1+ — 尚未实现
-  llm-classify:
-    transform:
-      type: llm
-      config:
-        provider: openai
-        model: gpt-4o-mini
+suite: order-branching
+pipeline: ../pipeline.yaml
+cases:
+  - name: eu-order-routed-to-eu-only
+    inject: { at: ingest, messages: [fixtures/eu-order.json] }
+    expect:
+      capture:
+        at: eu-out
         messages:
-          - role: user
-            content: "Classify: ${payload.body}"
+          - payload.total: 12000     # 子集匹配
+            meta.tier: vip
+  - name: malformed-json-to-dlq
+    inject: { at: ingest, raw: "{not json" }
+    expect:
+      dlq: { count: 1, reason_contains: decode }
 ```
 
-等价 HOCON、平坦 `pipeline[]` 兼容写法及分支路由见 [配置规范](docs/configurations.md)；设计背景见 [配置模型](riverpod-design.md#8-配置模型)。
+三条示例管线（线性、CEL 分支、fan-in）见 [examples/](examples/)。
 
-## 仓库结构
+## POC 范围（M1）与裁剪记录
 
-| 路径 | 说明 |
-|------|------|
-| [`docs/configurations.md`](docs/configurations.md) | **配置规范**（Engine / Steps / 插件 / 边 / 变量替换） |
-| [`docs/ai-agent.md`](docs/ai-agent.md) | **AI/Agent 指南**（Agent Skill、MCP 路线图、管道内 LLM 阶段） |
-| [`skills/riverpod/`](skills/riverpod/) | **Agent Skill**（[skills.sh](https://skills.sh/riverpod/riverpod/riverpod)）编写 pipeline |
-| [`skills/README.md`](skills/README.md) | Skills 目录与安装说明 |
-| [`riverpod-design.md`](riverpod-design.md) | 需求与设计方案（主文档） |
-| [`competitor-research.md`](competitor-research.md) | 竞品调研 |
-| [`design-review.md`](design-review.md) | 设计评审（部分条目已过时，以主文档为准） |
-| [`redesign-v3.md`](redesign-v3.md) | **v3 从零重设计提案**（定名 **Eventboat**；Agent 原生事件路由器，零自研语言 CEL+Starlark；提案，未实施） |
-| [`cmd/riverpod/`](cmd/riverpod/) | CLI（`run` / `validate` / `test`） |
-| [`internal/`](internal/) | 引擎、配置、拓扑、eql |
-| [`plugins/`](plugins/) | Source / Transform / Sink / Codec 插件 |
-| [`_examples/`](_examples/) | 常用模式演示配置（线性 ETL、分支、fan-in、边策略等） |
-| [`testdata/pipelines/`](testdata/pipelines/) | CI / 单元测试用最小配置 |
+已实现：三段式配置（严格白名单 + `${VAR}`/`${?VAR}` 替换）；CEL 谓词宿主
+（零自定义函数，求值错误 = 条件不通过 + 计数）；Starlark 宿主（程序预编译
+复用、payload/meta 惰性 + 写时复制绑定、`json`/`math` 白名单、100k 步数预
+算、backtrace 进死信）；引擎（spool/settle/checkpoint/背压/回放，SQLite
+承载——`modernc.org/sqlite` 纯 Go，不手写 WAL）；死信库；强制 JSON Schema
+的插件注册（源：kafka/http_server/cron/file；汇：kafka/http/file/drop；
+编解码：json/raw）；CLI `verify`/`test`/`run`（`--json`）。
 
-## 构建与验证
+裁剪与超出规范的决策（对应 redesign-v3-review.md 记录）：
+
+- **裁剪：** §7.4 M1 中的 `repl`/`plugin` 命令、conformance 语料与完整基准
+  套件（保留最小 Go 基准：CEL 谓词 ≈ 290 ns/op、简单 Starlark transform
+  ≈ 1.4 µs/op，开发机实测）。`explain`、`replay`、作业管道
+  （`run`/`parameters`）、MCP server 与可观测性栈为 M2+。
+- **部署级配置**（开放问题 #10）暂以 CLI 标志代替：`--data-dir`、
+  `--ephemeral`。
+- **模块：** load 白名单为 `json` + `math`；go-starlark 无可 load 的
+  `strings` 模块——字符串方法是 string 类型内建（审查 R3）。
+- **transform 失败**按入边 delivery 策略重试后死信（审查 R6）；fan-out 零
+  匹配 = 正常 settle + 计数（审查 R7）；`split` = JSON 数组逐元素成消息，
+  子消息继承父 message_id（审查 R8）。
+- **spool 存原始字节 + codec 标记**（审查 R9）。崩溃后源从已 settle 水位
+  恢复，未 settle 尾部可能在 spool 重放之外被源再次送出——可能重复投递，
+  绝不丢失。
+- **`order_key`** 在 sink 侧求值为消息键（如 Kafka 分区键）；完整 per-key
+  有序分片为 P1。`workers` 提供 transform 节点级并发。
+- **与框架字段撞名的插件名**在注册时拒绝（审查 R5）。
+
+## 仓库布局
+
+```
+cmd/eventboat/        CLI：verify / test / run
+internal/config/      类型化配置、严格加载、环境变量+常量替换
+internal/ir/          静态 IR：DAG、CEL/Starlark 编译产物、拓扑校验、lint
+internal/lang/        celhost（谓词）、starhost（Starlark 沙箱宿主）
+internal/engine/      spool 准入、DAG 执行、settle、投递、死信
+internal/store/       SQLite + 内存版 spool/checkpoint/死信存储
+internal/registry/    插件注册（强制 JSON Schema）
+internal/registry/builtin/  内置 kafka/http_server/cron/file 源、kafka/http/file/drop 汇、json/raw 编解码
+internal/testkit/     注入/捕获/故障注入原语
+internal/testrun/     §3.2 合约测试 runner
+examples/             线性、CEL 分支、fan-in 管线与测试套件
+legacy/               归档的 v2 实现（不导入、不修改）
+```
+
+## 开发
 
 ```bash
-go test ./...
-go build -o bin/riverpod ./cmd/riverpod
-bin/riverpod validate --config testdata/pipelines/linear.yaml
-bin/riverpod test --dir testdata/tests
+go build ./...
+go test ./...          # 含七条 TestInvariant_* 可靠性测试
+go test -race ./...
 ```
 
-或使用 Makefile：
-
-```bash
-make build test validate pipeline-test
-```
-
-## 文档
-
-- [配置规范](docs/configurations.md) — Engine、Steps、Source/Transform/Sink 插件、边与变量替换（参考 Envelope 布局）
-- [AI/Agent 指南](docs/ai-agent.md) — LLM/Agent Transform、Provider 抽象、可观测性与分阶段交付计划
-- [Agent Skill (skills.sh)](skills/README.md) — `npx skills add riverpod/riverpod@riverpod` 安装
-- [v3 从零重设计提案](redesign-v3.md) — Agent 原生定位、零自研语言（CEL+Starlark）、配置与架构重设计（提案，未实施）
-- [背景与目标](riverpod-design.md#1-背景与目标)
-- [核心接口与 Message](riverpod-design.md#4-核心接口与-message-模型)
-- [引擎运行时](riverpod-design.md#6-引擎运行时)
-- [eql DSL](riverpod-design.md#7-dsl-语言设计-eql)
-- [配置模型（设计）](riverpod-design.md#8-配置模型)
-- [v2.0 定稿检查清单](riverpod-design.md#13-v20-定稿检查清单)
-
-## 与 v1 的关系
-
-riverpod **不向后兼容** Riverpod v1。v1 为线性 `Input → Processor → Output` + CloudEvents 绑定；v2 从 DAG、通用 Message、CEL/eql、Codec 体系与双模式部署重新设计。
-
-## License
-
-Apache-2.0 — 见 [LICENSE](LICENSE)。
+设计文档：[redesign-v3.md](redesign-v3.md)（v3 唯一设计规范）、
+[redesign-v3-review.md](redesign-v3-review.md)（实现前审查）。历史文档：
+[riverpod-design.md](riverpod-design.md)、[competitor-research.md](competitor-research.md)、
+[review-2026-08.md](review-2026-08.md)、[design-review.md](design-review.md)。

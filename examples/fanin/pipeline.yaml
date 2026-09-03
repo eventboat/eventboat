@@ -1,0 +1,30 @@
+apiVersion: eventboat/v3
+kind: Pipeline
+metadata: { name: audit-fan-in }
+
+constants:
+  system: audit-fan-in
+
+sources:
+  orders:
+    decoder: json
+    file:
+      path: input/orders.jsonl
+  refunds:
+    decoder: json
+    file:
+      path: input/refunds.jsonl
+
+transforms:
+  stamp:
+    from: [orders, refunds]
+    script: |
+      meta.stream = meta.source
+      payload.seen_by = constants.system
+
+sinks:
+  audit:
+    from: [stamp]
+    encoder: json
+    file:
+      path: output/audit.jsonl
