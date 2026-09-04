@@ -253,7 +253,8 @@ func New(p *ir.Pipeline, st store.Store, reg *registry.Registry, opts Options) (
 			var src registry.Source
 			var err error
 			if n.Config.Grpc != nil {
-				src, err = rpcplugin.SpawnSource(context.Background(), n.Config.Grpc, n.Config.Manifest, n.Config.PluginConfig, opts.Logf)
+				src, err = rpcplugin.SpawnSource(context.Background(), n.Config.Grpc, n.Config.Manifest, n.Config.PluginConfig, opts.Logf,
+					rpcplugin.WithRestartCounter(opts.Obs.RecordPluginRestart))
 			} else {
 				src, err = reg.NewSource(n.Config.Plugin, n.Config.PluginConfig)
 			}
@@ -272,7 +273,8 @@ func New(p *ir.Pipeline, st store.Store, reg *registry.Registry, opts Options) (
 			var sink registry.Sink
 			var err error
 			if n.Config.Grpc != nil {
-				sink, err = rpcplugin.SpawnSink(context.Background(), n.Config.Grpc, n.Config.Manifest, n.Config.PluginConfig, opts.Logf)
+				sink, err = rpcplugin.SpawnSink(context.Background(), n.Config.Grpc, n.Config.Manifest, n.Config.PluginConfig, opts.Logf,
+					rpcplugin.WithRestartCounter(opts.Obs.RecordPluginRestart))
 			} else {
 				sink, err = reg.NewSink(n.Config.Plugin, n.Config.PluginConfig)
 			}

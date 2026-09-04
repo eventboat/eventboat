@@ -164,9 +164,35 @@ absence (Init is the real liveness gate).
   Events you emit are durable before they flow; if the host crashes, you are
   re-Inited with your last Settled state and may re-emit from there.
 - **Dead letters** apply to your sink failures via the delivery policy; a
-  crashed plugin process surfaces as source/sink errors (fail fast; the host
-  does not restart plugin processes mid-run in v1 — a pipeline redeploy is
-  the recovery path).
+  crashed plugin process surfaces as source/sink errors by default (fail
+  fast, M3 semantics). Opt into automatic recovery with
+  `grpc.restart: restart` — see the next section.
+
+## Crash policy: fast-fail (default) vs restart
+
+```yaml
+sources:
+  in:
+    grpc:
+      command: ["./my-plugin"]
+      schema: my-plugin/manifest.json
+      restart: restart        # default: fast-fail
+    myplugin: { ... }
+```
+
+- **fast-fail** (default, or omitted): a dead process surfaces as stream /
+  write errors; the source stops (continuous mode) or the job run fails
+  (pull mode); a pipeline redeploy is the recovery path. This preserves the
+  M3 semantics exactly.
+- **restart**: the host supervises the process. A crash (or a wedged
+  connection) respawns it with exponential backoff (250ms doubling, capped
+  at 30s; the ladder resets after 30s of uptime), re-delivers your config
+  via Init (with the latest Settled state — pull sources resume past the
+  settled watermark; duplicates are the at-least-once contract, never loss),
+  and retries: source streams reconnect, sink Writes retry once per call on
+  a transport error (the edge's delivery policy still governs the rest).
+  Every respawn counts `eventboat_plugin_restarts_total{plugin=...}`.
+  Clean end-of-stream is exhaustion, not a crash — it does not restart.
 
 ## Minimal Go plugin skeleton
 
@@ -198,6 +224,5 @@ third party would and runs it through verify and a real engine run.
 
 - External **codec** plugins (decode/encode stays built-in; your payload is
   bytes, decode with the node's `decoder`).
-- Automatic **process restart** on crash (fail fast; redeploy the pipeline).
 - TLS between host and plugin (loopback + one-shot token is the v1 threat
   model).

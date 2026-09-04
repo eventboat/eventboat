@@ -51,7 +51,10 @@ type Handshake struct {
 	Auth         string   `json:"auth"`
 }
 
-// process is one launched plugin subprocess with its gRPC connection.
+// process is one launched plugin subprocess with its gRPC connection. The
+// exited channel closes when the OS-level process is gone (one watcher
+// goroutine owns cmd.Wait), giving the supervisor a race-free liveness
+// check.
 type process struct {
 	cmd    *exec.Cmd
 	stdin  io.WriteCloser
@@ -60,6 +63,9 @@ type process struct {
 	sink   pluginv1.SinkClient
 	hs     Handshake
 	logf   func(format string, args ...any)
+
+	exited  chan struct{}
+	waitErr error // written once, before exited closes
 }
 
 // logf defaults to discarding plugin output; the engine wires a logger when
@@ -99,7 +105,13 @@ func spawn(ctx context.Context, cfg *config.GrpcConfig, manifest *config.PluginM
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("rpcplugin: start %v: %w", cfg.Command, err)
 	}
-	p := &process{cmd: cmd, stdin: stdin, logf: logf}
+	p := &process{cmd: cmd, stdin: stdin, logf: logf, exited: make(chan struct{})}
+	// The one and only cmd.Wait: closes exited; stop/kill/watchers wait on
+	// the channel instead of racing a second Wait call.
+	go func() {
+		p.waitErr = cmd.Wait()
+		close(p.exited)
+	}()
 
 	// Drain stderr (and post-handshake stdout) so the plugin never blocks on
 	// a full pipe; both surface through the logger.
@@ -189,6 +201,25 @@ func contains(list []string, want string) bool {
 	return false
 }
 
+// alive reports whether the OS-level process is still running.
+func (p *process) alive() bool {
+	select {
+	case <-p.exited:
+		return false
+	default:
+		return true
+	}
+}
+
+// wait blocks until the process is gone (bounded by stopGrace as a safety
+// net; a killed process always exits).
+func (p *process) wait() {
+	select {
+	case <-p.exited:
+	case <-time.After(stopGrace + time.Second):
+	}
+}
+
 // stop performs the documented shutdown: RPC Close is the adapter's job;
 // here stdin closes (stop signal), then kill after the grace period.
 func (p *process) stop() {
@@ -196,13 +227,11 @@ func (p *process) stop() {
 		_ = p.conn.Close()
 	}
 	_ = p.stdin.Close()
-	done := make(chan struct{})
-	go func() { _ = p.cmd.Wait(); close(done) }()
 	select {
-	case <-done:
+	case <-p.exited:
 	case <-time.After(stopGrace):
 		p.kill()
-		<-done
+		<-p.exited
 	}
 }
 
@@ -210,7 +239,7 @@ func (p *process) kill() {
 	if p.cmd.Process != nil {
 		_ = p.cmd.Process.Kill()
 	}
-	_ = p.cmd.Wait()
+	p.wait()
 }
 
 func (p *process) logfStdout(s string) { p.logf("plugin stdout: %s", s) }

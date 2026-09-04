@@ -60,6 +60,7 @@ type Obs struct {
 	JobsCompleted         metric.Int64Counter
 	JobRowsRead           metric.Int64Counter
 	JobRowsDelivered      metric.Int64Counter
+	PluginRestarts        metric.Int64Counter
 
 	ScriptDuration    metric.Float64Histogram
 	SinkWriteDuration metric.Float64Histogram
@@ -230,6 +231,7 @@ func (o *Obs) createInstruments() error {
 	o.JobsCompleted = newCounter("eventboat_jobs_completed_total", "Job runs completed by terminal status")
 	o.JobRowsRead = newCounter("eventboat_job_rows_read_total", "Rows read by job runs")
 	o.JobRowsDelivered = newCounter("eventboat_job_rows_delivered_total", "Rows delivered by job runs")
+	o.PluginRestarts = newCounter("eventboat_plugin_restarts_total", "Supervisor respawns of crashed gRPC plugin processes (grpc.restart: restart)")
 
 	o.ScriptDuration = newHist("eventboat_script_duration_seconds", "Starlark script execution duration")
 	o.WasmDuration = newHist("eventboat_wasm_transform_duration_seconds", "WASM transform invocation duration")
@@ -252,6 +254,15 @@ func (o *Obs) RecordMessageIn(pipeline, source string) {
 	}
 	o.MessagesIn.Add(context.Background(), 1, metric.WithAttributes(
 		attribute.String("pipeline", pipeline), attribute.String("source", source)))
+}
+
+// RecordPluginRestart counts one supervisor respawn of a crashed external
+// plugin process.
+func (o *Obs) RecordPluginRestart(plugin string) {
+	if o == nil || o.PluginRestarts == nil {
+		return
+	}
+	o.PluginRestarts.Add(context.Background(), 1, metric.WithAttributes(attribute.String("plugin", plugin)))
 }
 
 // ReasonClass maps a dead-letter reason to a coarse class label.

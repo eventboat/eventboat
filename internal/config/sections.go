@@ -266,10 +266,10 @@ func parseNode(file, name string, section Section, nodeRaw any, line, pluginLine
 			})
 		} else {
 			for k := range gm {
-				if k != "command" && k != "env" && k != "schema" {
+				if k != "command" && k != "env" && k != "schema" && k != "restart" {
 					res.Diagnostics = append(res.Diagnostics, Diagnostic{
 						Severity: "error", Code: "cfg_unknown_field", File: file, Line: line,
-						Message: fmt.Sprintf("unknown grpc field %q", k), Hint: "allowed: command, env, schema",
+						Message: fmt.Sprintf("unknown grpc field %q", k), Hint: "allowed: command, env, schema, restart",
 					})
 				}
 			}
@@ -316,6 +316,18 @@ func parseNode(file, name string, section Section, nodeRaw any, line, pluginLine
 				})
 			} else {
 				g.Schema = s
+			}
+			if rv, ok := gm["restart"]; ok {
+				r, ok := rv.(string)
+				if !ok || (r != "fast-fail" && r != "restart") {
+					res.Diagnostics = append(res.Diagnostics, Diagnostic{
+						Severity: "error", Code: "cfg_grpc_restart", File: file, Line: line,
+						Message: fmt.Sprintf("grpc.restart of node %q must be \"fast-fail\" or \"restart\", got %v", name, rv),
+						Hint:    "fast-fail (default) preserves M3 semantics; restart respawns with exponential backoff",
+					})
+				} else {
+					g.Restart = r
+				}
 			}
 			n.Grpc = g
 		}

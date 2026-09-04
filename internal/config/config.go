@@ -182,6 +182,11 @@ type GrpcConfig struct {
 	Command []string          // argv; Command[0] is the binary
 	Env     map[string]string // extra environment for the plugin process
 	Schema  string            // manifest path, relative to the pipeline file
+	// Restart is the crash policy: "" or "fast-fail" (default, the M3
+	// semantics — a dead plugin surfaces as stream/write errors and a
+	// redeploy recovers) or "restart" (the host respawns the process with
+	// exponential backoff and re-delivers its config).
+	Restart string
 }
 
 // PluginManifest is the static declaration file of an external plugin:

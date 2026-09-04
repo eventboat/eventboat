@@ -13,10 +13,16 @@ import (
 
 // SpawnSink launches an external sink plugin and returns it as a
 // registry.Sink. Write errors follow the same delivery policy as built-in
-// sinks: the engine retries per the edge policy, then dead letters.
-func SpawnSink(ctx context.Context, cfg *config.GrpcConfig, manifest *config.PluginManifest, pluginCfg map[string]any, logf func(string, ...any)) (registry.Sink, error) {
+// sinks: the engine retries per the edge policy, then dead letters. Under
+// grpc.restart: restart a transport error respawns the plugin once within
+// the Write call before surfacing.
+func SpawnSink(ctx context.Context, cfg *config.GrpcConfig, manifest *config.PluginManifest, pluginCfg map[string]any, logf func(string, ...any), opts ...SpawnOption) (registry.Sink, error) {
 	if manifest.Kind != "sink" {
 		return nil, fmt.Errorf("rpcplugin: manifest of %q declares kind %q", manifest.Name, manifest.Kind)
+	}
+	var so spawnOpts
+	for _, o := range opts {
+		o(&so)
 	}
 	p, err := spawn(ctx, cfg, manifest, "sink", logf)
 	if err != nil {
@@ -27,32 +33,49 @@ func SpawnSink(ctx context.Context, cfg *config.GrpcConfig, manifest *config.Plu
 		p.stop()
 		return nil, fmt.Errorf("rpcplugin: encode config of %q: %w", manifest.Name, err)
 	}
-	return &sink{plug: p, cfgJSON: cfgJSON}, nil
+	s := &sink{plug: p, cfgJSON: cfgJSON}
+	s.initRPC = func(p *process, _ []byte) error {
+		resp, err := p.sink.Init(context.Background(), &pluginv1.InitRequest{
+			ConfigJson: string(s.cfgJSON),
+		})
+		if err != nil {
+			return fmt.Errorf("plugin %q: init transport error: %w", p.hs.Name, err)
+		}
+		if resp.Error != "" {
+			return fmt.Errorf("plugin %q: init: %s", p.hs.Name, resp.Error)
+		}
+		return nil
+	}
+	if cfg.Restart == "restart" {
+		s.sup = newSupervisor(p, cfg, manifest, "sink", logf, so.onRestart, s.initRPC)
+	}
+	return s, nil
 }
 
 type sink struct {
 	plug    *process
 	cfgJSON []byte
 
+	// initRPC delivers config to one process (fast-fail initOnce path and
+	// the supervisor's per-restart reinit share it).
+	initRPC func(p *process, state []byte) error
+
 	initOnce sync.Once
 	initErr  error
+
+	sup *supervisor // nil = fast-fail (M3 semantics)
 }
 
 // init delivers the plugin config. registry.Sink has no Init step (the
 // engine never calls one), so the adapter delivers config before the first
 // Write (and before Close, so even a zero-write sink gets configured).
 func (s *sink) init() error {
+	if s.sup != nil {
+		_, err := s.sup.live(context.Background())
+		return err
+	}
 	s.initOnce.Do(func() {
-		resp, err := s.plug.sink.Init(context.Background(), &pluginv1.InitRequest{
-			ConfigJson: string(s.cfgJSON),
-		})
-		if err != nil {
-			s.initErr = fmt.Errorf("plugin %q: init transport error: %w", s.plug.hs.Name, err)
-			return
-		}
-		if resp.Error != "" {
-			s.initErr = fmt.Errorf("plugin %q: init: %s", s.plug.hs.Name, resp.Error)
-		}
+		s.initErr = s.initRPC(s.plug, nil)
 	})
 	return s.initErr
 }
@@ -63,21 +86,46 @@ func (s *sink) Write(ctx context.Context, msgs []registry.Message) error {
 	if err := s.init(); err != nil {
 		return err
 	}
-	batch := make([]*pluginv1.Event, len(msgs))
-	for i, m := range msgs {
-		batch[i] = messageToEvent(m)
+	p := s.plug
+	if s.sup != nil {
+		var err error
+		p, err = s.sup.live(ctx)
+		if err != nil {
+			return err
+		}
 	}
-	resp, err := s.plug.sink.Write(ctx, &pluginv1.WriteRequest{Batch: batch})
+	resp, err := p.sink.Write(ctx, &pluginv1.WriteRequest{Batch: writeBatch(msgs)})
+	if err != nil && s.sup != nil {
+		// Transport error: the process may be dead or wedged — respawn once
+		// and retry this batch; the engine's edge policy handles the rest.
+		s.sup.drop(p)
+		if p, err = s.sup.live(ctx); err != nil {
+			return err
+		}
+		resp, err = p.sink.Write(ctx, &pluginv1.WriteRequest{Batch: writeBatch(msgs)})
+	}
 	if err != nil {
-		return fmt.Errorf("plugin %q: write transport error: %w", s.plug.hs.Name, err)
+		return fmt.Errorf("plugin %q: write transport error: %w", p.hs.Name, err)
 	}
 	if resp.Error != "" {
-		return fmt.Errorf("plugin %q: write: %s", s.plug.hs.Name, resp.Error)
+		return fmt.Errorf("plugin %q: write: %s", p.hs.Name, resp.Error)
 	}
 	return nil
 }
 
+func writeBatch(msgs []registry.Message) []*pluginv1.Event {
+	batch := make([]*pluginv1.Event, len(msgs))
+	for i, m := range msgs {
+		batch[i] = messageToEvent(m)
+	}
+	return batch
+}
+
 func (s *sink) Close() error {
+	if s.sup != nil {
+		s.sup.close()
+		return nil
+	}
 	_ = s.init() // zero-write sinks still receive their config before Close
 	ctx, cancel := context.WithTimeout(context.Background(), closeRPCTimeout)
 	defer cancel()
