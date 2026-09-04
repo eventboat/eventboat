@@ -1,0 +1,44 @@
+apiVersion: eventboat/v3
+kind: Pipeline
+metadata: {name: edge-delivery}
+edge_defaults:
+  buffer:
+    max_events: 64
+    type: memory
+sources:
+  cron-source:
+    decoder: json
+    cron:
+      expression: '*/1 * * * *'
+      payload: '{"id":"evt-1","payload":"data"}'
+transforms:
+  enrich:
+    from:
+      cron-source:
+        buffer:
+          max_events: 64
+          type: memory
+    script: |-
+      payload.enriched = True
+sinks:
+  analytics-out:
+    from:
+      enrich:
+        required: false
+        buffer:
+          max_events: 16
+          type: memory
+    drop: {}
+  primary-out:
+    from:
+      enrich:
+        delivery:
+          backoff: exponential
+          retries: 3
+          timeout_ms: 5000
+        buffer:
+          max_events: 128
+          type: memory
+    encoder: json
+    http:
+      url: ${PRIMARY_SINK_URL}

@@ -1,0 +1,23 @@
+apiVersion: eventboat/v3
+kind: Pipeline
+metadata: {name: order-processing}
+limits:
+  max_in_flight: 10000
+sources:
+  cron-source:
+    decoder: json
+    cron:
+      expression: 0 * * * *
+      payload: '{"price":10,"quantity":5}'
+transforms:
+  enrich:
+    from: cron-source
+    workers: 2
+    script: |-
+      payload.total = payload.price * payload.quantity
+sinks:
+  drop-sink:
+    from:
+      enrich:
+        when: payload.total > 20
+    drop: {}

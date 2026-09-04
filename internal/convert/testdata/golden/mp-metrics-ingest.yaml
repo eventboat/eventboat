@@ -1,0 +1,19 @@
+apiVersion: eventboat/v3
+kind: Pipeline
+metadata: {name: metrics-ingest}
+sources:
+  sample:
+    decoder: json
+    cron:
+      expression: '*/15 * * * *'
+      payload: '{"pipeline":"metrics-ingest","cpu":0.42,"mem_mb":512}'
+transforms:
+  normalize:
+    from: sample
+    script: |-
+      payload.ts = "riverpod"
+      meta.metric = True
+sinks:
+  drop:
+    from: normalize
+    drop: {}

@@ -102,8 +102,23 @@ func (m msgValue) lazyRoot() (map[string]any, bool) {
 	return root, ok
 }
 
-// fieldGet reads one field through the cache, converting lazily.
+// fieldGet reads one field. In the lazy regime only scalar fields are
+// served from the Go root (fresh conversion is safe — scalars are
+// immutable); container fields (maps/lists) materialize the whole tree
+// first, because Starlark reference semantics require nested writes
+// (`payload.nested.k = v`, `remove(payload.a, "b")`) to reach the state —
+// serving a fresh copy would silently lose them.
 func (m msgValue) fieldGet(name string) (starlark.Value, bool) {
+	if m.s.star != nil {
+		if d, ok := m.s.star.(starlark.Mapping); ok {
+			v, found, err := d.Get(starlark.String(name))
+			if err != nil || !found {
+				return nil, false
+			}
+			return v, true
+		}
+		return nil, false
+	}
 	if v := m.s.cache[name]; v != nil {
 		return v, true
 	}
@@ -114,6 +129,13 @@ func (m msgValue) fieldGet(name string) (starlark.Value, bool) {
 	raw, found := root[name]
 	if !found {
 		return nil, false
+	}
+	switch raw.(type) {
+	case map[string]any, []any:
+		if err := m.materialize(); err != nil {
+			return nil, false
+		}
+		return m.fieldGet(name) // serve from the materialized tree (reference)
 	}
 	v := GoToStarlark(raw)
 	if m.s.cache == nil {
@@ -313,6 +335,64 @@ func (m msgValue) materialize() error {
 	m.s.star = GoToStarlark(m.s.goVal)
 	m.s.dirty = true
 	return nil
+}
+
+// deleteKey removes one key (remove() glue, spec §4.8 del() migration
+// target). Works on both the lazy Go root and the materialized tree; marks
+// the state dirty so the engine writes the deletion back. A missing key is
+// a no-op.
+func (m msgValue) deleteKey(k starlark.Value) error {
+	key, ok := k.(starlark.String)
+	if !ok {
+		return fmt.Errorf("%s: remove key must be a string, got %s", m.s.kind, k.Type())
+	}
+	if m.s.star != nil {
+		if d, ok := m.s.star.(deleter); ok {
+			_, _, err := d.Delete(k)
+			return err
+		}
+		return fmt.Errorf("%s: value of type %s does not support remove", m.s.kind, m.s.star.Type())
+	}
+	root, ok := m.lazyRoot()
+	if !ok {
+		return fmt.Errorf("%s: value of type %T is not a mapping", m.s.kind, m.s.goVal)
+	}
+	delete(root, key.GoString())
+	delete(m.s.cache, key.GoString())
+	m.s.dirty = true
+	return nil
+}
+
+// deleter matches *starlark.Dict (and attrDict embedding it).
+type deleter interface {
+	Delete(k starlark.Value) (starlark.Value, bool, error)
+}
+
+// removeKey is the remove(dict, key) host glue: deletes key from payload/meta
+// roots or nested dicts. Missing keys are no-ops; returns None.
+func removeKey(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var dict, key starlark.Value
+	if err := starlark.UnpackArgs("remove", args, kwargs, "dict", &dict, "key", &key); err != nil {
+		return nil, err
+	}
+	switch d := dict.(type) {
+	case msgValue:
+		if err := d.deleteKey(key); err != nil {
+			return nil, err
+		}
+		return starlark.None, nil
+	case *attrDict:
+		if _, _, err := d.Dict.Delete(key); err != nil {
+			return nil, fmt.Errorf("remove: %w", err)
+		}
+		return starlark.None, nil
+	case *starlark.Dict:
+		if _, _, err := d.Delete(key); err != nil {
+			return nil, fmt.Errorf("remove: %w", err)
+		}
+		return starlark.None, nil
+	}
+	return nil, fmt.Errorf("remove: first argument must be a mapping (payload/meta root or a dict), got %s", dict.Type())
 }
 
 type emptyIterator struct{}

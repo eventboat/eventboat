@@ -1,0 +1,22 @@
+apiVersion: eventboat/v3
+kind: Pipeline
+metadata: {name: transform-sink-combined}
+sources:
+  cron-source:
+    decoder: json
+    cron:
+      expression: 0 * * * *
+      payload: '{"message":"hello"}'
+transforms:
+  enrich:
+    from: cron-source
+    script: |-
+      payload.message = payload.message + " riverpod"
+  publish:
+    from: enrich
+    script: |-
+      meta.published = True
+sinks:
+  publish-sink:
+    from: publish
+    drop: {}

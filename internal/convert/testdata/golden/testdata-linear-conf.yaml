@@ -1,0 +1,34 @@
+apiVersion: eventboat/v3
+kind: Pipeline
+metadata: {name: converted}
+limits:
+  max_in_flight: 10000
+sources:
+  kafka-source:
+    decoder: json
+    kafka:
+      brokers:
+        - ${KAFKA_BROKERS}
+      group_id: order-consumer
+      topics:
+        - orders
+transforms:
+  enrich:
+    from: kafka-source
+    workers: 8
+    script: |-
+      payload.total = payload.price * payload.quantity
+sinks:
+  kafka-sink:
+    from:
+      enrich:
+        when: payload.total > 100
+    encoder: json
+    batch:
+      size: 100
+      timeout_ms: 1000
+    kafka:
+      brokers:
+        - localhost:9092
+      optional_tag: ${?OPTIONAL_TAG}
+      topic: orders-enriched

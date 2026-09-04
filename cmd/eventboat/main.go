@@ -19,6 +19,7 @@ Usage:
   eventboat [--json] jobs show <run-id> --config <job.yaml>
   eventboat [--json] explain --config <pipeline.yaml> [--message f.json] [--topology]
   eventboat [--json] replay --config <pipeline.yaml> (--dlq | --spool --from N | --job <run-id>) [--dry-run]
+  eventboat convert <v2-config> [-o out.yaml] [--report report.md]
   eventboat [--json] plugin catalog
   eventboat mcp (--stdio | --http) [--config-dir <dir>] [--data-dir DIR]
 
@@ -36,6 +37,9 @@ Commands:
             CEL evaluation and Starlark dry-run; --topology renders the DAG
   replay    re-inject dead letters (--dlq), a spool window (--spool) or one
             job run's dead letters (--job) into a live pipeline (§3.3)
+  convert   translate an archived v2 pipeline (steps/pipeline[]/edges, YAML
+            or HOCON) to the v3 three-section form + a migration report
+            (§7.3); exits 1 when the output fails verify
   plugin    plugin ABI surface: catalog lists registered plugins with their
             ABI versions (§6.5)
   mcp       the agent operations surface: MCP tools over stdio (for agent
@@ -78,6 +82,8 @@ func run(args []string) int {
 		return cmdExplain(rest[1:], jsonOut)
 	case "replay":
 		return cmdReplay(rest[1:], jsonOut)
+	case "convert":
+		return cmdConvert(rest[1:], jsonOut)
 	case "plugin":
 		return cmdPlugin(rest[1:], jsonOut)
 	case "mcp":

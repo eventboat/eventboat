@@ -1,0 +1,47 @@
+apiVersion: eventboat/v3
+kind: Pipeline
+metadata: {name: route-branching}
+edge_defaults:
+  buffer:
+    max_events: 32
+    type: memory
+sources:
+  cron-source:
+    decoder: json
+    cron:
+      expression: '*/1 * * * *'
+      payload: '{"order_id":"ORD-42","region":"us","amount":99.5}'
+transforms:
+  tag-region:
+    from:
+      cron-source:
+        buffer:
+          max_events: 32
+          type: memory
+    script: |-
+      meta.region = payload.region
+sinks:
+  default-sink:
+    from:
+      tag-region:
+        when: '!(meta.region == ''us'' || meta.region == ''eu'')'
+        buffer:
+          max_events: 32
+          type: memory
+    drop: {}
+  eu-sink:
+    from:
+      tag-region:
+        when: meta.region == 'eu' && !(meta.region == 'us')
+        buffer:
+          max_events: 32
+          type: memory
+    drop: {}
+  us-sink:
+    from:
+      tag-region:
+        when: meta.region == 'us'
+        buffer:
+          max_events: 32
+          type: memory
+    drop: {}

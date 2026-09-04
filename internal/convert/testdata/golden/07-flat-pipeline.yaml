@@ -1,0 +1,20 @@
+apiVersion: eventboat/v3
+kind: Pipeline
+metadata: {name: flat-pipeline}
+sources:
+  cron-source:
+    decoder: json
+    cron:
+      expression: 0 * * * *
+      payload: '{"value":1}'
+transforms:
+  double:
+    from: cron-source
+    script: |-
+      payload.value = payload.value * 2
+sinks:
+  drop-sink:
+    from:
+      double:
+        when: payload.value > 0
+    drop: {}

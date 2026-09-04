@@ -1,0 +1,13 @@
+apiVersion: eventboat/v3
+kind: Pipeline
+metadata: {name: heartbeat}
+sources:
+  tick:
+    decoder: json
+    cron:
+      expression: '*/10 * * * *'
+      payload: '{"pipeline":"heartbeat","tick":true}'
+sinks:
+  drop:
+    from: tick
+    drop: {}

@@ -61,7 +61,7 @@ func fileOptions() *syntax.FileOptions {
 
 func isPredeclared(name string) bool {
 	switch name {
-	case "payload", "meta", "constants", "parameters", "safe_json_decode":
+	case "payload", "meta", "constants", "parameters", "safe_json_decode", "remove":
 		return true
 	}
 	return false
@@ -74,6 +74,7 @@ type Program struct {
 	prog    *starlark.Program
 	opts    Options
 	safeDec *starlark.Builtin
+	removeB *starlark.Builtin
 }
 
 // Compile parses and resolves a script. Resolution errors (undefined names,
@@ -92,6 +93,7 @@ func Compile(name, src string, opts Options) (*Program, error) {
 		prog:    prog,
 		opts:    opts,
 		safeDec: starlark.NewBuiltin("safe_json_decode", safeJSONDecode),
+		removeB: starlark.NewBuiltin("remove", removeKey),
 	}, nil
 }
 
@@ -140,6 +142,7 @@ func (p *Program) RunWithParams(payload, meta *MsgState, constants, params starl
 		"constants":        constants,
 		"parameters":       params,
 		"safe_json_decode": p.safeDec,
+		"remove":           p.removeB,
 	}
 	if _, err := p.prog.Init(thread, predeclared); err != nil {
 		return asScriptError(err)
