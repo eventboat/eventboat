@@ -11,12 +11,14 @@ transforms are [Starlark](https://github.com/google/starlark-go) (a Python
 dialect): zero custom language to learn, maximal training corpus for the
 agents that write your pipelines.
 
-> **Status: v3 POC** (milestones M1 + M2 + M3 of [redesign-v3.md](redesign-v3.md)).
+> **Status: v3 POC** (milestones M1 + M2 + M3 + M4 of
+> [redesign-v3.md](redesign-v3.md)).
 > The v2 implementation is archived under [legacy/](legacy/) and is not
 > compatible. Pre-implementation design reviews: [redesign-v3-review.md](redesign-v3-review.md)
 > (M1, verdict: pass, 13 findings), [redesign-v3-review-m2.md](redesign-v3-review-m2.md)
-> (M2, verdict: pass, no blockers) and [redesign-v3-review-m3.md](redesign-v3-review-m3.md)
-> (M3, verdict: pass, no blockers). License: Apache-2.0.
+> (M2, verdict: pass, no blockers), [redesign-v3-review-m3.md](redesign-v3-review-m3.md)
+> (M3, verdict: pass, no blockers) and [redesign-v3-review-m4.md](redesign-v3-review-m4.md)
+> (M4, verdict: pass, no blockers). License: Apache-2.0.
 > 中文说明见 [README_ZH.md](README_ZH.md).
 
 ## How it works
@@ -93,6 +95,15 @@ eventboat [--json] plugin catalog           # registered plugins with ABI versio
 # WASM transform tier (wazero, capability sandbox): docs/wasm.md
 # CESQL edge dialect: when: { lang: cesql, expr: "region = 'EU' AND data.amount > 100" }
 
+# the ecosystem surface (M4, §7.4): convert, LSP, codecs, schema export, repl
+eventboat convert legacy/_examples/02-route-branching.yaml -o v3.yaml --report v3.md
+eventboat verify --config v3.yaml                     # converted output must verify
+eventboat lsp                                          # language server over stdio (editors/editors/vscode)
+eventboat [--json] plugin schema kafka                 # one schema, pretty or JSON
+eventboat plugin schema --all --dir schemas/           # offline bundle for IDEs/agents
+eventboat repl --message sample.json --cel 'payload.total > 100'
+eventboat repl --message sample.json --script fix.star
+
 # the example's sqlite source database regenerates with:
 go run ./examples/job-sync/seed
 ```
@@ -152,7 +163,7 @@ cases:
 See [examples/](examples/) for the three shipped pipelines (linear,
 CEL branching, fan-in).
 
-## POC scope (M1 + M2 + M3) and recorded trims
+## POC scope (M1 + M2 + M3 + M4) and recorded trims
 
 Implemented: three-section config with strict whitelists and `${VAR}` /
 `${?VAR}` / `${constants.x}` / `${parameters.x}` substitution; CEL predicate
@@ -168,7 +179,20 @@ handshake, third-party example + acceptance in `examples/plugins/` and
 field, guests buildable with the standard Go toolchain,
 [docs/wasm.md](docs/wasm.md)) and the **CESQL edge dialect**
 (`when: {lang: cesql}` reusing the official CloudEvents parser, the official
-TCK vendored and 100% passing in CI, `data.*` payload extension); engine with
+TCK vendored and 100% passing in CI, `data.*` payload extension); **the
+ecosystem surface (M4)**: the **convert** tool (every archived v2 writing
+style — steps/pipeline[]/edges, YAML or HOCON — into the v3 three-section
+form; eql1 rendered via the CEL AST into Starlark with a compile gate;
+itemized migration report; all 12 legacy fixtures convert-and-verify green
+in CI plus three permanent semantic-equivalence tests), the **LSP**
+(`eventboat lsp`: diagnostics from the real verify pipeline, completion
+over the registry catalog + plugin schemas + framework whitelists, schema
+hover; minimal VS Code launcher in examples/editors/vscode), the
+**csv/avro/protobuf codecs** with named `codecs:` declarations (§5.10;
+[docs/codecs.md](docs/codecs.md) has the CEL type-mapping table),
+**`plugin schema` export** (single or `--all --dir`, for offline
+IDEs/agents) and **`repl`** (one-shot `--cel`/`--script` against a sample
+message plus a deterministic interactive session); engine with
 spool/settle/checkpoint/backpressure/replay on SQLite (`modernc.org/sqlite`,
 pure Go — no hand-written WAL); dead letter store; **job pipelines**
 (`run`/`parameters`/`hooks`/`catchup_window`/`overlap` + sql source with
@@ -179,7 +203,74 @@ stdio + Streamable HTTP, 14 tools), **Admin REST + SSE + embedded read-only
 UI**, Runtime deployment config; **OpenTelemetry** (Prometheus + OTLP dual
 export, 27 metrics, job-run spans); JSON-Schema-enforced plugin registry with
 ABI versions; CLI `verify`/`test`/`run`/`trigger`/`jobs`/`explain`/`replay`/
-`plugin`/`mcp` with `--json`.
+`convert`/`repl`/`lsp`/`plugin`/`mcp` with `--json`.
+
+### The ecosystem surface (M4, §7.4) — rulings
+
+From [redesign-v3-review-m4.md](redesign-v3-review-m4.md) plus
+implementation-time discoveries:
+
+- **LSP protocol**: hand-written minimal JSON-RPC 2.0 (~300 lines, zero new
+  dependencies). go.lsp.dev/jsonrpc2 is maintained but go.lsp.dev/protocol
+  now requires Go 1.26 (> the module's 1.25); using jsonrpc2 without
+  protocol still means hand-writing every LSP type, at which point the
+  dependency saves nothing. Diagnostics run the exact verify path
+  (`ops.Service.Verify` — the same code the MCP verify tool calls);
+  completion is line/indent-based over the loader's framework-field
+  whitelists, the registry catalog and plugin JSON Schemas; flow-style
+  mappings validate but complete less richly than block style (documented).
+  Protocol-level integration tests drive the server over in-process pipes
+  (initialize → didOpen broken → diagnostics → didChange → clear →
+  completion → hover → shutdown/exit).
+- **avro codec**: [hamba/avro](https://github.com/hamba/avro) v2 — LinkedIn's
+  own README states it migrated internally and goavro is in maintenance
+  mode. Schemas are inline (`schema:`); payloads decode to plain Go values,
+  so CEL/Starlark see the same shapes the json codec produces.
+- **protobuf codec**: dynamic schemas via a compiled `FileDescriptorSet`
+  (`descriptor_set:` + `message:`; paths resolve against the pipeline file,
+  the wasm-module rule) using the protobuf runtime already in the module
+  graph — zero new dependencies. Decode/encode run through protojson (a
+  correct, honest double conversion; the tier is for interoperability, not
+  throughput).
+- **csv codec**: one message = one RFC 4180 record. Columns come from an
+  explicit typed `columns:` list or, with `header: true`, from the first
+  record the instance decodes (instance state — documented; declare
+  `columns` when replay determinism matters). Encode emits data rows only.
+- **`codecs:` section shape**: `name: {type: <codec>, ...config}`; the
+  declaration namespace and registered-codec namespace are disjoint
+  (`codecs: {json: ...}` is a verify error). Codec registration joined the
+  schema+version-mandatory rule (`RegisterCodec(name, version, schema,
+  factory)`). **Catalog JSON shape change**: `plugin catalog --json` and the
+  MCP `catalog` tool now emit codecs as `{name, version, schema}` objects
+  (previously bare name strings) — consumers must parse accordingly.
+- **convert**: the legacy loader is NOT importable (a separate module's
+  `internal/` packages), so the v2 shapes live as a read-only copy in
+  `internal/convert` (legacy/ untouched). "Auto-migrated" means
+  machine-checked: generated scripts compile under the real Starlark host,
+  generated configs pass the real verify; anything else becomes a report
+  item with reason + suggested rewrite. Route transforms fold into ordered
+  edge guards (`p_i && !(p_1 || ... || p_{i-1})`), filters fold into their
+  outgoing edges' `when`; the recorded semantic difference is that v2's
+  silent no-match drop becomes v3's settle-as-filtered with a counter
+  (same message fate, observable). HOCON `${VAR}`/`${?VAR}` references are
+  protected and restored (not frozen at convert time), so the output
+  re-substitutes at v3 load time uniformly. Sticky er-route references
+  (routes read non-adjacently) keep the route node as a meta.route-writing
+  script with v3 `route:` sugar.
+- **starhost fixes found on the way**: `remove(dict, key)` glue added (the
+  §4.8 `del()` migration target), and a **pre-existing silent-loss bug**
+  fixed — nested writes through the lazy bindings (`payload.nested.k = v`)
+  never propagated; container fields now materialize for reference
+  semantics while scalar-only reads stay lazy (regression-tested).
+- **`repl`**: implemented per §3.6 (trimmed since M1). The interactive loop
+  re-executes the accumulated script against the original sample each line
+  — deterministic session semantics, the §4.3 guarantee.
+- **Trims (M4 review R14)**: the **Pebble performance profile** is cut
+  (replay/DLQ/job-history queries are SQL; a Pebble backend means a second
+  query engine, non-anchor work at POC scale); the **K8s Operator** is cut
+  to a ready Deployment manifest + [docs/k8s.md](docs/k8s.md) (the binary's
+  verify-first reload and probe surface already provide what an operator
+  would reconcile; §6.7 keeps it P2).
 
 Trimmed or decided beyond the spec (recorded per redesign-v3-review.md):
 
@@ -223,13 +314,14 @@ The four behavioral gap-decisions the pre-implementation review required
 
 Other recorded trims:
 
-- **Trimmed (still open):** `repl` CLI, the conformance
+- **Trimmed (still open):** the conformance
   corpus and the full benchmark suite of §7.4 M1 (minimal Go benchmarks
   exist: CEL predicate ≈ 290 ns/op, simple Starlark transform ≈ 1.4 µs/op
-  on the dev machine, plus the M3 Starlark-vs-WASM benchmark below). From
-  §5.10: `telemetry`/`dlq`/`codecs` pipeline
+  on the dev machine, plus the M3 Starlark-vs-WASM benchmark below; the
+  `repl` CLI and the `codecs:` section landed with M4). From
+  §5.10: `telemetry`/`dlq` pipeline
   sections remain unimplemented (telemetry endpoints live in the Runtime
-  config; dead-letter retention and named codec reuse are P2). Per-message
+  config; dead-letter retention is P2). Per-message
   span sampling and tail masking rules are P2 (review R12/R16). A
   kafka-broker integration test (testcontainers) is a CI stretch, not on
   the critical path. M3 trims: no automatic restart of crashed gRPC plugin
@@ -238,6 +330,9 @@ Other recorded trims:
   (one-shot token instead), WASM guests see only the payload (no metadata
   channel — chain a `script:` node to touch meta), and the CI benchmark
   job is informational (`continue-on-error`), not a regression gate.
+  M4 trims: the Pebble performance profile and the K8s Operator (see the
+  M4 rulings above — the Operator lives on as a Deployment manifest +
+  docs/k8s.md).
 - **`limits` section** (M2): `max_in_flight` maps to the engine's spool
   admission high watermark and `drain_timeout` bounds graceful shutdown
   (replacing a hardcoded 10s); a `workers` total quota is trimmed (P2).
@@ -532,20 +627,22 @@ ladder's trigger standard (§4.6: performance or dependencies, never
 ## Repository layout
 
 ```
-cmd/eventboat/        CLI: verify / test / run / trigger / jobs / explain / replay / plugin / mcp
+cmd/eventboat/        CLI: verify / test / run / trigger / jobs / explain / replay / convert / repl / lsp / plugin / mcp
 proto/                 eventboat.plugin.v1 — the out-of-process plugin protocol (.proto source)
 pkg/pluginv1/          generated protocol stubs (importable by third-party plugins)
-docs/                  plugins.md (gRPC SDK), wasm.md (guest ABI and tier guide)
-internal/config/      typed config, strict loader, env+constants+parameters substitution
-internal/ir/          static IR: DAG, compiled CEL/Starlark/CESQL, topology checks, job semantics, lint
+docs/                  plugins.md (gRPC SDK), wasm.md (guest ABI and tier guide), codecs.md (codec guide), k8s.md (deployment)
+internal/config/      typed config, strict loader, env+constants+parameters substitution, codecs: declarations
+internal/ir/          static IR: DAG, compiled CEL/Starlark/CESQL, topology checks, job semantics, lint, codec resolution
 internal/lang/        celhost (predicates), cesqlhost (CESQL dialect + official TCK), starhost (Starlark sandbox host)
 internal/wasmhost/    wazero host: capability sandbox, per-invoke budgets, guest under testdata/
 internal/rpcplugin/   gRPC plugin host: process spawn/handshake, source/sink adapters
 internal/engine/      spool admission, DAG execution, settle, delivery, DLQ, pull sources
 internal/jobs/        job runtime: scheduler, catchup, overlap, run lifecycle, hooks
 internal/store/       SQLite + in-memory spool/checkpoint/dead-letter/job-history stores
-internal/registry/    plugin registration with mandatory JSON Schemas + ABI versions
-internal/registry/builtin/  kafka/http_server/cron/file/sql sources, kafka/http/file/drop sinks, json/raw codecs
+internal/registry/    plugin registration with mandatory JSON Schemas + ABI versions (codecs included, M4)
+internal/registry/builtin/  kafka/http_server/cron/file/sql sources, kafka/http/file/drop sinks, json/raw/csv/avro/protobuf codecs
+internal/convert/     the v2 → v3 migration tool: read-only v2 shape copy, eql renderer, guard folding, report
+internal/lsp/         language server: minimal JSON-RPC 2.0, verify diagnostics, completion, hover
 internal/explain/     deterministic walkthroughs + topology rendering
 internal/ops/         the operations service behind MCP and Admin REST
 internal/mcpserver/   MCP tools (official Go SDK)
@@ -554,7 +651,7 @@ internal/runtimecfg/  kind: Runtime deployment configuration
 internal/obs/         OpenTelemetry: dual export, 27 metrics, spans
 internal/testkit/     injection/capture/fault-injection primitives + fakepull test source
 internal/testrun/     §3.2 contract-test runner
-examples/             linear, branching (CEL), fan-in, job-sync (sql), plugins/ (third-party-style gRPC source)
+examples/             linear, branching (CEL), fan-in, job-sync (sql), codecs (csv+avro), plugins/ (gRPC), editors/vscode, k8s
 legacy/               archived v2 implementation (not imported, not modified)
 ```
 

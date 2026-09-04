@@ -9,11 +9,12 @@ DAG 流动（过滤、映射、路由），落到目的地——全程 at-least-
 语言），映射就是 [Starlark](https://github.com/google/starlark-go)（Python
 方言）：零自研语言，Agent 语料最大化。
 
-> **状态：v3 POC**（[redesign-v3.md](redesign-v3.md) 的 M1 + M2 + M3 里程碑）。
+> **状态：v3 POC**（[redesign-v3.md](redesign-v3.md) 的 M1 + M2 + M3 + M4 里程碑）。
 > v2 实现已整体归档至 [legacy/](legacy/)，互不兼容。实现前的独立设计审查见
 > [redesign-v3-review.md](redesign-v3-review.md)（M1，通过，13 项发现）、
-> [redesign-v3-review-m2.md](redesign-v3-review-m2.md)（M2，通过）与
-> [redesign-v3-review-m3.md](redesign-v3-review-m3.md)（M3，通过）。
+> [redesign-v3-review-m2.md](redesign-v3-review-m2.md)（M2，通过）、
+> [redesign-v3-review-m3.md](redesign-v3-review-m3.md)（M3，通过）与
+> [redesign-v3-review-m4.md](redesign-v3-review-m4.md)（M4，通过）。
 > License：Apache-2.0。English readme: [README.md](README.md)。
 
 ## 工作原理
@@ -79,6 +80,44 @@ eventboat run --config my.yaml --ephemeral
   `data.*` 为文档化扩展（合成驼峰标识符），带下划线的 meta 键在本方言
   不可达（用 CEL）——诚实入档。
 
+## M4：生态收口（convert / LSP / codec / Schema 分发 / repl）
+
+- **convert（v2 → v3）**：`eventboat convert <v2配置> [-o out.yaml] [--report v3.md]`。
+  三套 v2 写法（steps / pipeline[] / 顶层 edges）+ HOCON 全部解析；eql1 经
+  CEL-AST 渲染为 Starlark，**"自动迁移" = 生成且通过真实编译器**（Starlark
+  走 starhost、产出走全量 verify），子集外逐条进报告（原因 + 建议改法）。
+  route/filter 折叠为有序边守卫；v2 无匹配静默丢弃 → v3 settle-as-filtered +
+  计数（结局相同、可观测）。**legacy 全部 12 个示例/testdata convert 后
+  verify 全绿进 CI**（快照 + 三例语义等价永久测试）。legacy/ 只读不动。
+- **LSP（编辑器内写管道）**：`eventboat lsp`（stdio）。诊断 = 真实 verify
+  管线（与 CLI/MCP 同一代码路径，零第二套校验）；补全 = 顶层段/框架字段/
+  插件名（registry catalog）/插件字段（JSON Schema）/边属性/codec 名；
+  hover = 插件字段摘要与框架字段语义。手写最小 JSON-RPC 2.0（零新增依赖；
+  go.lsp.dev/protocol 需 Go 1.26 > 本仓 1.25）。最小 VS Code 扩展：
+  `examples/editors/vscode`（`npm install` 后
+  `code --extensionDevelopmentPath=.` 一步接入）。协议级集成测试进 CI。
+- **codec 三件 + `codecs:` 命名声明段**：csv（一条消息一条记录，列名显式
+  或首行 header）、avro（hamba/avro v2——LinkedIn 自己已迁移至此，goavro
+  维护模式；行内 schema）、protobuf（FileDescriptorSet + 消息全名，路径相
+  对管道文件，动态消息经 protojson——零新增依赖）。`codecs: {名: {type:,
+  ...配置}}`，`decoder`/`encoder` 按名引用；声明名与注册名两名字空间禁遮蔽。
+  CEL 类型映射表见 [docs/codecs.md](docs/codecs.md)；示例管道
+  `examples/codecs` 进 CI。**catalog JSON 形状变化**：codecs 从字符串数组
+  变 `{name,version,schema}` 对象数组（消费方需同步解析）。
+- **Schema 独立分发**：`eventboat plugin schema <name>`（跨三段查名，文本/
+  `--json`）；`plugin schema --all --dir schemas/` 批量导出
+  `schemas/<kind>/<name>.json` 供 IDE/Agent 离线消费。
+- **repl**（§3.6，M1 裁剪后回归）：`--cel 'expr'` / `--script f.star` 对
+  `--message sample.json` 一次性求值；交互模式每行重放整个累积脚本（确定性
+  会话语义）。
+- **裁剪记档（M4 审查 R14）**：Pebble 性能档（replay/死信/作业历史查询面全
+  是 SQL，第二后端 = 重写一套查询引擎，非锚点）；K8s Operator 降为
+  Deployment 清单 + [docs/k8s.md](docs/k8s.md)（二进制自身的 verify-first
+  reload 与探针面已覆盖 Operator 会做的事）。
+- **顺手修复（starhost）**：补 §4.8 的 `remove()` 胶水；修复 M1 预存的
+  **嵌套写入静默丢失** bug（惰性绑定下 `payload.nested.k = v` 无声无效——
+  容器字段现按引用语义物化，纯标量读保持惰性；回归测试锁定）。
+
 管道 = 三段式 + `from` 连边；插件名即键：
 
 ```yaml
@@ -141,14 +180,15 @@ cases:
 算、backtrace 进死信）；引擎（spool/settle/checkpoint/背压/回放，SQLite
 承载——`modernc.org/sqlite` 纯 Go，不手写 WAL）；死信库；强制 JSON Schema
 的插件注册（源：kafka/http_server/cron/file；汇：kafka/http/file/drop；
-编解码：json/raw）；CLI `verify`/`test`/`run`（`--json`）。
+编解码：json/raw/csv/avro/protobuf）；CLI `verify`/`test`/`run`（`--json`）。
 
-裁剪与超出规范的决策（对应 redesign-v3-review.md 记录）：
+裁剪与超出规范的决策（对应 redesign-v3-review.md 记录；完整账本含 M2/M3/M4
+见 [README.md](README.md)）：
 
-- **裁剪：** §7.4 M1 中的 `repl`/`plugin` 命令、conformance 语料与完整基准
+- **裁剪：** §7.4 M1 中的 conformance 语料与完整基准
   套件（保留最小 Go 基准：CEL 谓词 ≈ 290 ns/op、简单 Starlark transform
-  ≈ 1.4 µs/op，开发机实测）。`explain`、`replay`、作业管道
-  （`run`/`parameters`）、MCP server 与可观测性栈为 M2+。
+  ≈ 1.4 µs/op，开发机实测；`repl` 已随 M4 回归）。`explain`、`replay`、
+  作业管道（`run`/`parameters`）、MCP server 与可观测性栈已随 M2 落地。
 - **部署级配置**（开放问题 #10）暂以 CLI 标志代替：`--data-dir`、
   `--ephemeral`。
 - **模块：** load 白名单为 `json` + `math`；go-starlark 无可 load 的
@@ -166,29 +206,41 @@ cases:
 ## 仓库布局
 
 ```
-cmd/eventboat/        CLI：verify / test / run
-internal/config/      类型化配置、严格加载、环境变量+常量替换
-internal/ir/          静态 IR：DAG、CEL/Starlark 编译产物、拓扑校验、lint
-internal/lang/        celhost（谓词）、starhost（Starlark 沙箱宿主）
-internal/engine/      spool 准入、DAG 执行、settle、投递、死信
-internal/store/       SQLite + 内存版 spool/checkpoint/死信存储
-internal/registry/    插件注册（强制 JSON Schema）
-internal/registry/builtin/  内置 kafka/http_server/cron/file 源、kafka/http/file/drop 汇、json/raw 编解码
+cmd/eventboat/        CLI：verify / test / run / trigger / jobs / explain / replay / convert / repl / lsp / plugin / mcp
+internal/config/      类型化配置、严格加载、环境变量+常量替换、codecs: 声明
+internal/ir/          静态 IR：DAG、CEL/Starlark/CESQL 编译产物、拓扑校验、lint、codec 解析
+internal/lang/        celhost（谓词）、cesqlhost（CESQL 方言 + 官方 TCK）、starhost（Starlark 沙箱宿主）
+internal/wasmhost/    wazero 宿主：能力沙箱、逐调用预算（guest 在 testdata/）
+internal/rpcplugin/   gRPC 插件宿主：进程 spawn/握手、source/sink 适配
+internal/engine/      spool 准入、DAG 执行、settle、投递、死信、拉取源
+internal/jobs/        作业运行时：调度、补偿、重叠、run 生命周期、钩子
+internal/store/       SQLite + 内存版 spool/checkpoint/死信/作业历史存储
+internal/registry/    插件注册（强制 JSON Schema + ABI 版本，M4 起 codec 同规）
+internal/registry/builtin/  内置 kafka/http_server/cron/file/sql 源、kafka/http/file/drop 汇、json/raw/csv/avro/protobuf 编解码
+internal/convert/     v2 → v3 迁移工具：只读 v2 形状拷贝、eql 渲染器、守卫折叠、报告
+internal/lsp/         语言服务器：最小 JSON-RPC 2.0、verify 诊断、补全、hover
+internal/explain/     确定性推演 + 拓扑渲染
+internal/ops/         MCP 与 Admin REST 背后的操作服务
+internal/mcpserver/   MCP 工具（官方 Go SDK）
+internal/admin/       Admin REST + SSE + 内嵌只读 UI
+internal/runtimecfg/  kind: Runtime 部署配置
+internal/obs/         OpenTelemetry：双导出、27 指标、span
 internal/testkit/     注入/捕获/故障注入原语
 internal/testrun/     §3.2 合约测试 runner
-examples/             线性、CEL 分支、fan-in 管线与测试套件
-legacy/               归档的 v2 实现（不导入、不修改）
+docs/                 plugins.md、wasm.md、codecs.md、k8s.md
+examples/             线性、CEL 分支、fan-in、job-sync（sql）、codecs（csv+avro）、plugins（gRPC）、editors/vscode、k8s
+legacy/               归档的 v2 实现（不导入、不修改；convert 只读消费）
 ```
 
 ## 开发
 
 ```bash
 go build ./...
-go test ./...          # 含七条 TestInvariant_* 可靠性测试
+go test ./...          # 含七条 TestInvariant_* 可靠性测试、convert 快照/验收、LSP 协议集成、codec conformance
 go test -race ./...
 ```
 
-设计文档：[redesign-v3.md](redesign-v3.md)（v3 唯一设计规范）、
-[redesign-v3-review.md](redesign-v3-review.md)（实现前审查）。历史文档：
+设计文档：[redesign-v3.md](redesign-v3.md)（v3 唯一设计规范）、四份实现前
+审查（redesign-v3-review*.md）。历史文档：
 [riverpod-design.md](riverpod-design.md)、[competitor-research.md](competitor-research.md)、
 [review-2026-08.md](review-2026-08.md)、[design-review.md](design-review.md)。

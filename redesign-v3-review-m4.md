@@ -123,7 +123,8 @@
 | eql `now()` 自定义函数、格式化函数等 | Starlark stdlib / 宿主糖 | **报告**（逐条，§4.8 "人工"行） |
 
 - **输出**：`eventboat convert <v2-config> [-o out.yaml] [--report report.md]`。无 `-o` 打印到 stdout；`--report` 缺省时报告随 stdout 尾部输出。纯函数、确定性（节点排序按 v2 拓扑依赖序而非 map 迭代序），快照测试进 CI。
-- **验收**：`legacy/_examples` 全部 8 例（三写法 + HOCON）+ `multi-pipeline/` 2 例 + `testdata/pipelines/linear.{yaml,conf}` —— convert 后 `eventboat verify` 全绿（需要 env 的示例在测试内 t.Setenv）。语义等价人工抽查三例（01 线性、02 路由分支、06 边投递）记入收官报告。
+- **验收**：`legacy/_examples` 全部 8 例（三写法 + HOCON）+ `multi-pipeline/` 2 例 + `testdata/pipelines/linear.{yaml,conf}` —— convert 后 `eventboat verify` 全绿（需要 env 的示例在测试内 t.Setenv）。语义等价人工抽查三例记入收官报告。
+- **（收官对账，2026-09-04）三例抽查已转正为永久测试** `internal/convert/semantic_equivalence_test.go`：① 01 线性——filter 折叠后 total>20 的守卫与 v2 filter 对同一脚本产物判定一致（50 过 / 10 滤）；② 02 路由分支——三个有序守卫对 us/eu/apac 的匹配模式与 v2 route first-match 逐 sink 一致（每 region 恰一汇命中）；③ 06 边投递——retries=3/backoff=exponential/timeout_ms=5000 数值等价，analytics 边 required:false，dlq-sink 与 dlq 段消失（死信入库）。12/12 fixture 验收全绿，快照入 CI。
 
 ### R9 🔵 Schema 独立分发
 
