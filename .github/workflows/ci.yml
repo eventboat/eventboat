@@ -95,7 +95,7 @@ jobs:
           GOOS=wasip1 GOARCH=wasm go build -buildmode=c-shared -o ../aggregate.wasm
       - name: Threshold gate (CEL predicate, starhost scripts, settle throughput)
         run: bash scripts/bench-gate.sh
-      - name: Benchmarks (informational: Starlark vs WASM)
+      - name: "Benchmarks (informational — Starlark vs WASM)"
         run: go test -bench BenchmarkHeavyTransform -benchtime 1s -run XXX ./internal/wasmhost/...
         env:
           EVENTBOAT_WASM_GUEST: ${{ github.workspace }}/internal/wasmhost/testdata/aggregate.wasm
