@@ -1,0 +1,39 @@
+{
+  "name": "eventboat",
+  "displayName": "Eventboat pipelines",
+  "description": "Language support for Eventboat pipeline YAML: verify diagnostics, completion and hover via the eventboat binary's built-in language server.",
+  "version": "0.1.0",
+  "publisher": "eventboat",
+  "license": "Apache-2.0",
+  "private": true,
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "activationEvents": [
+    "onLanguage:yaml"
+  ],
+  "main": "extension.js",
+  "contributes": {
+    "configuration": {
+      "title": "Eventboat",
+      "properties": {
+        "eventboat.path": {
+          "type": "string",
+          "default": "eventboat",
+          "description": "Path to the eventboat binary (it must be on PATH or given as an absolute path)."
+        },
+        "eventboat.enable": {
+          "type": "boolean",
+          "default": true,
+          "description": "Start the eventboat language server for YAML files."
+        }
+      }
+    }
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  }
+}

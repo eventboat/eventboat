@@ -20,6 +20,7 @@ Usage:
   eventboat [--json] explain --config <pipeline.yaml> [--message f.json] [--topology]
   eventboat [--json] replay --config <pipeline.yaml> (--dlq | --spool --from N | --job <run-id>) [--dry-run]
   eventboat convert <v2-config> [-o out.yaml] [--report report.md]
+  eventboat lsp                                          # language server over stdio
   eventboat [--json] plugin catalog
   eventboat mcp (--stdio | --http) [--config-dir <dir>] [--data-dir DIR]
 
@@ -40,6 +41,8 @@ Commands:
   convert   translate an archived v2 pipeline (steps/pipeline[]/edges, YAML
             or HOCON) to the v3 three-section form + a migration report
             (§7.3); exits 1 when the output fails verify
+  lsp       language server over stdio: verify diagnostics, completion and
+            hover for pipeline YAML (editors: examples/editors/vscode)
   plugin    plugin ABI surface: catalog lists registered plugins with their
             ABI versions (§6.5)
   mcp       the agent operations surface: MCP tools over stdio (for agent
@@ -84,6 +87,8 @@ func run(args []string) int {
 		return cmdReplay(rest[1:], jsonOut)
 	case "convert":
 		return cmdConvert(rest[1:], jsonOut)
+	case "lsp":
+		return cmdLSP(rest[1:], jsonOut)
 	case "plugin":
 		return cmdPlugin(rest[1:], jsonOut)
 	case "mcp":
