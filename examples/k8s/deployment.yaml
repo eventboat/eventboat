@@ -24,8 +24,11 @@ spec:
     spec:
       containers:
         - name: eventboat
-          image: eventboat:latest   # build from this repo: go build ./cmd/eventboat
+          image: ghcr.io/eventboat/eventboat:main   # published from this repo (.github/workflows/docker.yml); pin a semver tag in production
           args: ["run", "--config-dir", "/pipelines"]
+          securityContext:
+            runAsNonRoot: true   # image USER is distroless nonroot (65532)
+            fsGroup: 65532       # emptyDir/PVC writability for the SQLite spool
           ports:
             - {name: admin, containerPort: 7788}
           env:

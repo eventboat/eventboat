@@ -1,0 +1,12 @@
+# Nothing here is needed to build ./cmd/eventboat: the image build is a
+# plain `go build` of a module with no embedded non-Go assets (testdata is
+# test-only). Keeping the context lean also keeps the 64 MB local
+# eventboat.exe binary out of it.
+.git
+.github
+.idea
+.zcode
+docs
+*.exe
+*.md
+data/

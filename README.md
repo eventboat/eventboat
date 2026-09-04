@@ -737,6 +737,22 @@ EVENTBOAT_SOAK_TEST=1 EVENTBOAT_SOAK_DURATION=2m go test ./internal/inttests/soa
 bash scripts/bench-gate.sh   # the loose perf gate CI enforces
 ```
 
+### Container image
+
+```bash
+docker build -t eventboat:dev .    # CGO_ENABLED=0 → distroless/static, nonroot
+docker run --rm eventboat:dev      # bare invocation prints the help screen, exit 0
+docker run --rm -v "$PWD/examples/linear:/work" -w /work eventboat:dev \
+  run --config /work/pipeline.yaml   # cwd-relative input/ and data/ land inside /work
+```
+
+CI publishes `ghcr.io/eventboat/eventboat`
+([.github/workflows/docker.yml](.github/workflows/docker.yml)): every push
+to main → `:main` + `:sha-<short>`, a `v1.2.3` tag → `:1.2.3` (no moving
+`0.x` tag while pre-1.0), linux/amd64 + linux/arm64. `/pipelines` and
+`/data` are the conventional mount points (see
+[examples/k8s/deployment.yaml](examples/k8s/deployment.yaml)).
+
 Design documents: [redesign-v3.md](redesign-v3.md) (the v3 spec — the single
 source of truth), [redesign-v3-review.md](redesign-v3-review.md)
 (pre-implementation review). Historical: [riverpod-design.md](riverpod-design.md),

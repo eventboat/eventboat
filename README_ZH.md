@@ -276,6 +276,20 @@ EVENTBOAT_SOAK_TEST=1 EVENTBOAT_SOAK_DURATION=2m go test ./internal/inttests/soa
 bash scripts/bench-gate.sh   # CI 的宽松性能门
 ```
 
+### 容器镜像
+
+```bash
+docker build -t eventboat:dev .    # CGO_ENABLED=0 → distroless/static，非 root
+docker run --rm eventboat:dev      # 裸调用打印帮助并 exit 0
+```
+
+CI 持续发布 `ghcr.io/eventboat/eventboat`（见
+[.github/workflows/docker.yml](.github/workflows/docker.yml)）：main 分支
+每次推送 → `:main` + `:sha-<short>`；打 `v1.2.3` 标签 → `:1.2.3`（1.0 前
+不生成滚动的 `0.x` 标签），架构 linux/amd64 + linux/arm64。约定挂载点为
+`/pipelines`（流水线配置）与 `/data`（SQLite 存储），示例见
+[examples/k8s/deployment.yaml](examples/k8s/deployment.yaml)。
+
 设计文档：[redesign-v3.md](redesign-v3.md)（v3 唯一设计规范）、四份实现前
 审查（redesign-v3-review*.md）。历史文档：
 [riverpod-design.md](riverpod-design.md)、[competitor-research.md](competitor-research.md)、

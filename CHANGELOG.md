@@ -4,6 +4,23 @@ All notable changes to Eventboat. The format follows
 [Keep a Changelog](https://keepachangelog.com/); versions follow semver
 (pre-1.0: the API surface may still shift between minor versions).
 
+## Unreleased
+
+### Added
+
+- **Container image, published to GHCR as
+  `ghcr.io/eventboat/eventboat`.** A multi-stage `Dockerfile` builds the
+  CLI with `CGO_ENABLED=0` (every driver in go.mod is pure Go, SQLite via
+  modernc) onto distroless/static as the nonroot user, with `/pipelines`
+  and `/data` as the conventional mount points matching
+  examples/k8s/deployment.yaml; a bare `docker run` prints the help
+  screen and exits 0. The Docker workflow builds linux/amd64 +
+  linux/arm64 and pushes on every push to main (`:main`, `:sha-<short>`)
+  and on `v*` tags (semver `{{version}}`; no moving `0.x` tag while
+  pre-1.0); PRs build without pushing. The k8s example now references
+  the published image and pins the nonroot securityContext
+  (`runAsNonRoot` + `fsGroup: 65532`).
+
 ## v0.2.0-rc1 (2026-09-05)
 
 First release candidate: all four design milestones (M1–M4) plus the beta
