@@ -1,7 +1,7 @@
 # v3 从零重设计提案 — Agent 原生事件路由器（零自研语言版）
 
 > **状态：POC 阶段**（提案定稿：定名 Eventboat、License Apache-2.0；v3 全新实现，**不向后兼容 v2**——无迁移义务）
-> **日期：2026-09-03**（修订 v1.1：零自研语言 CEL + Starlark + 性能评估；v1.2：吸收 dagu 作业模型（pipeline 级 `run`/`params`）；v1.3：拓扑结构改为**三段式 `sources`/`transforms`/`sinks` + `from` 连边 + 插件名即键**，命名体系定稿——含 DAG 描述模式调研结论，见 §5.1；v1.4：钩子段 `on`→`hooks`（GH Actions 撞形不同义），新增 consts/params 语义小节 §5.9；v1.5：**全称原则**——自造缩写全部展开：`params`→`parameters`、`consts`→`constants`、`dlq`→`dead_letter_queue`、`catchup`→`catchup_window`、`args`→`arguments`、`max_inflight`→`max_in_flight`，见 §5.1；v1.6：全称原则细化——**约定俗成的行业缩写保留**：`dlq`、`args`、`dsn` 维持缩写，回退 v1.5 对前两项的展开；v1.7：**定名 Eventboat**（§8，六轮核查 + 三选一裁决），全文占位符替换；v1.8：**License 定为 Apache-2.0**（仓库 LICENSE 落地，开放问题 #11 关闭）；v1.9：**明确 POC 阶段、不向后兼容 v2**——`convert` 降为按需工具，开放问题 #12 关闭；v1.10：按实现前审查（redesign-v3-review.md R1–R3）修正 §4.3 沙箱表：`while`/递归/顶层控制流的机制归属统一为 `syntax.FileOptions`，删除不存在的 `strings` 模块）
+> **日期：2026-09-03**（修订 v1.1：零自研语言 CEL + Starlark + 性能评估；v1.2：吸收 dagu 作业模型（pipeline 级 `run`/`params`）；v1.3：拓扑结构改为**三段式 `sources`/`transforms`/`sinks` + `from` 连边 + 插件名即键**，命名体系定稿——含 DAG 描述模式调研结论，见 §5.1；v1.4：钩子段 `on`→`hooks`（GH Actions 撞形不同义），新增 consts/params 语义小节 §5.9；v1.5：**全称原则**——自造缩写全部展开：`params`→`parameters`、`consts`→`constants`、`dlq`→`dead_letter_queue`、`catchup`→`catchup_window`、`args`→`arguments`、`max_inflight`→`max_in_flight`，见 §5.1；v1.6：全称原则细化——**约定俗成的行业缩写保留**：`dlq`、`args`、`dsn` 维持缩写，回退 v1.5 对前两项的展开；v1.7：**定名 Eventboat**（§8，六轮核查 + 三选一裁决），全文占位符替换；v1.8：**License 定为 Apache-2.0**（仓库 LICENSE 落地，开放问题 #11 关闭）；v1.9：**明确 POC 阶段、不向后兼容 v2**——`convert` 降为按需工具，开放问题 #12 关闭；v1.10：按实现前审查（redesign-v3-review.md R1–R3）修正 §4.3 沙箱表：`while`/递归/顶层控制流的机制归属统一为 `syntax.FileOptions`，删除不存在的 `strings` 模块；v1.11：M2 落地对账——sql 源补 sqlite 方言（§3.5）、重注入=进入节点执行（§3.3）、§5.8 示例 `%.2f` 修正（go-starlark 的 `%` 不支持浮点格式动词，改 `math.floor`）、§6.6 span 措辞改批粒度近似、开放问题 #10 关闭（`kind: Runtime` + CLI 覆盖，见 redesign-v3-review-m2.md R13））
 >
 > 本文回答一个问题：**如果抛开 v2 现有实现，从零重新设计这个产品的方案、功能、配置方式和架构，应该长成什么样。**
 >
@@ -216,7 +216,7 @@ settle: 1 branch → settles when kafka ack (or retry exhausted → dead letter)
 
 **`eventboat replay`** — 事后回放，把"数据面"变成可调试系统：
 
-- `replay --dlq --since 2h --where 'meta.dlq.reason contains "parse"'` → 从死信库筛出死信，重新注入任意 node（可先 `--dry-run` 看路径）；
+- `replay --dlq --since 2h --where 'meta.dlq.reason contains "parse"'` → 从死信库筛出死信，重新注入任意 node——注入即**进入该节点重新执行**（transform 重跑脚本、sink 直接投递）——可先 `--dry-run` 看路径；
 - `replay --spool --from <checkpoint-id>` → 按持久化入口重放一段窗口（灾备演练/升级验证）；
 - `replay --job <run-id>` → 按作业 run-id 回放该次运行的死信子集（= dagu 的"restart failed"，见 §5.8）；
 - 回放默认写 `is_replay=true` 进 meta，sink 可识别。
@@ -244,7 +244,7 @@ settle: 1 branch → settles when kafka ack (or retry exhausted → dead letter)
 
 | 层 | 内容 | 质量标准 |
 |----|------|----------|
-| 内置 source | `kafka`、`http_server`、`cron`、`file`（tail）；`sql`（mysql/postgres，P1，拉取型） | 生产级：重试、背压、offset/checkpoint/水位、指标、故障注入测试 |
+| 内置 source | `kafka`、`http_server`、`cron`、`file`（tail）；`sql`（mysql/postgres/sqlite——sqlite 方言服务于开发/示例/CI，拉取型） | 生产级：重试、背压、offset/checkpoint/水位、指标、故障注入测试 |
 | 内置 sink | `kafka`、`http`、`file`（滚动）、`drop` | 生产级：批量、幂等指引、死信语义 |
 | 内置 codec | `json`、`raw`、`csv`(P1)、`avro`(P1)、`protobuf`(P1) | 每个 codec 带 schema 推断与 CEL 类型映射 |
 | 表达式/脚本 | `when`（CEL）、`transforms.*.script`（Starlark）、`split` | 见 §4；WASM transform 为 P2 逃生舱 |
@@ -675,7 +675,7 @@ transforms:
       payload.source_system = constants.source_system
       if not payload.region:
           payload.region = constants.default_region
-      payload.amount_txt = "%.2f" % payload.amount
+      payload.amount_cents = math.floor(payload.amount * 100)   # go-starlark 的 % 不支持浮点格式动词
 
 sinks:
   out:
@@ -823,7 +823,7 @@ spool 表设计要点：append-only 消息表 + checkpoint 表 + 死信表（索
 ### 6.6 可观测性
 
 - **OpenTelemetry SDK 为唯一底座**：metrics + traces 原生 OTLP 导出，Prometheus exposition 作为可选出口（修 v2 "只有 Prometheus 且 trace 是 noop"的缺口）。
-- span 结构：`pipeline → source → node(每类) → edge(条件求值结果) → sink`；**Starlark 求值错误带 backtrace 行号、CEL 求值错误带表达式位置**，进 span 事件与死信记录。
+- span 结构（**批粒度近似**：管道/作业 run 生命周期、sink 批次写、deploy/replay/trigger 等操作面动作；逐消息采样列 P2）：`pipeline → source → node(每类) → edge(条件求值结果) → sink`；**Starlark 求值错误带 backtrace 行号、CEL 求值错误带表达式位置**，错误路径必进 span 事件与死信记录。
 - 指标集以"四道关卡可编程检查"为标准设计（每个 SLI 都能被 MCP `status` 取到），首版 ~25 个，宁缺毋滥（对照 v2 设计 30+ 实际 16 的教训：写下的 = 实现的）。含脚本专属指标（每步耗时直方图、步数预算耗尽计数）与作业专属指标（运行时长、行数、重叠跳过次数）。
 - 配置分层：管道内 `telemetry` 段只做本管道定制（额外标签/span 采样）；全局端点与导出器在部署级配置文件（§5.10 资源 vs 运行时分离）。
 - 通知：`hooks.*` 生命周期钩子（§5.8）覆盖作业告警；webhook 告警规则为 P2。
@@ -979,7 +979,7 @@ internal/
 7. **Starlark 性能的终极兜底**：starlark-rust 替换缝的接口形态——留到基准证明瓶颈后再设计。
 8. **跨管道触发与连接器**：`sink: {type: pipeline}`（dagu `dag.run` 对应物）或 OTel 式 `connectors` 第四段（P2）——三段式结构已预留加段演进路径。
 9. **catchup_window 语义细节**：错过多个调度窗口时补跑几次（建议最多一次，带告警）；窗口内作业仍在 running 时的行为。
-10. **部署级配置文件的形态**：全局遥测端点/admin 端口/存储路径的文件命名与结构（资源 vs 运行时分离的另一侧，§5.10）。
+10. ~~部署级配置文件的形态~~ **已定（M2，redesign-v3-review-m2.md R13）**：`kind: Runtime` YAML（storage/admin/mcp/telemetry 字段集，严格白名单，未知字段=错误）+ CLI 标志覆盖；查找顺序 `--runtime <file>` > `./eventboat.yaml` > 全默认；M1 的 `--data-dir`/`--ephemeral` 保留为覆盖标志。
 11. ~~License~~ **已定（2026-09-03）：Apache-2.0**——含专利授权，利于生态与未来商业化选项；仓库 `LICENSE` 文件与两份 README 已同步。
 12. ~~v2 代码的存续策略~~ **已定（2026-09-03）**：POC 阶段全新实现、**不向后兼容 v2**——v2 代码整体归档（`legacy/`），不导入不修改；`convert` 工具按需，不阻塞任何里程碑。
 
