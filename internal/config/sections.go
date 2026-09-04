@@ -189,7 +189,10 @@ func parseNode(file, name string, section Section, nodeRaw any, line, pluginLine
 					})
 				}
 			}
-			w := &WasmConfig{TimeoutMs: DefaultWasmTimeoutMs, MaxMemoryPages: DefaultWasmMaxMemoryPages}
+			// -1 = unset: fast mode plus a verify lint warning (M3-audit J2 —
+			// the ctx kill switch costs ~5x on loop-heavy guests, so the
+			// performance tier defaults to fast; protection is opt-in).
+			w := &WasmConfig{TimeoutMs: -1, MaxMemoryPages: DefaultWasmMaxMemoryPages}
 			mod, ok := wm["module"].(string)
 			if !ok || strings.TrimSpace(mod) == "" {
 				res.Diagnostics = append(res.Diagnostics, Diagnostic{
@@ -208,7 +211,8 @@ func parseNode(file, name string, section Section, nodeRaw any, line, pluginLine
 				if w.TimeoutMs < 0 {
 					res.Diagnostics = append(res.Diagnostics, Diagnostic{
 						Severity: "error", Code: "cfg_wasm_range", File: file, Line: line,
-						Message: "wasm.timeout_ms must be >= 0", Hint: "",
+						Message: "wasm.timeout_ms must be >= 0 (0 = fast mode, positive = wall-clock budget)",
+						Hint:    "",
 					})
 					w.TimeoutMs = 0
 				}

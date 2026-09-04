@@ -34,7 +34,7 @@ func TestInvokeRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer compiled.Close(ctx)
-	inv := compiled.NewInvoker(nil, nil)
+	inv := compiled.NewInvoker(nil, nil, 0)
 	defer inv.Close()
 
 	values := make([]float64, 100)
@@ -74,7 +74,7 @@ func TestInvokeGuestError(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer compiled.Close(ctx)
-	inv := compiled.NewInvoker(&config.WasmConfig{}, nil)
+	inv := compiled.NewInvoker(&config.WasmConfig{}, nil, 0)
 	defer inv.Close()
 
 	// Empty values: the guest reports a domain error via eb_last_error.
@@ -98,7 +98,7 @@ func TestInvokeTimeoutKillsAndRecovers(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer compiled.Close(ctx)
-	inv := compiled.NewInvoker(&config.WasmConfig{TimeoutMs: 200, MaxMemoryPages: 1024}, nil)
+	inv := compiled.NewInvoker(&config.WasmConfig{TimeoutMs: 200, MaxMemoryPages: 1024}, nil, 0)
 	defer inv.Close()
 
 	// Huge input with many passes: the guest cannot finish in 200ms.

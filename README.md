@@ -462,14 +462,20 @@ discoveries:
   committed so `go test ./...` needs nothing extra, and CI rebuilds the
   guest from source for the wasm tests. Guests may be written in any
   wasip1 reactor language (ABI in [docs/wasm.md](docs/wasm.md)).
-- **WASM resource model**: wazero has no instruction metering, so the
-  budget is per-invoke wall-clock (`timeout_ms`, default 1000) + a memory
-  pages cap. Enforcing the deadline requires wazero's context-close
+- **WASM resource model**: wazero has no instruction metering, so budgets
+  are per-invoke wall-clock (`timeout_ms`, opt-in) + a memory pages cap
+  (always on). Enforcing the deadline requires wazero's context-close
   mechanism, **measured at ~5x throughput cost on loop-heavy guests** (a
   manual watchdog-close was tested and deadlocks — there is no cheaper kill
-  path in wazero 1.x); `timeout_ms: 0` is the documented fast mode without
-  a kill switch. Traps/timeouts kill the instance, which is transparently
-  re-instantiated per worker.
+  path in wazero 1.x). **M3-audit J2 ruling: fast mode (no kill switch) is
+  the default** — a tier whose only reason to exist is performance cannot
+  default to slower than Starlark; the runaway-guest risk is availability
+  (one wedged worker, backpressure stall, no data loss, restart clears it),
+  not correctness. Guardrails: `wasm_no_kill_switch` verify warning
+  (`--strict` escalates) on unset `timeout_ms`, and a zero-interference
+  slow-call watchdog (engine default 5s, `WasmSlowCallWarnMs`) logs a wedged
+  invoke once. Traps/timeouts in protected mode kill the instance, which is
+  transparently re-instantiated per worker.
 - **WASM wire format**: payload as JSON bytes in/out (what a Starlark
   script would see/produce); metadata passes through untouched; guest
   errors/traps/bad JSON follow the same delivery→dead-letter path as
@@ -509,17 +515,19 @@ informational artifact, not a gate):
 | variant | per message | allocations |
 |---|---|---|
 | Starlark heavy script | 5.9 ms | 122,092 |
-| WASM, default (deadline armed) | 13.1 ms | 19 |
-| WASM, fast mode (`timeout_ms: 0`) | 2.5 ms | 4 |
+| WASM, fast mode (default) | 2.5 ms | 4 |
+| WASM, protected (`timeout_ms > 0`) | 13.1 ms | 19 |
 | Starlark light script | 22 µs | 2,023 |
 | WASM light | 103 µs | 15 |
 
 (Windows/amd64, i5-14600KF; Linux numbers via the CI job.) Reading: heavy
 per-message computation is where the WASM tier pays (2.3x and ~30,000x fewer
-allocations in fast mode); the kill switch is expensive; and for light
-mapping Starlark wins outright — the ladder's trigger standard (§4.6:
-performance or dependencies, never "complex logic") is quantified, not
-vibes.
+allocations in the default fast mode); the kill switch costs ~5x, so — per
+the M3-audit J2 ruling — **fast mode is the default** (verify warns on an
+unset `timeout_ms`; a slow-call watchdog logs wedged invocations once), and
+protection is opt-in. For light mapping Starlark wins outright — the
+ladder's trigger standard (§4.6: performance or dependencies, never
+"complex logic") is quantified, not vibes.
 
 ## Repository layout
 

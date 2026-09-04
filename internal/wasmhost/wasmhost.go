@@ -29,35 +29,36 @@ import (
 )
 
 // Defaults mirror config.DefaultWasm*; the config layer owns the values.
-const (
-	DefaultTimeoutMs      = config.DefaultWasmTimeoutMs
-	DefaultMaxMemoryPages = config.DefaultWasmMaxMemoryPages
-)
+const DefaultMaxMemoryPages = config.DefaultWasmMaxMemoryPages
 
 // Compile compiles a guest module once; the result is safe to share across
 // workers of the node it was compiled for. Memory cap and kill switch come
-// from the node config: a wall-clock budget > 0 (the default) enables
-// wazero's CloseOnContextDone so per-invoke deadlines can kill runaway
-// guests — measured at ~5x slower on loop-heavy guests on some platforms;
-// timeout_ms: 0 compiles the fast way with NO kill switch (a runaway guest
-// then wedges its worker until the pipeline restarts).
+// from the node config: a positive timeout_ms enables wazero's
+// CloseOnContextDone so per-invoke deadlines can kill runaway guests —
+// measured at ~5x slower on loop-heavy guests on some platforms — while the
+// default (unset / zero / negative) compiles the fast way with NO kill
+// switch (M3-audit J2: the performance tier defaults to fast; verify warns
+// on unset; a runaway guest then wedges its worker until the pipeline
+// restarts, which the slow-call watchdog makes visible).
 func Compile(ctx context.Context, path string, cfg *config.WasmConfig) (*Compiled, error) {
 	wasmBytes, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("wasmhost: read module: %w", err)
 	}
 	pages := 0
-	timeout := DefaultTimeoutMs
+	timeout := 0
 	if cfg != nil {
 		pages = cfg.MaxMemoryPages
-		timeout = cfg.TimeoutMs
+		if cfg.TimeoutMs > 0 {
+			timeout = cfg.TimeoutMs
+		}
 	}
 	if pages <= 0 {
 		pages = DefaultMaxMemoryPages
 	}
 	rCfg := wazero.NewRuntimeConfig().
 		WithMemoryLimitPages(uint32(pages))
-	if timeout != 0 {
+	if timeout > 0 {
 		rCfg = rCfg.WithCloseOnContextDone(true)
 	}
 	r := wazero.NewRuntimeWithConfig(ctx, rCfg)
@@ -92,15 +93,20 @@ func (c *Compiled) Close(ctx context.Context) error {
 	return c.runtime.Close(ctx)
 }
 
-// NewInvoker builds a single-threaded invoker. One Invoker belongs to one
-// worker goroutine; concurrent Invokes on the same Invoker are not allowed
-// (wazero modules are not goroutine-safe, R4).
-func (c *Compiled) NewInvoker(cfg *config.WasmConfig, logf func(string, ...any)) *Invoker {
-	timeoutMs := DefaultTimeoutMs
+// NewInvoker builds a single-threaded invoker. slowCallWarnMs arms the
+// zero-interference watchdog: an invoke still running after that long is
+// logged once through logf (fast mode's only observability for a wedged
+// call — killed calls never reach the duration histogram; <=0 disables).
+// One Invoker belongs to one worker goroutine; concurrent Invokes on the
+// same Invoker are not allowed (wazero modules are not goroutine-safe, R4).
+func (c *Compiled) NewInvoker(cfg *config.WasmConfig, logf func(string, ...any), slowCallWarnMs int) *Invoker {
+	timeoutMs := 0 // fast mode unless a positive budget is set
 	entry := "transform"
 	allowLog := false
 	if cfg != nil {
-		timeoutMs = cfg.TimeoutMs // 0 = fast mode: no budget, matching Compile
+		if cfg.TimeoutMs > 0 {
+			timeoutMs = cfg.TimeoutMs
+		}
 		if cfg.Entrypoint != "" {
 			entry = cfg.Entrypoint
 		}
@@ -110,17 +116,25 @@ func (c *Compiled) NewInvoker(cfg *config.WasmConfig, logf func(string, ...any))
 			}
 		}
 	}
-	return &Invoker{compiled: c, entrypoint: entry, timeout: time.Duration(timeoutMs) * time.Millisecond, logf: logf, allowLog: allowLog}
+	return &Invoker{
+		compiled:       c,
+		entrypoint:     entry,
+		timeout:        time.Duration(timeoutMs) * time.Millisecond,
+		slowCallWarnMs: slowCallWarnMs,
+		logf:           logf,
+		allowLog:       allowLog,
+	}
 }
 
 // Invoker owns one lazily created module instance and re-creates it after a
 // trap, timeout or error (wazero closes trapped instances, R4).
 type Invoker struct {
-	compiled   *Compiled
-	entrypoint string
-	timeout    time.Duration
-	logf       func(string, ...any)
-	allowLog   bool
+	compiled       *Compiled
+	entrypoint     string
+	timeout        time.Duration // 0 = fast mode: no deadline, no kill switch
+	slowCallWarnMs int
+	logf           func(string, ...any)
+	allowLog       bool
 
 	mod       api.Module
 	transform api.Function
@@ -129,14 +143,26 @@ type Invoker struct {
 
 // Invoke runs one transform: payload in, payload out. An error is a
 // transform failure the engine treats exactly like a Starlark failure
-// (delivery retries, then dead letter). With no wall-clock budget
-// (timeout_ms: 0) the context deadline is not enforced — fast mode.
+// (delivery retries, then dead letter). In fast mode there is no deadline —
+// a runaway call blocks until the pipeline restarts, and the watchdog logs
+// it once.
 func (inv *Invoker) Invoke(parent context.Context, payload []byte) ([]byte, error) {
 	ctx := parent
 	if inv.timeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(parent, inv.timeout)
 		defer cancel()
+	}
+	// Zero-interference slow-call watchdog: log once if the call is still
+	// running past the threshold. Never kills (that is the timeout's job in
+	// protected mode, and deliberately absent in fast mode).
+	var timer *time.Timer
+	if inv.slowCallWarnMs > 0 && inv.logf != nil {
+		entry := inv.entrypoint
+		timer = time.AfterFunc(time.Duration(inv.slowCallWarnMs)*time.Millisecond, func() {
+			inv.logf("wasm: invoke of %q still running after %dms (no kill switch armed; a runaway guest wedges this worker until restart)", entry, inv.slowCallWarnMs)
+		})
+		defer timer.Stop()
 	}
 	if err := inv.ensure(ctx); err != nil {
 		return nil, err

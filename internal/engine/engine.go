@@ -58,21 +58,26 @@ type Options struct {
 	// Logf surfaces plugin-process output and out-of-process source stream
 	// errors (nil = discard).
 	Logf func(format string, args ...any)
+
+	// WasmSlowCallWarnMs arms the zero-interference wasm slow-call watchdog
+	// (log once per long-running invoke; <=0 disables). Default 5000.
+	WasmSlowCallWarnMs int
 }
 
 // DefaultOptions returns production defaults.
 func DefaultOptions() Options {
 	return Options{
-		Clock:          time.Now,
-		NewID:          func() string { return uuid.New().String() },
-		BackoffBase:    100 * time.Millisecond,
-		DLBackoff:      500 * time.Millisecond,
-		HighWatermark:  10_000,
-		ChannelSize:    128,
-		BatchFlush:     time.Second,
-		DefaultTimeout: 30 * time.Second,
-		DrainTimeout:   10 * time.Second,
-		StarOptions:    starhost.DefaultOptions(),
+		Clock:              time.Now,
+		NewID:              func() string { return uuid.New().String() },
+		BackoffBase:        100 * time.Millisecond,
+		DLBackoff:          500 * time.Millisecond,
+		HighWatermark:      10_000,
+		ChannelSize:        128,
+		BatchFlush:         time.Second,
+		DefaultTimeout:     30 * time.Second,
+		DrainTimeout:       10 * time.Second,
+		WasmSlowCallWarnMs: 5000,
+		StarOptions:        starhost.DefaultOptions(),
 	}
 }
 

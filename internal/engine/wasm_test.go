@@ -1,11 +1,20 @@
 package engine
 
 import (
+	"context"
+	"encoding/json"
+	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
+	"github.com/eventboat/eventboat/internal/config"
+	"github.com/eventboat/eventboat/internal/ir"
+	"github.com/eventboat/eventboat/internal/lang/starhost"
 	"github.com/eventboat/eventboat/internal/store"
+	"github.com/eventboat/eventboat/internal/wasmhost"
 )
 
 // The wasm tier (redesign-v3.md §4.5 tier 3) runs the real guest under wazero
@@ -103,5 +112,120 @@ sinks:
 	}
 	if want := "samples must not be empty"; !strings.Contains(dlq[0].Reason, want) {
 		t.Fatalf("dead letter reason %q does not contain %q", dlq[0].Reason, want)
+	}
+}
+
+// M3-audit J2: fast mode is the default, so an unset wasm.timeout_ms warns
+// at verify (--strict upgrades warnings to errors); an explicitly set value
+// — either budget or fast — does not.
+func TestWasmNoKillSwitchLint(t *testing.T) {
+	mod := guestPath(t)
+	h := newHarness(t)
+	buildDiags := func(wasmExtra string) []config.Diagnostic {
+		t.Helper()
+		lr := config.LoadBytes("wasm-lint.yaml", []byte(`
+apiVersion: eventboat/v3
+kind: Pipeline
+metadata: { name: wasm-lint }
+sources:
+  in: { manual: { id: wl } }
+transforms:
+  heavy:
+    from: [in]
+    wasm:
+      module: "`+mod+`"
+      `+wasmExtra+`
+sinks:
+  out:
+    from: [heavy]
+    mem: { id: wout }
+`))
+		if lr.HasErrors() {
+			t.Fatalf("config errors: %+v", lr.Diagnostics)
+		}
+		_, diags := ir.Build(lr.Pipeline, h.reg, starhost.DefaultOptions(), nil)
+		return diags
+	}
+
+	has := func(diags []config.Diagnostic, code string) bool {
+		for _, d := range diags {
+			if d.Code == code {
+				return true
+			}
+		}
+		return false
+	}
+
+	// Unset: warning (upgradeable to error by --strict).
+	if diags := buildDiags(""); !has(diags, "wasm_no_kill_switch") {
+		t.Fatalf("unset timeout_ms: want wasm_no_kill_switch warning, got %+v", diags)
+	}
+	// Explicit positive budget: no warning.
+	if diags := buildDiags("timeout_ms: 500"); has(diags, "wasm_no_kill_switch") {
+		t.Fatalf("explicit budget must not warn: %+v", diags)
+	}
+	// Explicit fast mode: no warning (the user chose).
+	if diags := buildDiags("timeout_ms: 0"); has(diags, "wasm_no_kill_switch") {
+		t.Fatalf("explicit fast mode must not warn: %+v", diags)
+	}
+}
+
+// TestWasmSlowCallWatchdog covers the zero-interference slow-call log: one
+// warning per long-running invoke, none for short calls, never a kill.
+func TestWasmSlowCallWatchdog(t *testing.T) {
+	if testing.Short() {
+		t.Skip("runs a multi-second guest computation")
+	}
+	path := guestPath(t)
+	ctx := context.Background()
+	compiled, err := wasmhost.Compile(ctx, path, &config.WasmConfig{}) // fast: no kill switch
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer compiled.Close(ctx)
+
+	var mu sync.Mutex
+	var logs []string
+	logf := func(f string, a ...any) {
+		mu.Lock()
+		logs = append(logs, fmt.Sprintf(f, a...))
+		mu.Unlock()
+	}
+	inv := compiled.NewInvoker(&config.WasmConfig{}, logf, 50) // 50ms watchdog
+	defer inv.Close()
+
+	// Short call: no warning.
+	if _, err := inv.Invoke(ctx, []byte(`{"samples":[1,2,3]}`)); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(80 * time.Millisecond)
+	mu.Lock()
+	if len(logs) != 0 {
+		mu.Unlock()
+		t.Fatalf("short call produced watchdog logs: %v", logs)
+	}
+	mu.Unlock()
+
+	// Long call (10M float ops): exactly one warning, and the call still
+	// completes (fast mode never kills).
+	values := make([]float64, 200_000)
+	in, _ := json.Marshal(map[string]any{"samples": values, "passes": 50})
+	if _, err := inv.Invoke(ctx, in); err != nil {
+		t.Fatalf("fast-mode invoke must complete: %v", err)
+	}
+	time.Sleep(80 * time.Millisecond) // let any straggler timer fire flush
+	mu.Lock()
+	defer mu.Unlock()
+	n := 0
+	for _, l := range logs {
+		if strings.Contains(l, "still running") {
+			n++
+			if !strings.Contains(l, "transform") {
+				t.Errorf("watchdog log misses the entrypoint: %q", l)
+			}
+		}
+	}
+	if n != 1 {
+		t.Fatalf("watchdog fired %d times, want exactly 1 (throttled per call); logs=%v", n, logs)
 	}
 }

@@ -24,7 +24,7 @@ func (e *Engine) runTransform(node *ir.Node) {
 	// goroutine-safe and die on traps (review-m3 R4).
 	var invoker *wasmhost.Invoker
 	if node.Wasm != nil {
-		invoker = node.Wasm.NewInvoker(node.Config.Wasm, e.Opts.Logf)
+		invoker = node.Wasm.NewInvoker(node.Config.Wasm, e.Opts.Logf, e.Opts.WasmSlowCallWarnMs)
 		defer invoker.Close()
 	}
 	ch := e.chans[node.Name]

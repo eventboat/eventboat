@@ -171,6 +171,37 @@ sinks:
 	}
 }
 
+func TestWasmTimeoutDefaults(t *testing.T) {
+	// M3-audit J2: unset timeout_ms parses to the -1 sentinel (fast mode +
+	// verify lint warning); explicit 0 is a deliberate fast-mode choice and
+	// must not warn.
+	res := LoadBytes("p.yaml", []byte(`
+apiVersion: eventboat/v3
+kind: Pipeline
+metadata: { name: x }
+sources:
+  in: { file: { path: a } }
+transforms:
+  unset:
+    from: [in]
+    wasm: { module: guests/heavy.wasm }
+  fast:
+    from: [unset]
+    wasm: { module: guests/heavy.wasm, timeout_ms: 0 }
+sinks:
+  out: { from: [fast], file: { path: b } }
+`))
+	if res.HasErrors() {
+		t.Fatalf("unexpected errors: %+v", res.Diagnostics)
+	}
+	if got := res.Pipeline.Transforms["unset"].Wasm.TimeoutMs; got != -1 {
+		t.Errorf("unset timeout_ms = %d, want -1 sentinel", got)
+	}
+	if got := res.Pipeline.Transforms["fast"].Wasm.TimeoutMs; got != 0 {
+		t.Errorf("explicit timeout_ms: 0 = %d, want 0", got)
+	}
+}
+
 func TestSourceWithFromRejected(t *testing.T) {
 	res := LoadBytes("p.yaml", []byte(`
 apiVersion: eventboat/v3

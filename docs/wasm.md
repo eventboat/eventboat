@@ -19,7 +19,8 @@ transforms:
     wasm:
       module: transforms/heavy.wasm   # path relative to the pipeline file
       entrypoint: transform           # exported function name (default: transform)
-      timeout_ms: 1000                # per-invoke wall-clock budget (default 1000; 0 = fast mode, see below)
+      timeout_ms: 0                   # DEFAULT (fast mode): no kill switch — verify warns when unset;
+                                      # a positive value arms the per-invoke wall-clock kill switch (opt-in)
       max_memory_pages: 512           # linear memory cap, 64 KiB pages (default 512 = 32 MiB)
       allow: []                       # capability allowlist; known: log
 ```
@@ -39,19 +40,24 @@ transforms:
   traps, timeouts and memory overflow are transform failures — the incoming
   edge's `delivery` policy retries them, then the message dead-letters with
   the error text. Identical to the Starlark error path.
-- **Resource model**: wazero has no instruction-count metering, so the
-  budget is **wall-clock per invoke** (`timeout_ms`) plus a **hard memory
-  cap** (`max_memory_pages`). Enforcing the deadline requires wazero's
+- **Resource model**: wazero has no instruction-count metering, so budgets
+  are **wall-clock per invoke** (`timeout_ms`, opt-in) plus a **hard memory
+  cap** (`max_memory_pages`, always on). The **default is fast mode** — no
+  deadline, no kill switch — because enforcing the deadline requires wazero's
   context-close mechanism, which costs **~5x throughput on loop-heavy
-  guests** (measured; see the benchmark) — that is the price of being able to
-  kill a runaway guest at exactly the deadline. `timeout_ms: 0` selects
-  **fast mode**: no deadline enforcement and no kill switch — a runaway
-  guest then wedges its worker until the pipeline restarts. Choose fast mode
-  for trusted, well-tested guests doing heavy computation; keep the default
-  for anything else. A killed instance is re-instantiated transparently
-  before the next message. Timers are counted in
-  `eventboat_wasm_timeouts_total`; durations in
-  `eventboat_wasm_transform_duration_seconds`.
+  guests** (measured; see the benchmark), and a tier whose only reason to
+  exist is performance cannot default to slower than Starlark (M3-audit J2).
+  The trade is an availability risk, not a correctness one: a runaway guest
+  wedges exactly one worker — backpressure stalls, no data is lost, the
+  seven invariants hold, a restart clears it. Mitigations around the
+  default: **verify warns** on an unset `timeout_ms`
+  (`wasm_no_kill_switch`, upgraded to an error by `--strict`), and the
+  **slow-call watchdog** logs once per invoke still running after
+  `WasmSlowCallWarnMs` (engine default 5s) — a wedged call never reaches the
+  duration histogram, so this log is its only observability. Set a positive
+  `timeout_ms` to arm per-invoke killing (killed instances re-instantiate
+  transparently; timeouts counted in `eventboat_wasm_timeouts_total`,
+  durations in `eventboat_wasm_transform_duration_seconds`).
 - **Capability sandbox**: WASI preview1 is instantiated with wazero's
   defaults — deterministic fake clocks, no filesystem, no env/args, stdio
   discarded. Nothing else is exposed. `allow: [log]` routes the guest's
@@ -140,14 +146,15 @@ Reference numbers and how to reproduce them are in the
 | variant | per message | allocations |
 |---|---|---|
 | Starlark heavy script | 5.9 ms | 122,092 |
-| WASM, default (deadline armed) | 13.1 ms | 19 |
-| WASM, fast mode (`timeout_ms: 0`) | 2.5 ms | 4 |
+| WASM, fast mode (default) | 2.5 ms | 4 |
+| WASM, protected (`timeout_ms > 0`, kill switch armed) | 13.1 ms | 19 |
 | Starlark light script | 22 µs | 2,023 |
 | WASM light | 103 µs | 15 |
 
 Two honest conclusions: heavy per-message computation is where WASM wins
-(2.3x and ~30,000x fewer allocations in fast mode), but the kill switch is
-expensive — with the default deadline armed this workload is *slower* than
-Starlark on this machine. For simple field mapping Starlark wins outright
-(instantiation and JSON crossing dominate at small workloads) — which is
-exactly why the ladder exists.
+(2.3x and ~30,000x fewer allocations in the default fast mode), and the kill
+switch is expensive enough (~5x) that arming it by default would make this
+tier *slower than Starlark* — which is why fast mode is the default and
+protection is opt-in (M3-audit J2). For simple field mapping Starlark wins
+outright (instantiation and JSON crossing dominate at small workloads) —
+which is exactly why the ladder exists.

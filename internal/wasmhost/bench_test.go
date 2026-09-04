@@ -96,26 +96,27 @@ func BenchmarkHeavyTransform(b *testing.B) {
 		path = guestBenchPath(b)
 	}
 	ctx := context.Background()
-	// Two wasm modes: the default (timeout budget armed — wazero's kill
-	// switch costs ~5x on loop-heavy guests) and fast mode (timeout_ms: 0,
-	// no kill switch). Both belong in the README table.
-	compiled, err := Compile(ctx, path, &config.WasmConfig{TimeoutMs: config.DefaultWasmTimeoutMs})
-	if err != nil {
-		b.Fatal(err)
-	}
-	defer compiled.Close(ctx)
-	inv := compiled.NewInvoker(&config.WasmConfig{TimeoutMs: config.DefaultWasmTimeoutMs}, nil)
-	defer inv.Close()
-
-	fastCompiled, err := Compile(ctx, path, &config.WasmConfig{TimeoutMs: 0})
+	// Two wasm modes (M3-audit J2): fast is the DEFAULT (no kill switch);
+	// protected (positive timeout_ms, wazero's ctx-close kill switch costs
+	// ~5x on loop-heavy guests) is the explicitly-named comparison. Both
+	// belong in the README table.
+	fastCompiled, err := Compile(ctx, path, &config.WasmConfig{})
 	if err != nil {
 		b.Fatal(err)
 	}
 	defer fastCompiled.Close(ctx)
-	fastInv := fastCompiled.NewInvoker(&config.WasmConfig{TimeoutMs: 0}, nil)
+	fastInv := fastCompiled.NewInvoker(&config.WasmConfig{}, nil, 0)
 	defer fastInv.Close()
 
-	b.Run("wasm_heavy", func(b *testing.B) {
+	protectedCompiled, err := Compile(ctx, path, &config.WasmConfig{TimeoutMs: 1000})
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer protectedCompiled.Close(ctx)
+	protectedInv := protectedCompiled.NewInvoker(&config.WasmConfig{TimeoutMs: 1000}, nil, 0)
+	defer protectedInv.Close()
+
+	b.Run("wasm_heavy", func(b *testing.B) { // default: fast mode
 		b.ReportAllocs()
 		for i := 0; i < b.N; i++ {
 			// The engine path: JSON-encode the decoded payload, cross into the
@@ -124,16 +125,16 @@ func BenchmarkHeavyTransform(b *testing.B) {
 			if err != nil {
 				b.Fatal(err)
 			}
-			if _, err := inv.Invoke(ctx, in); err != nil {
+			if _, err := fastInv.Invoke(ctx, in); err != nil {
 				b.Fatal(err)
 			}
 		}
 	})
-	b.Run("wasm_heavy_fast", func(b *testing.B) {
+	b.Run("wasm_heavy_protected", func(b *testing.B) { // opt-in: kill switch armed
 		b.ReportAllocs()
 		in, _ := json.Marshal(payload)
 		for i := 0; i < b.N; i++ {
-			if _, err := fastInv.Invoke(ctx, in); err != nil {
+			if _, err := protectedInv.Invoke(ctx, in); err != nil {
 				b.Fatal(err)
 			}
 		}
@@ -142,7 +143,7 @@ func BenchmarkHeavyTransform(b *testing.B) {
 		small, _ := json.Marshal(map[string]any{"samples": []float64{1, 2, 3}})
 		b.ReportAllocs()
 		for i := 0; i < b.N; i++ {
-			if _, err := inv.Invoke(ctx, small); err != nil {
+			if _, err := fastInv.Invoke(ctx, small); err != nil {
 				b.Fatal(err)
 			}
 		}

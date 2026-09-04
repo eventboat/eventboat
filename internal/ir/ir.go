@@ -307,6 +307,13 @@ func Build(cfg *config.Pipeline, reg *registry.Registry, starOpts starhost.Optio
 				} else {
 					n.Wasm = compiled
 				}
+				// M3-audit J2: fast mode is the default, so an unset
+				// timeout_ms deserves an explicit warning (--strict upgrades).
+				if n.Config.Wasm.TimeoutMs < 0 {
+					add(config.Diagnostic{Severity: "warning", Code: "wasm_no_kill_switch", File: file, Line: n.Config.Line,
+						Message: fmt.Sprintf("transform %q runs the WASM guest without a kill switch (timeout_ms unset): a runaway guest wedges one worker until the pipeline restarts — no data is lost and the seven invariants hold", name),
+						Hint:    "set wasm.timeout_ms to a positive wall-clock budget to arm per-invoke killing"})
+				}
 			}
 		case config.SectionSource:
 			if n.Config.Grpc != nil {

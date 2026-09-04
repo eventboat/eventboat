@@ -213,16 +213,13 @@ type SplitConfig struct{}
 type WasmConfig struct {
 	Module         string   // module path, relative to the pipeline file
 	Entrypoint     string   // exported function name; "" means "transform"
-	TimeoutMs      int      // per-invoke wall-clock budget; DefaultWasmTimeoutMs unless set; 0 = no budget (fast mode, no kill switch)
+	TimeoutMs      int      // -1 = unset (fast mode + verify lint warning, the M3-audit J2 default); 0 = explicit fast mode (no kill switch); >0 = wall-clock budget with kill switch
 	MaxMemoryPages int      // wazero memory pages cap; 0 = DefaultWasmMaxMemoryPages
 	Allow          []string // capability allowlist; default none; known: log
 }
 
-// Defaults applied when the corresponding wasm field is absent.
-const (
-	DefaultWasmTimeoutMs      = 1000
-	DefaultWasmMaxMemoryPages = 512 // 32 MiB
-)
+// Default applied when wasm.max_memory_pages is absent.
+const DefaultWasmMaxMemoryPages = 512 // 32 MiB
 
 // BufferConfig is the in-memory per-edge buffer sizing (surge absorption
 // only; reliability comes from the spool, not from buffers).
