@@ -372,6 +372,7 @@ type outDoc struct {
 	Name         string
 	Limits       map[string]any
 	EdgeDefaults map[string]any
+	Codecs       map[string]any
 	Sources      []*outNode
 	Transforms   []*outNode
 	Sinks        []*outNode
@@ -389,6 +390,7 @@ func buildDocument(cfg *v2PipelineConfig, stages []*stage, edges []edge, rep *Re
 	if ed := edgeDefaultsDoc(cfg.EdgeDefaults, rep); ed != nil {
 		doc.EdgeDefaults = ed
 	}
+	codecs := &codecState{}
 
 	var sources, transforms, sinks []*outNode
 	for _, s := range stages {
@@ -396,13 +398,13 @@ func buildDocument(cfg *v2PipelineConfig, stages []*stage, edges []edge, rep *Re
 		case "source":
 			sources = append(sources, &outNode{
 				id: s.ID, section: "sources",
-				decoder: codecRefDoc(s.Decoder, "decoder", s.ID, rep),
+				decoder: codecs.refDoc(s.Decoder, "decoder", s.ID, rep),
 				plugin:  pluginName(s), plugCfg: sourcePluginCfg(s, rep),
 			})
 		case "sink":
 			n := &outNode{
 				id: s.ID, section: "sinks",
-				encoder: codecRefDoc(s.Encoder, "encoder", s.ID, rep),
+				encoder: codecs.refDoc(s.Encoder, "encoder", s.ID, rep),
 				plugin:  pluginName(s), plugCfg: sinkPluginCfg(s, rep),
 			}
 			n.batch = batchDoc(s.Batch, rep)
@@ -411,6 +413,9 @@ func buildDocument(cfg *v2PipelineConfig, stages []*stage, edges []edge, rep *Re
 		case "transform":
 			transforms = append(transforms, transformNode(s, rep))
 		}
+	}
+	if decls := codecs.mergeDecls(cfg, rep); len(decls) > 0 {
+		doc.Codecs = decls
 	}
 
 	// Convert edges to their v3 form and attach to targets.
@@ -477,6 +482,61 @@ func engineLimits(cfg *v2PipelineConfig, rep *Report) map[string]any {
 		return nil
 	}
 	return limits
+}
+
+// codecState carries synthesized `codecs:` declarations while the document
+// is built (inline v2 codec configs become named declarations); it keeps
+// Convert a pure function (no package state).
+type codecState struct {
+	synthesized map[string]map[string]any
+}
+
+// refDoc resolves a v2 CodecRef to a v3 codec NAME: a `ref` maps to the
+// same-name declaration converted from the v2 codecs list; an inline
+// `{type, config}` synthesizes a `<node>-<field>-codec` declaration; a bare
+// scalar stays the codec type name.
+func (st *codecState) refDoc(c *v2CodecRef, field, node string, rep *Report) string {
+	if c == nil {
+		return ""
+	}
+	switch {
+	case c.Ref != "":
+		return c.Ref
+	case len(c.Config) > 0:
+		name := node + "-" + field + "-codec"
+		decl := map[string]any{"type": c.Type}
+		for k, v := range c.Config {
+			decl[k] = v
+		}
+		if st.synthesized == nil {
+			st.synthesized = map[string]map[string]any{}
+		}
+		st.synthesized[name] = decl
+		rep.Notes = append(rep.Notes, fmt.Sprintf("v2 inline %s config on %q → synthesized codecs: declaration %q", field, node, name))
+		return name
+	default:
+		return c.Type
+	}
+}
+
+// mergeDecls combines the v2 codecs list with synthesized declarations.
+func (st *codecState) mergeDecls(cfg *v2PipelineConfig, rep *Report) map[string]any {
+	out := map[string]any{}
+	for _, c := range cfg.Codecs {
+		decl := map[string]any{"type": c.Type}
+		for k, v := range c.Config {
+			decl[k] = v
+		}
+		out[c.Name] = decl
+		rep.Notes = append(rep.Notes, fmt.Sprintf("v2 codec %q → v3 codecs: declaration (type %s)", c.Name, c.Type))
+	}
+	for _, name := range sortedKeys(st.synthesized) {
+		if _, taken := out[name]; taken {
+			continue
+		}
+		out[name] = st.synthesized[name]
+	}
+	return out
 }
 
 func edgeDefaultsDoc(attrs v2EdgeAttrs, rep *Report) map[string]any {
@@ -591,28 +651,6 @@ func durationToMs(s string) (int, bool) {
 
 // codecRefDoc resolves a v2 CodecRef to a plain codec name, reporting the
 // shapes v3 cannot express as a bare name (until the codecs: section lands).
-func codecRefDoc(c *v2CodecRef, field, node string, rep *Report) string {
-	if c == nil {
-		return ""
-	}
-	switch {
-	case c.Ref != "":
-		rep.Manuals = append(rep.Manuals, manualItem{
-			Where: fmt.Sprintf("%s %s: ref %q", node, field, c.Ref), Reason: "v2 named-codec reference with inline config has no bare-name v3 form",
-			Suggestion: "declare it under `codecs:` and reference the name",
-		})
-		return c.Ref
-	case len(c.Config) > 0:
-		rep.Manuals = append(rep.Manuals, manualItem{
-			Where: fmt.Sprintf("%s %s: inline codec config", node, field), Reason: "v2 inline codec configuration has no bare-name v3 form",
-			Suggestion: "declare it under `codecs:` and reference the name",
-		})
-		return c.Type
-	default:
-		return c.Type
-	}
-}
-
 func pluginName(s *stage) string { return s.Type }
 
 // sourcePluginCfg maps known v2 source config field differences; unknown

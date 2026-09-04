@@ -68,11 +68,22 @@ type Pipeline struct {
 	Run           *RunSpec
 	Parameters    map[string]*ParameterSpec // declared job parameters (nil without a run block)
 	Hooks         *HooksSpec
+	Codecs        map[string]*CodecDecl // named codec declarations (§5.10); decoder/encoder reference by name
 	Sources       map[string]*Node
 	Transforms    map[string]*Node
 	Sinks         map[string]*Node
 	// Order preserves a deterministic listing of all node names.
 	Order []string
+}
+
+// CodecDecl is one named codec declaration under `codecs:` (§5.10): a name
+// referencing a registered codec type plus its configuration. The name is
+// what decoder/encoder reference; it must not shadow a registered codec.
+type CodecDecl struct {
+	Name   string
+	Type   string
+	Config map[string]any
+	Line   int
 }
 
 // Limits is the optional per-pipeline resource ceiling (redesign-v3.md §5.10).

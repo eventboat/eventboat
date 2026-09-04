@@ -1,0 +1,13 @@
+// Test/Example message for the protobuf codec (M4). The committed
+// example.descr is `protoc --descriptor_set_out` output of this file; CI
+// rebuilds it the same way the wasm guest is rebuilt (source of truth next
+// to the artifact).
+syntax = "proto3";
+
+package eventboat.example;
+
+message Metric {
+  string name = 1;
+  int64 value = 2;
+  repeated string tags = 3;
+}

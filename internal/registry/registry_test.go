@@ -23,7 +23,7 @@ func TestRegisterReservedNameRejected(t *testing.T) {
 		if err := r.RegisterSink(name, 1, okSchema, func(map[string]any) (Sink, error) { return nil, nil }); err == nil {
 			t.Errorf("sink %q: reserved name accepted", name)
 		}
-		if err := r.RegisterCodec(name, func(map[string]any) (Codec, error) { return nil, nil }); err == nil {
+		if err := r.RegisterCodec(name, 1, okSchema, func(map[string]any, string) (Codec, error) { return nil, nil }); err == nil {
 			t.Errorf("codec %q: reserved name accepted", name)
 		}
 	}
@@ -102,7 +102,7 @@ func TestNewSourceUnknownAndSchemaValidation(t *testing.T) {
 	if _, err := r.NewSink("ghost", nil); err == nil {
 		t.Error("unknown sink accepted")
 	}
-	if _, err := r.NewCodec("ghost", nil); err == nil {
+	if _, err := r.NewCodec("ghost", nil, ""); err == nil {
 		t.Error("unknown codec accepted")
 	}
 
@@ -147,7 +147,7 @@ func TestCatalogListsSorted(t *testing.T) {
 	if err := r.RegisterSink("drop", 1, okSchema, noopSnk); err != nil {
 		t.Fatal(err)
 	}
-	if err := r.RegisterCodec("json", func(map[string]any) (Codec, error) { return nil, nil }); err != nil {
+	if err := r.RegisterCodec("json", 1, okSchema, func(map[string]any, string) (Codec, error) { return nil, nil }); err != nil {
 		t.Fatal(err)
 	}
 	c := r.Catalog()
@@ -157,7 +157,7 @@ func TestCatalogListsSorted(t *testing.T) {
 	if len(c.Sinks) != 1 || c.Sinks[0].Name != "drop" {
 		t.Errorf("sinks = %+v", c.Sinks)
 	}
-	if len(c.Codecs) != 1 || c.Codecs[0] != "json" {
+	if len(c.Codecs) != 1 || c.Codecs[0].Name != "json" || c.Codecs[0].Version != 1 {
 		t.Errorf("codecs = %+v", c.Codecs)
 	}
 }

@@ -10,6 +10,9 @@ func RegisterAll(reg *registry.Registry) error {
 	for _, fn := range []func(*registry.Registry) error{
 		registerJSONCodec,
 		registerRawCodec,
+		registerCSVCodec,
+		registerAvroCodec,
+		registerProtobufCodec,
 		registerFileSource,
 		registerCronSource,
 		registerHTTPServerSource,

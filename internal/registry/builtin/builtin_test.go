@@ -39,7 +39,7 @@ func wantSchemaError(t *testing.T, err error) {
 
 func TestCodecsRoundTrip(t *testing.T) {
 	reg := newReg(t)
-	jc, err := reg.NewCodec("json", nil)
+	jc, err := reg.NewCodec("json", nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +61,7 @@ func TestCodecsRoundTrip(t *testing.T) {
 		t.Error("malformed json accepted")
 	}
 
-	rc, err := reg.NewCodec("raw", nil)
+	rc, err := reg.NewCodec("raw", nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,7 +71,7 @@ func TestCodecsRoundTrip(t *testing.T) {
 	if _, err := rc.Encode(42); err == nil {
 		t.Error("raw encode of non-string accepted")
 	}
-	if _, err := reg.NewCodec("nope", nil); err == nil {
+	if _, err := reg.NewCodec("nope", nil, ""); err == nil {
 		t.Error("unknown codec accepted")
 	}
 }

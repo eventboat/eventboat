@@ -127,13 +127,14 @@ func LoadBytes(file string, data []byte) *Result {
 		"apiVersion": true, "kind": true, "metadata": true,
 		"edge_defaults": true, "constants": true, "limits": true,
 		"run": true, "parameters": true, "hooks": true,
+		"codecs": true,
 		"sources": true, "transforms": true, "sinks": true,
 	}
 	for _, kv := range mappingPairs(root) {
 		key := kv.key
 		if !allowedTop[key] {
-			hint := "supported top-level keys: apiVersion, kind, metadata, edge_defaults, constants, limits, run, parameters, hooks, sources, transforms, sinks"
-			if key == "codecs" || key == "dlq" || key == "telemetry" {
+			hint := "supported top-level keys: apiVersion, kind, metadata, edge_defaults, constants, limits, run, parameters, hooks, codecs, sources, transforms, sinks"
+			if key == "dlq" || key == "telemetry" {
 				hint = key + " is defined by redesign-v3.md §5.10 but not implemented yet"
 			}
 			res.Diagnostics = append(res.Diagnostics, Diagnostic{
@@ -171,6 +172,8 @@ func LoadBytes(file string, data []byte) *Result {
 		e := parseEdgeAttrs(file, "edge_defaults", nil, ed, lines.line("edge_defaults"), res)
 		p.EdgeDefaults = EdgeAttrs{Delivery: e.Delivery, Required: e.Required, Buffer: e.Buffer}
 	}
+
+	parseCodecs(file, raw, p, lines, res)
 
 	if lim, ok := raw["limits"]; ok {
 		lm, ok := lim.(map[string]any)
@@ -453,6 +456,52 @@ func parseRun(file string, raw map[string]any, p *Pipeline, lines *lineIndex, re
 }
 
 // parseParameters validates typed parameter declarations (§5.9).
+// parseCodecs parses the `codecs:` section (§5.10): named codec
+// declarations — `name: { type: <codec>, ...config }`. The type-check and
+// schema validation happen at verify (ir.Build resolves against the
+// registry); the loader owns shape and the declaration map.
+func parseCodecs(file string, raw map[string]any, p *Pipeline, lines *lineIndex, res *Result) {
+	cn, present := raw["codecs"]
+	if !present {
+		return
+	}
+	cm, ok := cn.(map[string]any)
+	if !ok {
+		res.Diagnostics = append(res.Diagnostics, Diagnostic{
+			Severity: "error", Code: "cfg_codecs_type", File: file, Line: lines.line("codecs"),
+			Message: "codecs must be a mapping of name to declaration", Hint: `codecs: { orders-avro: { type: avro, schema: ... } }`,
+		})
+		return
+	}
+	p.Codecs = map[string]*CodecDecl{}
+	for name, decl := range cm {
+		line := lines.line("codecs", name)
+		dm, ok := decl.(map[string]any)
+		if !ok {
+			res.Diagnostics = append(res.Diagnostics, Diagnostic{
+				Severity: "error", Code: "cfg_codecs_type", File: file, Line: line,
+				Message: fmt.Sprintf("codec %q must be a mapping", name), Hint: `orders-avro: { type: avro, schema: ... }`,
+			})
+			continue
+		}
+		typ, _ := dm["type"].(string)
+		if typ == "" {
+			res.Diagnostics = append(res.Diagnostics, Diagnostic{
+				Severity: "error", Code: "cfg_codec_type", File: file, Line: line,
+				Message: fmt.Sprintf("codec %q is missing its type", name), Hint: "type is the registered codec name, e.g. avro, csv, protobuf, json, raw",
+			})
+			continue
+		}
+		cfg := make(map[string]any, len(dm)-1)
+		for k, v := range dm {
+			if k != "type" {
+				cfg[k] = v
+			}
+		}
+		p.Codecs[name] = &CodecDecl{Name: name, Type: typ, Config: cfg, Line: line}
+	}
+}
+
 func parseParameters(file string, raw map[string]any, p *Pipeline, lines *lineIndex, res *Result) {
 	pn, present := raw["parameters"]
 	if !present {
@@ -788,6 +837,9 @@ func SubstituteParameters(p *Pipeline, global map[string]any, valuesFor func(sou
 	// Constants (plain values).
 	for k, v := range p.Constants {
 		p.Constants[k] = sub(v, global)
+	}
+	for _, decl := range p.Codecs {
+		decl.Config, _ = sub(decl.Config, global).(map[string]any)
 	}
 	for _, node := range append(append(mapValues(p.Sources), mapValues(p.Transforms)...), mapValues(p.Sinks)...) {
 		values := global

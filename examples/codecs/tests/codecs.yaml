@@ -1,0 +1,26 @@
+suite: codecs-example
+pipeline: ../pipeline.yaml
+cases:
+  - name: csv-row-decoded-typed-and-encoded-as-avro
+    inject:
+      at: ingest
+      raw: "ORD-1,10.5,2"
+    expect:
+      capture:
+        at: avro-out
+        messages:
+          - payload.order_no: ORD-1
+            payload.amount: 10.5
+            payload.quantity: 2
+            payload.total: 21
+  - name: bad-int-dead-letters
+    inject:
+      at: ingest
+      raw: "ORD-2,1.5,not-an-int"
+    expect:
+      dlq:
+        count: 1
+        reason_contains: csv
+      capture:
+        at: avro-out
+        count: 0

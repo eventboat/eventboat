@@ -31,6 +31,9 @@ func marshalDocument(doc *outDoc) ([]byte, error) {
 	if doc.EdgeDefaults != nil {
 		add("edge_defaults", anyToNode(doc.EdgeDefaults))
 	}
+	if doc.Codecs != nil {
+		add("codecs", anyToNode(doc.Codecs))
+	}
 
 	section := func(name string, nodes []*outNode) {
 		if len(nodes) == 0 {

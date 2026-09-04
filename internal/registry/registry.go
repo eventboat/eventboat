@@ -108,8 +108,11 @@ type sinkEntry struct {
 }
 
 type codecEntry struct {
-	name    string
-	factory func(cfg map[string]any) (Codec, error)
+	name     string
+	version  int
+	schema   string
+	compiled *jsonschema.Schema
+	factory  func(cfg map[string]any, dir string) (Codec, error)
 }
 
 // Registry holds all registered plugins. Use Default() for the process-wide
@@ -202,17 +205,35 @@ func (r *Registry) RegisterSink(name string, version int, schema string, factory
 	return nil
 }
 
-// RegisterCodec registers a codec plugin.
-func (r *Registry) RegisterCodec(name string, factory func(cfg map[string]any) (Codec, error)) error {
+// CodecFactory instantiates a codec from its configuration. dir is the
+// pipeline file's directory ("" when unknown): codecs whose config carries
+// file paths (e.g. the protobuf descriptor_set) resolve them against it,
+// the same rule the WASM tier uses for module paths.
+type CodecFactory = func(cfg map[string]any, dir string) (Codec, error)
+
+// RegisterCodec registers a codec plugin with its ABI version and JSON
+// Schema (M4: codecs join the schema-mandatory registration rule, §6.5 —
+// named `codecs:` declarations validate their config against this schema).
+func (r *Registry) RegisterCodec(name string, version int, schema string, factory CodecFactory) error {
 	if reservedNames[name] {
 		return fmt.Errorf("plugin name %q is reserved by the framework field whitelist", name)
+	}
+	if version < 1 {
+		return fmt.Errorf("codec %q: version must be >= 1", name)
+	}
+	if factory == nil {
+		return fmt.Errorf("codec %q: nil factory", name)
+	}
+	compiled, err := compileSchema("codec/"+name, schema)
+	if err != nil {
+		return err
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if _, dup := r.codecs[name]; dup {
 		return fmt.Errorf("codec %q already registered", name)
 	}
-	r.codecs[name] = &codecEntry{name: name, factory: factory}
+	r.codecs[name] = &codecEntry{name: name, version: version, schema: schema, compiled: compiled, factory: factory}
 	return nil
 }
 
@@ -266,15 +287,35 @@ func (r *Registry) NewSink(name string, cfg map[string]any) (Sink, error) {
 	return e.factory(cfg)
 }
 
-// NewCodec instantiates a codec plugin.
-func (r *Registry) NewCodec(name string, cfg map[string]any) (Codec, error) {
+// NewCodec instantiates a codec plugin after validating cfg against its
+// schema (a nil cfg validates as an empty object — bare-name references
+// like `decoder: json` carry no config). dir reaches the factory for
+// relative path resolution; pass "" when no base directory exists.
+func (r *Registry) NewCodec(name string, cfg map[string]any, dir string) (Codec, error) {
 	r.mu.RLock()
 	e, ok := r.codecs[name]
 	r.mu.RUnlock()
 	if !ok {
 		return nil, fmt.Errorf("unknown codec %q", name)
 	}
-	return e.factory(cfg)
+	if cfg == nil {
+		cfg = map[string]any{}
+	}
+	if err := validate(e.compiled, name, cfg); err != nil {
+		return nil, err
+	}
+	return e.factory(cfg, dir)
+}
+
+// LookupCodec returns the codec entry registered under name.
+func (r *Registry) LookupCodec(name string) (*CodecMeta, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	e, ok := r.codecs[name]
+	if !ok {
+		return nil, false
+	}
+	return &CodecMeta{Name: e.name, Version: e.version, Schema: e.schema}, true
 }
 
 // SourceMeta describes a registered source (for catalog output).
@@ -292,11 +333,19 @@ type SinkMeta struct {
 	Schema  string `json:"schema"`
 }
 
+// CodecMeta describes a registered codec (for catalog output and the
+// `codecs:` declaration validation).
+type CodecMeta struct {
+	Name    string `json:"name"`
+	Version int    `json:"version"`
+	Schema  string `json:"schema"`
+}
+
 // Catalog lists registered plugins grouped by section, sorted by name.
 type Catalog struct {
 	Sources []SourceMeta `json:"sources"`
 	Sinks   []SinkMeta   `json:"sinks"`
-	Codecs  []string     `json:"codecs"`
+	Codecs  []CodecMeta  `json:"codecs"`
 }
 
 func (r *Registry) Catalog() Catalog {
@@ -309,12 +358,12 @@ func (r *Registry) Catalog() Catalog {
 	for _, e := range r.sinks {
 		c.Sinks = append(c.Sinks, SinkMeta{Name: e.name, Version: e.version, Schema: e.schema})
 	}
-	for name := range r.codecs {
-		c.Codecs = append(c.Codecs, name)
+	for _, e := range r.codecs {
+		c.Codecs = append(c.Codecs, CodecMeta{Name: e.name, Version: e.version, Schema: e.schema})
 	}
 	sort.Slice(c.Sources, func(i, j int) bool { return c.Sources[i].Name < c.Sources[j].Name })
 	sort.Slice(c.Sinks, func(i, j int) bool { return c.Sinks[i].Name < c.Sinks[j].Name })
-	sort.Strings(c.Codecs)
+	sort.Slice(c.Codecs, func(i, j int) bool { return c.Codecs[i].Name < c.Codecs[j].Name })
 	return c
 }
 

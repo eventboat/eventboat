@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/robfig/cron/v3"
@@ -92,6 +93,10 @@ type Pipeline struct {
 	Parameters       map[string]any // resolved parameter values (job pipelines)
 	FrozenParameters starlark.Value
 	StarOptions      starhost.Options
+	// Codecs holds instantiated named codec declarations (`codecs:`, §5.10):
+	// decoder/encoder referencing a declared name resolve to these; bare
+	// registered names still instantiate through the registry (engine-side).
+	Codecs map[string]registry.Codec
 }
 
 // Build compiles a configuration into the static IR, producing diagnostics
@@ -143,6 +148,27 @@ func Build(cfg *config.Pipeline, reg *registry.Registry, starOpts starhost.Optio
 		n := &Node{Name: name, Section: cn.Section, Config: cn}
 		p.Nodes[name] = n
 		p.Order = append(p.Order, name)
+	}
+
+	// Named codec declarations (`codecs:`, §5.10): resolve each against the
+	// registry (type existence, config schema validation with the pipeline
+	// directory for relative paths) and instantiate once. Declaration names
+	// must not shadow registered codecs — the two namespaces stay disjoint.
+	p.Codecs = map[string]registry.Codec{}
+	for _, declName := range sortedDeclNames(cfg.Codecs) {
+		decl := cfg.Codecs[declName]
+		if _, isRegistered := reg.LookupCodec(decl.Name); isRegistered {
+			add(config.Diagnostic{Severity: "error", Code: "cfg_codec_shadow", File: file, Line: decl.Line,
+				Message: fmt.Sprintf("codec declaration %q shadows the registered codec %q", decl.Name, decl.Name),
+				Hint:    "declaration names and registered codec names are separate namespaces; pick another name"})
+			continue
+		}
+		c, err := reg.NewCodec(decl.Type, decl.Config, filepath.Dir(file))
+		if err != nil {
+			addSchemaDiags(file, &Node{Config: &config.Node{Name: decl.Name, Line: decl.Line, Plugin: decl.Type, PluginConfig: decl.Config}}, err, add)
+			continue
+		}
+		p.Codecs[decl.Name] = c
 	}
 
 	// Resolve edges, compile conditions, apply edge defaults.
@@ -333,7 +359,7 @@ func Build(cfg *config.Pipeline, reg *registry.Registry, starOpts starhost.Optio
 			if codec == "" {
 				codec = "json"
 			}
-			if _, err := reg.NewCodec(codec, nil); err != nil {
+			if err := resolveCodec(p, reg, codec, file, n, add); err != nil {
 				add(config.Diagnostic{Severity: "error", Code: "codec_unknown", File: file, Line: n.Config.Line,
 					Message: fmt.Sprintf("unknown decoder %q on source %q", codec, name)})
 			}
@@ -354,7 +380,7 @@ func Build(cfg *config.Pipeline, reg *registry.Registry, starOpts starhost.Optio
 			if codec == "" {
 				codec = "json"
 			}
-			if _, err := reg.NewCodec(codec, nil); err != nil {
+			if err := resolveCodec(p, reg, codec, file, n, add); err != nil {
 				add(config.Diagnostic{Severity: "error", Code: "codec_unknown", File: file, Line: n.Config.Line,
 					Message: fmt.Sprintf("unknown encoder %q on sink %q", codec, name)})
 			}
@@ -868,4 +894,33 @@ func sortStrings(s []string) {
 			s[j], s[j-1] = s[j-1], s[j]
 		}
 	}
+}
+
+// resolveCodec validates the codec a decoder/encoder references: declared
+// names resolve to the pre-instantiated p.Codecs; bare names must be
+// registered codecs whose factory accepts an empty configuration. A
+// returned error means "not found" (the caller reports codec_unknown);
+// configuration failures surface here as codec_config.
+func resolveCodec(p *Pipeline, reg *registry.Registry, name, file string, n *Node, add func(config.Diagnostic)) error {
+	if _, ok := p.Codecs[name]; ok {
+		return nil
+	}
+	if _, ok := reg.LookupCodec(name); !ok {
+		return fmt.Errorf("unknown codec %q", name)
+	}
+	if _, err := reg.NewCodec(name, nil, filepath.Dir(file)); err != nil {
+		add(config.Diagnostic{Severity: "error", Code: "codec_config", File: file, Line: n.Config.Line,
+			Message: fmt.Sprintf("codec %q: %v", name, err),
+			Hint:    "codecs that need configuration (csv/avro/protobuf) must be declared under `codecs:` and referenced by name"})
+	}
+	return nil
+}
+
+func sortedDeclNames(m map[string]*config.CodecDecl) []string {
+	names := make([]string, 0, len(m))
+	for k := range m {
+		names = append(names, k)
+	}
+	sort.Strings(names)
+	return names
 }

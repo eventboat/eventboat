@@ -1,0 +1,42 @@
+# Named codec declarations (§5.10): csv in, avro out. One message is one
+# CSV record; the transform sees typed fields (float amount, int quantity),
+# and the sink encodes the enriched record as Avro.
+apiVersion: eventboat/v3
+kind: Pipeline
+metadata: {name: codecs-example}
+
+codecs:
+  orders-csv:
+    type: csv
+    columns:
+      - {name: order_no, type: string}
+      - {name: amount, type: float}
+      - {name: quantity, type: int}
+  orders-avro:
+    type: avro
+    schema: |
+      {
+        "type": "record",
+        "name": "Order",
+        "fields": [
+          {"name": "order_no", "type": "string"},
+          {"name": "total", "type": "double"}
+        ]
+      }
+
+sources:
+  ingest:
+    decoder: orders-csv
+    file: {path: input/orders.csv}
+
+transforms:
+  total:
+    from: [ingest]
+    script: |
+      payload.total = payload.amount * payload.quantity
+
+sinks:
+  avro-out:
+    from: [total]
+    encoder: orders-avro
+    file: {path: output/orders.avro}

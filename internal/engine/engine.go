@@ -354,11 +354,20 @@ func (e *Engine) releaseAdmission(seq int64) {
 	<-e.admitSem
 }
 
+// codec resolves a codec by name: named `codecs:` declarations come
+// pre-instantiated on the IR (config validated at verify); bare names
+// instantiate through the registry (no config, no relative paths).
 func (e *Engine) codec(name string, reg *registry.Registry) (registry.Codec, error) {
 	if c, ok := e.codecs[name]; ok {
 		return c, nil
 	}
-	c, err := reg.NewCodec(name, nil)
+	if e.IR != nil {
+		if c, ok := e.IR.Codecs[name]; ok {
+			e.codecs[name] = c
+			return c, nil
+		}
+	}
+	c, err := reg.NewCodec(name, nil, "")
 	if err != nil {
 		return nil, err
 	}

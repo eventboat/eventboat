@@ -5,6 +5,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/eventboat/eventboat/internal/config"
 )
 
 // Completion context analysis is line/indent-based over the document text
@@ -16,7 +18,7 @@ import (
 
 var topLevelSections = []string{
 	"apiVersion", "kind", "metadata", "edge_defaults", "constants", "limits",
-	"run", "parameters", "hooks", "sources", "transforms", "sinks",
+	"run", "parameters", "hooks", "codecs", "sources", "transforms", "sinks",
 }
 
 // Framework fields per section (mirrors config.sections.go nodeWhitelist).
@@ -216,7 +218,7 @@ func (s *Server) completionsFor(text string, line, character int) []completionIt
 	if valueKey != "" {
 		switch valueKey {
 		case "decoder", "encoder":
-			return filter(s.codecItems())
+			return filter(append(s.codecItems(), declaredCodecItems(text)...))
 		case "backoff":
 			return filter([]completionItem{
 				{Label: "exponential", Kind: kindEnum, InsertText: "exponential"},
@@ -394,8 +396,28 @@ func (s *Server) pluginItems(section string) []completionItem {
 
 func (s *Server) codecItems() []completionItem {
 	var out []completionItem
-	for _, name := range s.reg.Catalog().Codecs {
-		out = append(out, completionItem{Label: name, Kind: kindEnum, Detail: "codec", InsertText: name})
+	for _, m := range s.reg.Catalog().Codecs {
+		out = append(out, completionItem{Label: m.Name, Kind: kindEnum, Detail: "codec (v" + itoa(m.Version) + ")", InsertText: m.Name})
+	}
+	return out
+}
+
+// declaredCodecItems lists `codecs:` declaration names found in the
+// document text (they are valid decoder/encoder references too). The doc
+// may be mid-edit; a failed parse simply yields no declarations.
+func declaredCodecItems(text string) []completionItem {
+	lr := config.LoadBytes("completion.yaml", []byte(text))
+	if lr.Pipeline == nil || lr.Pipeline.Codecs == nil {
+		return nil
+	}
+	names := make([]string, 0, len(lr.Pipeline.Codecs))
+	for name := range lr.Pipeline.Codecs {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	out := make([]completionItem, 0, len(names))
+	for _, name := range names {
+		out = append(out, completionItem{Label: name, Kind: kindEnum, Detail: "declared codec (codecs: section)", InsertText: name})
 	}
 	return out
 }

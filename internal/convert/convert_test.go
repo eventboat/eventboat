@@ -3,6 +3,7 @@ package convert
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -232,5 +233,54 @@ func TestConvertRejectsBroken(t *testing.T) {
 	unknown := []byte("apiVersion: riverpod/v1\nkind: Pipeline\nmetadata: {name: x}\nbogus_section: {}\nsteps:\n  a:\n    source: {type: cron, config: {schedule: \"0 0 * * * *\"}}\n")
 	if _, err := Convert("unknown.yaml", unknown); err == nil {
 		t.Fatal("expected unknown-field error")
+	}
+}
+
+// The v2 codecs list + ref/inline codec references become v3 named
+// declarations (§5.10): refs keep their name, inline configs synthesize one.
+func TestConvertV2Codecs(t *testing.T) {
+	src := []byte(`apiVersion: riverpod/v1
+kind: Pipeline
+metadata: {name: codecs}
+codecs:
+  - name: my-json
+    type: json
+    config: {}
+steps:
+  in:
+    source:
+      type: cron
+      decoder: {ref: my-json}
+      config: {schedule: "0 0 * * * *"}
+  mid:
+    depends_on: [in]
+    transform:
+      type: map
+      config: {dsl: "payload.x = 1"}
+  out:
+    depends_on: [mid]
+    sink:
+      type: drop
+      encoder: {type: json, config: {pretty: true}}
+`)
+	res, err := Convert("codecs.yaml", src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := string(res.YAML)
+	for _, want := range []string{
+		"codecs:", "my-json:", "type: json", "out-encoder-codec:", "pretty: true",
+		"decoder: my-json", "encoder: out-encoder-codec",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output missing %q:\n%s", want, out)
+		}
+	}
+	if !res.Report.VerifyOK {
+		for _, d := range res.Report.VerifyDiags {
+			if d.Severity == "error" {
+				t.Errorf("verify error: %s", d.Error())
+			}
+		}
 	}
 }
