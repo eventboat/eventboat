@@ -6,6 +6,25 @@ All notable changes to Eventboat. The format follows
 
 ## Unreleased
 
+### Changed
+
+- **CLI dispatch migrated to `github.com/lynx-go/commands` v0.2.0** (the
+  project's own zero-dependency verb-dispatch framework; its two v0.2.0
+  features — global valueless root bool flags and verb-declared usage
+  errors — were added for exactly this migration and are proven by it).
+  Command names, flags and exit codes are unchanged; the deliberate
+  help-surface changes: bare `eventboat` prints the help screen to stdout
+  and exits 0 (was: usage on stderr, exit 2); `eventboat help <verb>` and
+  verb-level `-h` print per-verb usage and flag defaults (exit 0); usage
+  failures (unknown verb/subcommand, flag parse errors, missing required
+  flags) exit 2 with a `usage:` hint line on stderr; `--json` remains a
+  global flag and is additionally accepted after the verb. Help output is
+  pinned by golden snapshots (cmd/eventboat/testdata/help; regenerate with
+  `go test ./cmd/eventboat -run TestHelpSnapshots -update`). The cmdX
+  executors and their direct unit tests are untouched, and the stdio
+  protocol channels stay clean (LSP protocol test and MCP agent-loop test
+  green over the migrated binary).
+
 ### Removed
 
 - **The archived v2 tree (`legacy/`) is gone from the worktree.** Nothing

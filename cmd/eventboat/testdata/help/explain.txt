@@ -1,0 +1,13 @@
+usage: eventboat [--json] explain --config <pipeline.yaml> [--message f.json] [--topology]
+
+flags:
+  -at string
+    	entry node for the sample message (default: first source)
+  -config string
+    	pipeline configuration file
+  -json
+    	machine-readable output for agents and CI (the global --json, also accepted here)
+  -message string
+    	sample message JSON file (message-level evaluation)
+  -topology
+    	render the DAG (mermaid + ASCII) instead of a trace

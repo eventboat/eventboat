@@ -1,0 +1,35 @@
+usage: eventboat [--json] replay --config <pipeline.yaml> (--dlq | --spool --from N | --job <run-id>) [--dry-run]
+
+flags:
+  -at string
+    	target node for re-injection (default: each message's origin node)
+  -config string
+    	pipeline configuration file
+  -data-dir string
+    	SQLite storage directory (default "data")
+  -delete
+    	delete replayed dead letters after successful reinjection
+  -dlq
+    	replay dead letters (filtered by --since/--where)
+  -dry-run
+    	explain the paths instead of delivering
+  -ephemeral
+    	run the replay engine against an in-memory store (sinks still real)
+  -from int
+    	spool sequence to replay from (--spool) (default -1)
+  -ids string
+    	comma-separated dead letter ids to replay (--dlq)
+  -job string
+    	replay one job run's dead letters (run-id)
+  -json
+    	machine-readable output for agents and CI (the global --json, also accepted here)
+  -limit int
+    	maximum messages to replay (default 100)
+  -since string
+    	duration filter for --dlq (e.g. 2h)
+  -spool
+    	replay a spool window from --from <seq>
+  -to int
+    	spool sequence to replay through, inclusive (--spool) (default -1)
+  -where string
+    	CEL filter over {payload, meta} for --dlq (e.g. 'meta.region == "eu"')

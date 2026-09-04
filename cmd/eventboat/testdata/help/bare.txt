@@ -1,0 +1,20 @@
+eventboat — agent-native event router (v3 POC)
+
+commands:
+  explain    deterministic walkthrough: symbolic, message-level with real CEL/Starlark, or --topology DAG render
+  jobs       job run history: list or show (counts, parameters, dead letters)
+  lsp        language server over stdio: verify diagnostics, completion and hover for pipeline YAML
+  mcp        the agent operations surface: MCP tools over stdio (agent hosts) or HTTP (with Admin REST + SSE + UI)
+  plugin     plugin ABI surface: catalog lists registered plugins; schema exports JSON Schemas (§6.5)
+  repl       evaluate CEL predicates and Starlark scripts against one sample message (§3.6/§4.4)
+  replay     re-inject dead letters (--dlq), a spool window (--spool) or one job run (--job) into a live pipeline
+  run        execute a pipeline (spool+settle+checkpoint, SQLite store); --config-dir runs every pipeline in a directory
+  test       run contract test suites against the real in-process engine (§3.2)
+  trigger    manually fire a job pipeline once, optionally with parameters (backfill)
+  verify     statically validate a pipeline: schema, topology, CEL+Starlark compilation, lint (§3.1)
+
+Global flags:
+  --json    machine-readable output for agents and CI (any position:
+            eventboat --json verify, eventboat verify --json)
+
+Run 'eventboat help <verb>' for a verb's usage and flags.

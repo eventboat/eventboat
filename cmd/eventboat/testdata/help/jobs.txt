@@ -1,0 +1,1 @@
+usage: eventboat [--json] jobs list --config <job.yaml> [--data-dir DIR] [--limit N] | eventboat [--json] jobs show <run-id> --config <job.yaml>

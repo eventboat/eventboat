@@ -1,0 +1,13 @@
+usage: eventboat [--json] trigger --config <job.yaml> [--parameters '{"from":"..."}']
+
+flags:
+  -config string
+    	job pipeline configuration file
+  -data-dir string
+    	SQLite storage directory (default "data")
+  -ephemeral
+    	in-memory store (nothing persists)
+  -json
+    	machine-readable output for agents and CI (the global --json, also accepted here)
+  -parameters string
+    	JSON object of job parameters (e.g. backfill ranges)

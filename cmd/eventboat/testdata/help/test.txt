@@ -1,0 +1,5 @@
+usage: eventboat [--json] test <testfile-or-dir> [...]
+
+flags:
+  -json
+    	machine-readable output for agents and CI (the global --json, also accepted here)

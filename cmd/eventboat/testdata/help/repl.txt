@@ -1,0 +1,11 @@
+usage: eventboat repl [--message sample.json] [--cel 'expr' | --script f.star]
+
+flags:
+  -cel string
+    	evaluate one CEL predicate against the message and exit
+  -json
+    	machine-readable output for agents and CI (the global --json, also accepted here)
+  -message string
+    	sample message JSON file (default: {})
+  -script string
+    	run one Starlark script file against the message and exit

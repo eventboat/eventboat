@@ -667,6 +667,31 @@ why — and the before/after benchmark numbers):
   thresholds ([scripts/bench-gate.sh](scripts/bench-gate.sh) — an
   order-of-magnitude gate, not a noise gate; WASM stays informational).
 
+### Decision ledger — CLI dispatch migration (2026-09-04)
+
+The handwritten usageText + switch in cmd/eventboat is retired: the
+dispatch layer now assembles a verb table on
+[github.com/lynx-go/commands](https://github.com/lynx-go/commands) v0.2.0,
+the project's own zero-dependency CLI framework. **Dogfood verdict: the
+library's two v0.2.0 additions — `RootBoolFlags` (a global valueless
+`--json` delivered via `Environment.RootBools`, parsed wherever it appears)
+and `UsageError` (verb-declared usage failures → exit 2 + `usage:` hint) —
+were designed for this migration and carried it end to end; no capability
+gaps surfaced, nothing was forked or bypassed.** The division of labor:
+verbs declare their flags in `SetFlags` so the framework owns parse errors,
+the help screens and `-h`; `Run` rebuilds the exact invocation (set flags
++ positionals) and delegates to the unchanged `cmdX` executors, which stay
+directly callable from tests. Compatibility: command names, flags and exit
+codes unchanged; three accepted help-surface deltas — bare `eventboat`
+prints help to stdout and exits 0 (was usage on stderr, exit 2), `help
+<verb>`/verb-level `-h` are new (exit 0), and usage failures now append a
+`usage:` hint (exit 2, e.g. `trigger` without `--config`, `jobs` subcommand
+misses, flag parse errors). `jobs` stays a bare verb (its hand parser
+allows `--config` after the positional run-id); `lsp` and `mcp --stdio`
+keep protocol-pure stdout (the LSP protocol test and MCP agent-loop test
+run green over the migrated binary). Help output is pinned by golden
+snapshots (`cmd/eventboat/testdata/help/`).
+
 ## Repository layout
 
 ```

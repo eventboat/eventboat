@@ -1,0 +1,9 @@
+usage: eventboat [--json] verify --config <pipeline.yaml> [--strict]
+
+flags:
+  -config string
+    	pipeline configuration file
+  -json
+    	machine-readable output for agents and CI (the global --json, also accepted here)
+  -strict
+    	upgrade warnings to errors

@@ -1,0 +1,17 @@
+usage: eventboat mcp (--stdio | --http) [--config-dir <dir>] [--data-dir DIR]
+
+flags:
+  -config-dir string
+    	directory of pipeline YAML files to deploy at startup
+  -data-dir string
+    	override storage.data_dir
+  -ephemeral
+    	override storage.ephemeral (in-memory stores)
+  -http
+    	serve MCP over HTTP (Streamable HTTP) together with the admin surface
+  -json
+    	machine-readable output for agents and CI (the global --json, also accepted here)
+  -runtime string
+    	Runtime configuration file (default: ./eventboat.yaml)
+  -stdio
+    	speak MCP over stdin/stdout (for agent hosts to spawn)

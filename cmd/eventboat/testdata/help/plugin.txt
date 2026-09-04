@@ -1,0 +1,5 @@
+usage: eventboat [--json] plugin catalog | eventboat [--json] plugin schema <name> | eventboat plugin schema --all --dir schemas/
+
+flags:
+  -json
+    	machine-readable output for agents and CI (the global --json, also accepted here)

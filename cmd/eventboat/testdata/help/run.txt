@@ -1,0 +1,15 @@
+usage: eventboat run --config <pipeline.yaml> [--data-dir DIR] [--ephemeral] | eventboat run --config-dir <dir> [--runtime runtime.yaml]
+
+flags:
+  -config string
+    	pipeline configuration file
+  -config-dir string
+    	directory of pipeline YAML files (multi-pipeline daemon with admin surface)
+  -data-dir string
+    	SQLite storage directory (deployment-level concern, POC flag) (default "data")
+  -ephemeral
+    	in-memory store: nothing persists across restarts
+  -json
+    	machine-readable output for agents and CI (the global --json, also accepted here)
+  -runtime string
+    	Runtime configuration file (telemetry endpoints; default: ./eventboat.yaml)
