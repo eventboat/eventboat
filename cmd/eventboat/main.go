@@ -13,18 +13,21 @@ Usage:
   eventboat [--json] verify --config <pipeline.yaml> [--strict]
   eventboat [--json] test <testfile-or-dir> [...]
   eventboat run --config <pipeline.yaml> [--data-dir DIR] [--ephemeral]
+  eventboat run --config-dir <dir> [--runtime runtime.yaml]      # multi-pipeline daemon
   eventboat [--json] trigger --config <job.yaml> [--parameters '{"from":"..."}']
   eventboat [--json] jobs list --config <job.yaml> [--limit N]
   eventboat [--json] jobs show <run-id> --config <job.yaml>
   eventboat [--json] explain --config <pipeline.yaml> [--message f.json] [--topology]
   eventboat [--json] replay --config <pipeline.yaml> (--dlq | --spool --from N | --job <run-id>) [--dry-run]
+  eventboat mcp (--stdio | --http) [--config-dir <dir>] [--data-dir DIR]
 
 Commands:
   verify    statically validate a pipeline: schema, topology, CEL+Starlark
             compilation, job config and semantic lint (redesign-v3.md §3.1)
   test      run contract test suites against the real in-process engine (§3.2)
   run       execute a pipeline (spool+settle+checkpoint; SQLite store);
-            job pipelines run under the jobs manager (§5.8)
+            job pipelines run under the jobs manager (§5.8); --config-dir
+            runs every pipeline in a directory with the admin surface
   trigger   manually fire a job pipeline once, optionally with parameters
             (backfill); prints the run summary
   jobs      job run history: list or show (counts, parameters, dead letters)
@@ -32,6 +35,8 @@ Commands:
             CEL evaluation and Starlark dry-run; --topology renders the DAG
   replay    re-inject dead letters (--dlq), a spool window (--spool) or one
             job run's dead letters (--job) into a live pipeline (§3.3)
+  mcp       the agent operations surface: MCP tools over stdio (for agent
+            hosts) or HTTP (with Admin REST + SSE + read-only UI)
 
 Global flags:
   --json    machine-readable output for agents and CI
@@ -70,6 +75,8 @@ func run(args []string) int {
 		return cmdExplain(rest[1:], jsonOut)
 	case "replay":
 		return cmdReplay(rest[1:], jsonOut)
+	case "mcp":
+		return cmdMCP(rest[1:], jsonOut)
 	case "help", "--help", "-h":
 		fmt.Print(usageText)
 		return 0

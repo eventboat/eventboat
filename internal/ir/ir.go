@@ -48,14 +48,14 @@ type Node struct {
 
 // Pipeline is the compiled, ready-to-run form.
 type Pipeline struct {
-	Config            *config.Pipeline
-	Nodes             map[string]*Node
-	Order             []string // topological order
-	Constants         map[string]any
-	FrozenConstants   starlark.Value
-	Parameters        map[string]any // resolved parameter values (job pipelines)
-	FrozenParameters  starlark.Value
-	StarOptions       starhost.Options
+	Config           *config.Pipeline
+	Nodes            map[string]*Node
+	Order            []string // topological order
+	Constants        map[string]any
+	FrozenConstants  starlark.Value
+	Parameters       map[string]any // resolved parameter values (job pipelines)
+	FrozenParameters starlark.Value
+	StarOptions      starhost.Options
 }
 
 // Build compiles a configuration into the static IR, producing diagnostics
@@ -366,13 +366,13 @@ func checkJobSemantics(p *Pipeline, reg *registry.Registry, parameters map[strin
 		}
 		if job && !pull {
 			add(config.Diagnostic{Severity: "error", Code: "job_source_not_pull", File: file,
-				Line: n.Config.Line,
+				Line:    n.Config.Line,
 				Message: fmt.Sprintf("job pipeline source %q uses plugin %q which has no pull capability", name, n.Config.Plugin),
 				Hint:    "job pipelines need sources that page through data and signal exhaustion (capabilities: [pull])"})
 		}
 		if !job && n.Config.Plugin == "sql" {
 			add(config.Diagnostic{Severity: "warning", Code: "lint_sql_continuous", File: file,
-				Line: n.Config.Line,
+				Line:    n.Config.Line,
 				Message: fmt.Sprintf("source %q uses the sql (pull) source in a continuous pipeline: it pulls once from the last watermark at startup, then idles", name),
 				Hint:    "job pipelines (run.mode: job) are the intended home for sql sources"})
 		}
@@ -385,7 +385,7 @@ func checkJobSemantics(p *Pipeline, reg *registry.Registry, parameters map[strin
 			for _, text := range []string{n.Config.Script, n.Config.OrderKey} {
 				if text != "" && parametersBindingPattern.MatchString(text) {
 					add(config.Diagnostic{Severity: "error", Code: "job_parameters_in_continuous", File: file,
-						Line: n.Config.Line,
+						Line:    n.Config.Line,
 						Message: fmt.Sprintf("node %q references parameters in a continuous pipeline; parameters exist only in job pipelines (run.mode: job)", name),
 						Hint:    "use constants (load-time) or add a run block"})
 				}
@@ -393,7 +393,7 @@ func checkJobSemantics(p *Pipeline, reg *registry.Registry, parameters map[strin
 			for _, e := range n.In {
 				if e.WhenSource != "" && parametersBindingPattern.MatchString(e.WhenSource) {
 					add(config.Diagnostic{Severity: "error", Code: "job_parameters_in_continuous", File: file,
-						Line: e.Line,
+						Line:    e.Line,
 						Message: fmt.Sprintf("edge %s -> %s references parameters in a continuous pipeline", e.From, e.To),
 						Hint:    "parameters are job-pipeline only (run.mode: job)"})
 				}

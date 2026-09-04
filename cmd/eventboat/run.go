@@ -21,13 +21,17 @@ import (
 func cmdRun(args []string, jsonOut bool) int {
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
 	configPath := fs.String("config", "", "pipeline configuration file")
+	configDir := fs.String("config-dir", "", "directory of pipeline YAML files (multi-pipeline daemon with admin surface)")
 	dataDir := fs.String("data-dir", "data", "SQLite storage directory (deployment-level concern, POC flag)")
 	ephemeral := fs.Bool("ephemeral", false, "in-memory store: nothing persists across restarts")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
+	if *configDir != "" {
+		return cmdRunDir(args, jsonOut)
+	}
 	if *configPath == "" {
-		fmt.Fprintln(os.Stderr, "run: --config is required")
+		fmt.Fprintln(os.Stderr, "run: --config or --config-dir is required")
 		return 2
 	}
 

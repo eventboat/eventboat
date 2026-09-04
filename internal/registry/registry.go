@@ -270,22 +270,22 @@ func (r *Registry) NewCodec(name string, cfg map[string]any) (Codec, error) {
 
 // SourceMeta describes a registered source (for catalog output).
 type SourceMeta struct {
-	Name         string
-	Schema       string
-	Capabilities []string
+	Name         string   `json:"name"`
+	Schema       string   `json:"schema"`
+	Capabilities []string `json:"capabilities,omitempty"`
 }
 
 // SinkMeta describes a registered sink (for catalog output).
 type SinkMeta struct {
-	Name   string
-	Schema string
+	Name   string `json:"name"`
+	Schema string `json:"schema"`
 }
 
 // Catalog lists registered plugins grouped by section, sorted by name.
 type Catalog struct {
-	Sources []SourceMeta
-	Sinks   []SinkMeta
-	Codecs  []string
+	Sources []SourceMeta `json:"sources"`
+	Sinks   []SinkMeta   `json:"sinks"`
+	Codecs  []string     `json:"codecs"`
 }
 
 func (r *Registry) Catalog() Catalog {

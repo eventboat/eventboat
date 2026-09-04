@@ -81,6 +81,11 @@ eventboat replay --config p.yaml --dlq --where 'payload.region == "eu"' --delete
 eventboat replay --config p.yaml --spool --from 42                                # spool window
 eventboat replay --config job.yaml --job <run-id>                                 # "restart failed"
 
+# gate 4: the agent operations surface (§3.4)
+eventboat mcp --stdio                       # MCP tools over stdio (agent hosts spawn this)
+eventboat mcp --http                        # MCP over HTTP + Admin REST + SSE + read-only UI
+eventboat run --config-dir pipelines/       # multi-pipeline daemon with admin on :7788
+
 # the example's sqlite source database regenerates with:
 go run ./examples/job-sync/seed
 ```
@@ -190,6 +195,44 @@ Other recorded trims:
   as unused.
 - **Deployment-level config** (open question #10) is CLI flags for now:
   `--data-dir`, `--ephemeral`.
+
+### The operations surface (M2, §3.4) — rulings
+
+- **MCP SDK**: the official Go SDK (`github.com/modelcontextprotocol/go-sdk`,
+  stable v1.x — M2 review §一). mark3labs/mcp-go was rejected (v0.x).
+  `eventboat mcp --stdio` speaks MCP for agent hosts; `--http` serves
+  Streamable HTTP at `/mcp` next to the Admin REST.
+- **One implementation**: `internal/ops` is the whole tool surface; the MCP
+  tools and the Admin REST endpoints are thin shells over it — REST, MCP and
+  `--json` CLI outputs share the same Go structs and JSON shapes. OpenAPI
+  single-source generation is deferred to M4 (allowed); shape consistency is
+  enforced by the shared structs.
+- **Tool naming**: the task's `dead_letter_query`/`dead_letter_replay`
+  replace the spec's `dlq_query`/`dlq_replay` (clearer for agents; the CLI
+  keeps `replay --dlq`). All §3.4 tools are implemented: catalog, verify,
+  test, explain, deploy, status, jobs, trigger, tail,
+  dead_letter_query, dead_letter_replay, drain, pause, resume.
+- **verify reports, deploy enforces**: the `verify` tool returns structured
+  diagnostics with an `ok` verdict (a successful tool call — agents iterate
+  on diagnostics); `deploy` FAILS the tool call when verification fails.
+  There is no bypass around verify-first.
+- **deploy** persists the submitted config under `<data-dir>/pipelines/`
+  (job managers reload it per run), drains the previous instance, then
+  starts the replacement.
+- **pause/resume/drain** stop the pipeline instance; sources resume from
+  their persisted commit states (at-least-once covers the window).
+- **tail** samples recent deliveries per node (bounded ring of 100, payloads
+  truncated at 512 bytes); masking rules are P2 (review R12).
+- **The agent-loop acceptance** (§7.4 M2 core): `TestAgentLoopOverMCP` drives
+  the real binary over MCP stdio — catalog → verify(bad rejected, good
+  accepted) → test → explain → deploy → status → parameterized trigger →
+  jobs → broken-script deploy rejected → fixed redeploy → watermark-resumed
+  incremental run → tail.
+- **Runtime config** (open question #10, review R13): `kind: Runtime` YAML
+  (storage/admin/mcp/telemetry), resolved from `--runtime`, then
+  `./eventboat.yaml`, then defaults; CLI flags override. The admin listener
+  binds 127.0.0.1 by default and has NO authentication (POC boundary —
+  recorded).
 
 ### explain / replay (M2, §3.3) — rulings
 
