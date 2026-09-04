@@ -396,11 +396,17 @@ func (o *Obs) count(c metric.Int64Counter, labels ...string) {
 }
 
 // RecordCelError counts one predicate evaluation error.
-func (o *Obs) RecordCelError(pipeline, edge string) {
+// RecordCelError counts one predicate evaluation error. lang distinguishes
+// the dialect ("cel" default, "cesql" opt-in); the metric name keeps "cel"
+// for M2 continuity (review-m3 R8: same position, same counter).
+func (o *Obs) RecordCelError(pipeline, edge string, lang string) {
 	if o == nil {
 		return
 	}
-	o.count(o.CelEvalErrors, "pipeline", pipeline, "edge", edge)
+	if lang == "" {
+		lang = "cel"
+	}
+	o.count(o.CelEvalErrors, "pipeline", pipeline, "edge", edge, "lang", lang)
 }
 
 // RecordNoMatch counts one filtered message.

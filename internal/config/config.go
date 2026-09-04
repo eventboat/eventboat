@@ -176,7 +176,8 @@ type PluginManifest struct {
 type Edge struct {
 	From     string
 	Line     int
-	When     string // CEL predicate source ("" = unconditional)
+	When     string // predicate source ("" = unconditional)
+	WhenLang string // "cel" (default) | "cesql" (opt-in dialect, §4.7)
 	Route    string // named route sugar; compiled to When by ir
 	Delivery *Delivery
 	Required *bool

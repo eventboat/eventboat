@@ -17,6 +17,7 @@ import (
 
 	"github.com/eventboat/eventboat/internal/config"
 	"github.com/eventboat/eventboat/internal/lang/celhost"
+	"github.com/eventboat/eventboat/internal/lang/cesqlhost"
 	"github.com/eventboat/eventboat/internal/lang/starhost"
 	"github.com/eventboat/eventboat/internal/registry"
 	"github.com/eventboat/eventboat/internal/wasmhost"
@@ -31,13 +32,34 @@ func hasCap(caps []string, want string) bool {
 	return false
 }
 
+// WhenPredicate is a compiled edge condition, dialect-agnostic. Both hosts
+// implement it; evaluation errors mean "condition does not pass" plus a
+// counter (the shared error contract, §4.2/§4.7).
+type WhenPredicate interface {
+	Lang() string // "cel" | "cesql"
+	Eval(payload, meta any) (bool, error)
+}
+
+// celWhen adapts celhost's EvalError-returning predicate to the interface.
+type celWhen struct{ p *celhost.Predicate }
+
+func (c celWhen) Lang() string { return "cel" }
+
+func (c celWhen) Eval(payload, meta any) (bool, error) {
+	ok, evalErr := c.p.Eval(payload, meta)
+	if evalErr != nil {
+		return false, evalErr
+	}
+	return ok, nil
+}
+
 // Edge is one resolved DAG edge with its compiled condition.
 type Edge struct {
 	From, To   string
 	Line       int
-	When       *celhost.Predicate // nil = unconditional
-	WhenSource string             // original CEL text (or route-compiled text)
-	RouteName  string             // set when the edge used route sugar
+	When       WhenPredicate // nil = unconditional
+	WhenSource string        // original expression text (or route-compiled text)
+	RouteName  string        // set when the edge used route sugar
 	Required   bool
 	Retries    int
 	Backoff    string
@@ -163,16 +185,28 @@ func Build(cfg *config.Pipeline, reg *registry.Registry, starOpts starhost.Optio
 			}
 			if whenText != "" {
 				e.WhenSource = whenText
-				pred, cerr := celEnv.Compile(whenText)
-				if cerr != nil {
-					sev, code := "error", "expr_cel_compile"
-					if strings.Contains(cerr.Error(), "route") && e.RouteName != "" {
-						code = "expr_route_compile"
+				if ce.WhenLang == "cesql" && ce.Route == "" {
+					// Opt-in CESQL dialect (§4.7): CloudEvents interop.
+					pred, cerr := cesqlhost.Compile(whenText)
+					if cerr != nil {
+						add(config.Diagnostic{Severity: "error", Code: "expr_cesql_compile", File: file, Line: ce.Line,
+							Message: cerr.Error(),
+							Hint:    "CESQL binds meta (context attributes) and data.* (documented extension); run `eventboat plugin catalog` docs for the dialect notes"})
+					} else {
+						e.When = pred
 					}
-					add(config.Diagnostic{Severity: sev, Code: code, File: file, Line: ce.Line,
-						Message: cerr.Error(), Hint: "CEL predicates use payload.*, meta.* and constants.*"})
 				} else {
-					e.When = pred
+					pred, cerr := celEnv.Compile(whenText)
+					if cerr != nil {
+						sev, code := "error", "expr_cel_compile"
+						if strings.Contains(cerr.Error(), "route") && e.RouteName != "" {
+							code = "expr_route_compile"
+						}
+						add(config.Diagnostic{Severity: sev, Code: code, File: file, Line: ce.Line,
+							Message: cerr.Error(), Hint: "CEL predicates use payload.*, meta.* and constants.*"})
+					} else {
+						e.When = celWhen{p: pred}
+					}
 				}
 			}
 			if ce.Delivery != nil {

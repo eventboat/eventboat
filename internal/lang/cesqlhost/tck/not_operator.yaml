@@ -1,0 +1,24 @@
+name: Not operator
+tests:
+  - name: Not true
+    expression: NOT TRUE
+    result: false
+  - name: Not false
+    expression: NOT FALSE
+    result: true
+
+  - name: Not true with casting
+    expression: NOT 'TRUE'
+    result: false
+  - name: Not false 10 with casting
+    expression: NOT 'FALSE'
+    result: true
+
+  - name: Not true with casting
+    expression: NOT 10
+    result: false
+
+  - name: Not missing attribute
+    expression: NOT missing
+    result: false
+    error: missingAttribute

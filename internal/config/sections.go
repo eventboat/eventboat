@@ -508,14 +508,50 @@ func parseEdgeAttrs(file, container string, from *string, attrs map[string]any, 
 		}
 	}
 	if v, ok := attrs["when"]; ok {
-		s, ok := v.(string)
-		if !ok || strings.TrimSpace(s) == "" {
+		switch t := v.(type) {
+		case string:
+			if strings.TrimSpace(t) == "" {
+				res.Diagnostics = append(res.Diagnostics, Diagnostic{
+					Severity: "error", Code: "cfg_when_type", File: file, Line: line,
+					Message: "when must be a non-empty expression", Hint: "",
+				})
+			} else {
+				e.When = t
+			}
+		case map[string]any:
+			// Object form (§4.7): { lang: cel|cesql, expr: "..." }.
+			for k := range t {
+				if k != "lang" && k != "expr" {
+					res.Diagnostics = append(res.Diagnostics, Diagnostic{
+						Severity: "error", Code: "cfg_unknown_field", File: file, Line: line,
+						Message: fmt.Sprintf("unknown when field %q", k), Hint: "allowed: lang, expr",
+					})
+				}
+			}
+			lang, _ := t["lang"].(string)
+			if lang == "" {
+				lang = "cel"
+			}
+			expr, _ := t["expr"].(string)
+			switch {
+			case lang != "cel" && lang != "cesql":
+				res.Diagnostics = append(res.Diagnostics, Diagnostic{
+					Severity: "error", Code: "cfg_when_lang", File: file, Line: line,
+					Message: fmt.Sprintf("when.lang must be \"cel\" or \"cesql\", got %q", lang), Hint: "",
+				})
+			case strings.TrimSpace(expr) == "":
+				res.Diagnostics = append(res.Diagnostics, Diagnostic{
+					Severity: "error", Code: "cfg_when_type", File: file, Line: line,
+					Message: "when.expr must be a non-empty expression", Hint: "",
+				})
+			default:
+				e.When, e.WhenLang = expr, lang
+			}
+		default:
 			res.Diagnostics = append(res.Diagnostics, Diagnostic{
 				Severity: "error", Code: "cfg_when_type", File: file, Line: line,
-				Message: "when must be a non-empty CEL expression", Hint: "",
+				Message: "when must be an expression string or { lang: cel|cesql, expr: ... }", Hint: "",
 			})
-		} else {
-			e.When = s
 		}
 	}
 	if v, ok := attrs["route"]; ok {

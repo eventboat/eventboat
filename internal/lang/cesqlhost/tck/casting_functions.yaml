@@ -1,0 +1,69 @@
+name: Casting functions
+tests:
+  - name: Cast '1' to integer
+    expression: INT('1')
+    result: 1
+  - name: Cast '-1' to integer
+    expression: INT('-1')
+    result: -1
+  - name: Cast identity 1
+    expression: INT(1)
+    result: 1
+  - name: Cast identity -1
+    expression: INT(-1)
+    result: -1
+  - name: Cast from TRUE to int
+    expression: INT(TRUE)
+    result: 1
+  - name: Cast from FALSE to int
+    expression: INT(FALSE)
+    result: 0
+  - name: Invalid cast from string to int
+    expression: INT('ABC')
+    result: 0
+    error: cast
+
+  - name: Cast 'TRUE' to boolean
+    expression: BOOL('TRUE')
+    result: true
+  - name: Cast "false" to boolean
+    expression: BOOL("false")
+    result: false
+  - name: Cast identity TRUE
+    expression: BOOL(TRUE)
+    result: true
+  - name: Cast identity FALSE
+    expression: BOOL(FALSE)
+    result: FALSE
+  - name: Invalid cast from string to boolean
+    expression: BOOL('ABC')
+    result: false
+    error: cast
+  - name: Cast from 1 to boolean
+    expression: BOOL(1)
+    result: true
+  - name: Cast from 0 to boolean
+    expression: BOOL(0)
+    result: false
+  - name: Cast from 100 to boolean
+    expression: BOOL(100)
+    result: true
+  - name: Cast from -50 to boolean
+    expression: BOOL(-50)
+    result: true
+
+  - name: Cast TRUE to string
+    expression: STRING(TRUE)
+    result: 'true'
+  - name: Cast FALSE to string
+    expression: STRING(FALSE)
+    result: 'false'
+  - name: Cast 1 to string
+    expression: STRING(1)
+    result: '1'
+  - name: Cast -1 to string
+    expression: STRING(-1)
+    result: '-1'
+  - name: Cast identity "abc"
+    expression: STRING("abc")
+    result: "abc"

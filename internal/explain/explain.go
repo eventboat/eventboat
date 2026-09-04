@@ -119,14 +119,14 @@ func walk(pip *ir.Pipeline, node *ir.Node, payload any, meta map[string]any, b *
 			mark = "always"
 			matched++
 		} else {
-			ok, evalErr := edge.When.Eval(payload, meta)
-			switch {
-			case evalErr != nil:
-				mark = fmt.Sprintf("✗ evaluation error (counts as not-passed): %s", evalErr.Detail)
-			case ok:
-				mark = "✓ MATCH"
-				matched++
-			}
+		ok, evalErr := edge.When.Eval(payload, meta)
+		switch {
+		case evalErr != nil:
+			mark = fmt.Sprintf("✗ evaluation error (counts as not-passed): %s", evalErr.Error())
+		case ok:
+			mark = "✓ MATCH"
+			matched++
+		}
 		}
 		fmt.Fprintf(b, "  %s → %s", node.Name, edge.To)
 		if edge.WhenSource != "" {

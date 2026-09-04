@@ -654,17 +654,17 @@ func (e *Engine) fanOut(node *ir.Node, seq int64, msg registry.Message) {
 	matched := make([]*ir.Edge, 0, len(node.Out))
 	for i := range node.Out {
 		edge := &node.Out[i]
-		if edge.When != nil {
-			ok, evalErr := edge.When.Eval(msg.Decoded, msg.Meta)
-			if evalErr != nil {
-				e.Metrics.CelEvalErrors.Add(1)
-				e.Opts.Obs.RecordCelError(e.IR.Config.Name, edge.From+" -> "+edge.To)
-				continue
+			if edge.When != nil {
+				ok, evalErr := edge.When.Eval(msg.Decoded, msg.Meta)
+				if evalErr != nil {
+					e.Metrics.CelEvalErrors.Add(1)
+					e.Opts.Obs.RecordCelError(e.IR.Config.Name, edge.From+" -> "+edge.To, edge.When.Lang())
+					continue
+				}
+				if !ok {
+					continue
+				}
 			}
-			if !ok {
-				continue
-			}
-		}
 		matched = append(matched, edge)
 	}
 	if len(matched) == 0 {

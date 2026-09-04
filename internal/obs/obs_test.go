@@ -68,7 +68,7 @@ func TestNilObsIsInert(t *testing.T) {
 	o.RecordOverlapSkip("p")
 	o.RecordCatchupSkip("p")
 	o.SetGauges("p", 0, 0, false)
-	o.RecordCelError("p", "e")
+	o.RecordCelError("p", "e", "cesql")
 	o.RecordNoMatch("p", "n")
 	o.RecordRetry("p", "n")
 	o.RecordOptionalDrop("p", "e")
