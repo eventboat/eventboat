@@ -134,8 +134,8 @@ github.com/kylelemons/godebug v1.1.0 h1:RPNrshWIDI6G2gRW9EHilWtl7Z6Sb1BR0xunSBf0
 github.com/kylelemons/godebug v1.1.0/go.mod h1:9/0rRGxNHcop5bhtWyNeEfOS8JIWk580+fNqagV/RAw=
 github.com/lufia/plan9stats v0.0.0-20260330125221-c963978e514e h1:Q6MvJtQK/iRcRtzAscm/zF23XxJlbECiGPyRicsX+Ak=
 github.com/lufia/plan9stats v0.0.0-20260330125221-c963978e514e/go.mod h1:autxFIvghDt3jPTLoqZ9OZ7s9qTGNAWmYCjVFWPX/zg=
-github.com/lynx-go/commands v0.2.0 h1:bAaiRTZukD4o3lb2YmU9JsO7ZEo1OSr/gQizNkGPT7c=
-github.com/lynx-go/commands v0.2.0/go.mod h1:shUBbbLYX2dNYB57MA8xZn8zEnim94HclO3N1vfDJpI=
+github.com/lynx-go/commands v0.2.1 h1:0YObssVYah0IMZvGjYpfq3wNes2J0X3AfAvFOuJHDyY=
+github.com/lynx-go/commands v0.2.1/go.mod h1:shUBbbLYX2dNYB57MA8xZn8zEnim94HclO3N1vfDJpI=
 github.com/magiconair/properties v1.8.10 h1:s31yESBquKXCV9a/ScB3ESkOjUYYv+X0rg8SYxI99mE=
 github.com/magiconair/properties v1.8.10/go.mod h1:Dhd985XPs7jluiymwWYZ0G4Z61jb3vdS329zhj2hYo0=
 github.com/mattn/go-isatty v0.0.24 h1:tGZZoVgT/KiqK1c8ocVLeDS8BSWMRd47J3Lbz7vsReI=

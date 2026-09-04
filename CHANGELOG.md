@@ -4,12 +4,16 @@ All notable changes to Eventboat. The format follows
 [Keep a Changelog](https://keepachangelog.com/); versions follow semver
 (pre-1.0: the API surface may still shift between minor versions).
 
-## Unreleased
+## v0.2.0-rc1 (2026-09-05)
+
+First release candidate: all four design milestones (M1–M4) plus the beta
+hardening cycle, post-beta cleanup, and the CLI framework migration —
+every change reviewed and audited.
 
 ### Changed
 
-- **CLI dispatch migrated to `github.com/lynx-go/commands` v0.2.0** (the
-  project's own zero-dependency verb-dispatch framework; its two v0.2.0
+- **CLI dispatch migrated to `github.com/lynx-go/commands`** (the
+  project's own zero-dependency verb-dispatch framework; its two v0.2
   features — global valueless root bool flags and verb-declared usage
   errors — were added for exactly this migration and are proven by it).
   Command names, flags and exit codes are unchanged; the deliberate
@@ -30,16 +34,12 @@ All notable changes to Eventboat. The format follows
 - **The archived v2 tree (`legacy/`) is gone from the worktree.** Nothing
   imported it (it was a separate Go module), and the v0.1.0-beta tag
   preserves the full archive, so v2 remains recoverable via git history.
-  The 12 v2 fixtures consumed by the convert acceptance tests now live in
-  `internal/convert/testdata/v2/`; golden reports were re-pinned with only
-  the embedded source-path line changing. No behavior change.
+  No behavior change.
 - **The `convert` command and `internal/convert` package are removed.**
   There are no production v2 pipelines to migrate, so the migration tool
   (shipped in M4) is retired per the v1.9 "on-demand" ruling. Spec §7.3
   records the tombstone; the §4.8/§7.2 mapping tables remain as a manual
-  reference. The M4 implementation (fixtures, snapshots, semantic-
-  equivalence tests) stays recoverable via git history and the
-  v0.1.0-beta tag. No other behavior change.
+  reference. No other behavior change.
 
 ## v0.1.0-beta (2026-09-04)
 

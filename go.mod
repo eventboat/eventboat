@@ -10,7 +10,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/hamba/avro/v2 v2.31.0
 	github.com/jackc/pgx/v5 v5.10.0
-	github.com/lynx-go/commands v0.2.0
+	github.com/lynx-go/commands v0.2.1
 	github.com/modelcontextprotocol/go-sdk v1.7.0
 	github.com/prometheus/client_golang v1.24.1
 	github.com/robfig/cron/v3 v3.0.1
