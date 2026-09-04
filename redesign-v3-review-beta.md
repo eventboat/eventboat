@@ -283,6 +283,11 @@ goroutine 数回落到基线（stdlib runtime.NumGoroutine 对账，不引 golea
   fsync_sim **539010 → 543726 ns/op**（i5-14600KF，3s×2；详见 R-B1 实现期修正）
 - [x] starhost 前后基准：ContainerReadOnly **1901 → 1458 ns/op（-23%）**、
   SimpleScript **1548 → 1568 ns/op**（i5-14600KF；详见 R-B2 实现期修正）
-- [ ] lint 豁免清单（如有）
-- [ ] 阈值门基线数字与倍数
-- [ ] soak 首跑链接、kafka job 首绿链接
+- [x] lint 豁免清单：生成码（pkg/pluginv1）、vendored CESQL TCK、staticcheck
+  QF1xxx quickfix 类（稳定代码不做风格翻搅）——见 .golangci.yml；其余零豁免零发现
+- [x] 阈值门基线与倍数：scripts/bench-gate.sh（谓词 300ns/限 5000、简单脚本
+  1550ns/限 20000、容器只读 1460ns/限 20000、settle 吞吐 mem 6400ns/限
+  100000——约 5-15× 本机基线，防数量级回退）
+- [x] -count=5 全量本地绿（2026-09-04，exit 0）；soak 本地 1 分钟验证绿
+  （26k+7k 消息、125 spool 故障 + 287 DLQ 故障吸收、goroutine 11→3）
+- [ ] soak 首跑链接、kafka job 首绿链接（CI 落地后回填）

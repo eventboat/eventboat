@@ -11,14 +11,18 @@ transforms are [Starlark](https://github.com/google/starlark-go) (a Python
 dialect): zero custom language to learn, maximal training corpus for the
 agents that write your pipelines.
 
-> **Status: v3 POC** (milestones M1 + M2 + M3 + M4 of
-> [redesign-v3.md](redesign-v3.md)).
+> **Status: v0.1.0-beta** (milestones M1 + M2 + M3 + M4 of
+> [redesign-v3.md](redesign-v3.md), plus the beta hardening round of
+> [redesign-v3-review-beta.md](redesign-v3-review-beta.md) — no new product
+> surface beyond the knobs listed in [CHANGELOG.md](CHANGELOG.md)).
 > The v2 implementation is archived under [legacy/](legacy/) and is not
 > compatible. Pre-implementation design reviews: [redesign-v3-review.md](redesign-v3-review.md)
 > (M1, verdict: pass, 13 findings), [redesign-v3-review-m2.md](redesign-v3-review-m2.md)
 > (M2, verdict: pass, no blockers), [redesign-v3-review-m3.md](redesign-v3-review-m3.md)
-> (M3, verdict: pass, no blockers) and [redesign-v3-review-m4.md](redesign-v3-review-m4.md)
-> (M4, verdict: pass, no blockers). License: Apache-2.0.
+> (M3, verdict: pass, no blockers), [redesign-v3-review-m4.md](redesign-v3-review-m4.md)
+> (M4, verdict: pass, no blockers) and redesign-v3-review-beta.md (beta
+> round, verdict: pass). Naming prerequisites:
+> [docs/naming-checklist.md](docs/naming-checklist.md). License: Apache-2.0.
 > 中文说明见 [README_ZH.md](README_ZH.md).
 
 ## How it works
@@ -201,7 +205,7 @@ keyset pagination and watermarks + run history + `trigger`/`jobs` CLI);
 (dead letters / spool windows / job runs); **MCP server** (official Go SDK:
 stdio + Streamable HTTP, 14 tools), **Admin REST + SSE + embedded read-only
 UI**, Runtime deployment config; **OpenTelemetry** (Prometheus + OTLP dual
-export, 27 metrics, job-run spans); JSON-Schema-enforced plugin registry with
+export, 28 metrics, job-run spans); JSON-Schema-enforced plugin registry with
 ABI versions; CLI `verify`/`test`/`run`/`trigger`/`jobs`/`explain`/`replay`/
 `convert`/`repl`/`lsp`/`plugin`/`mcp` with `--json`.
 
@@ -316,23 +320,21 @@ Other recorded trims:
 
 - **Trimmed (still open):** the conformance
   corpus and the full benchmark suite of §7.4 M1 (minimal Go benchmarks
-  exist: CEL predicate ≈ 290 ns/op, simple Starlark transform ≈ 1.4 µs/op
-  on the dev machine, plus the M3 Starlark-vs-WASM benchmark below; the
-  `repl` CLI and the `codecs:` section landed with M4). From
-  §5.10: `telemetry`/`dlq` pipeline
-  sections remain unimplemented (telemetry endpoints live in the Runtime
-  config; dead-letter retention is P2). Per-message
-  span sampling and tail masking rules are P2 (review R12/R16). A
-  kafka-broker integration test (testcontainers) is a CI stretch, not on
-  the critical path. M3 trims: no automatic restart of crashed gRPC plugin
-  processes (fail fast; redeploy recovers), no external codec plugins
+  exist and the CI bench job is now a loose threshold gate —
+  [scripts/bench-gate.sh](scripts/bench-gate.sh); the reference numbers
+  live in redesign-v3-review-beta.md). From
+  §5.10: the `dlq` pipeline section remains unimplemented
+  (dead-letter retention is P2; `telemetry:` landed in the beta round —
+  see below). A kafka-broker integration test runs in CI (testcontainers,
+  real KRaft broker). M3 trims: external codec plugins
   (decode/encode stays built-in), no TLS on the plugin loopback connection
   (one-shot token instead), WASM guests see only the payload (no metadata
-  channel — chain a `script:` node to touch meta), and the CI benchmark
-  job is informational (`continue-on-error`), not a regression gate.
-  M4 trims: the Pebble performance profile and the K8s Operator (see the
+  channel — chain a `script:` node to touch meta); the M3 no-restart
+  plugins trim is CLOSED (see the beta rulings below). M4 trims: the
+  Pebble performance profile and the K8s Operator (see the
   M4 rulings above — the Operator lives on as a Deployment manifest +
-  docs/k8s.md).
+  docs/k8s.md). The beta-round ledger triage (what stays P2/P3 and why)
+  is the second table of redesign-v3-review-beta.md.
 - **`limits` section** (M2): `max_in_flight` maps to the engine's spool
   admission high watermark and `drain_timeout` bounds graceful shutdown
   (replacing a hardcoded 10s); a `workers` total quota is trimmed (P2).
@@ -373,7 +375,8 @@ Other recorded trims:
 - **pause/resume/drain** stop the pipeline instance; sources resume from
   their persisted commit states (at-least-once covers the window).
 - **tail** samples recent deliveries per node (bounded ring of 100, payloads
-  truncated at 512 bytes); masking rules are P2 (review R12).
+  truncated at 512 bytes); pipeline-level masking landed with the beta round
+  (`telemetry.redact` — see the beta rulings below).
 - **The agent-loop acceptance** (§7.4 M2 core): `TestAgentLoopOverMCP` drives
   the real binary over MCP stdio — catalog → verify(bad rejected, good
   accepted) → test → explain → deploy → status → parameterized trigger →
@@ -392,7 +395,8 @@ Other recorded trims:
   when `telemetry.otlp_endpoint` is configured. Fully disabled telemetry
   costs nothing (noop providers). Single-pipeline `run` gets OTLP only (no
   HTTP surface); `run --config-dir` / `mcp --http` serve both.
-- **25 metrics, `eventboat_` prefix** — exactly the review's list:
+- **28 metrics, `eventboat_` prefix** — the review's list plus
+  `eventboat_plugin_restarts_total` (beta round):
   messages_in_total, messages_settled_total, dead_letter_total (with
   reason_class), dlq_write_failures_total, cel_eval_errors_total,
   fanout_no_match_total, delivery_retries_total, optional_drops_total,
@@ -408,7 +412,8 @@ Other recorded trims:
   per job run (`eventboat.job.run`, attributes pipeline/run_id/trigger,
   terminal status + recorded errors); deploy/job events also flow through
   the SSE stream. Script backtraces ride the dead-letter records and span
-  error events; per-message span sampling is P2.
+  error events; per-message span sampling is opt-in per pipeline
+  (`telemetry.span_sample_rate`, beta round — default 0).
 - The M1 atomic counters remain the engine's internal bookkeeping and the
   `--json` CLI/status source; OTel instruments record the same events
   (`SettledCount` split from the checkpoint pointer, review R5).
@@ -624,13 +629,60 @@ protection is opt-in. For light mapping Starlark wins outright — the
 ladder's trigger standard (§4.6: performance or dependencies, never
 "complex logic") is quantified, not vibes.
 
+### The beta hardening round (2026-09-04) — rulings
+
+From [redesign-v3-review-beta.md](redesign-v3-review-beta.md) (verdict:
+pass; the doc also carries the full ledger triage — what stayed P2/P3 and
+why — and the before/after benchmark numbers):
+
+- **Settle persistence out of the tracker lock**: advances compute under
+  the settle lock and flush on the settling goroutine outside it;
+  monotonic guards (persistMu) keep the checkpoint, per-source frontiers
+  and metrics from regressing under out-of-order flushes. The pre-research
+  "async worker" design was rejected at implementation time — invariant 7's
+  mid-test store read depends on same-goroutine persistence ordering (the
+  zero-modification constraint on the seven invariant tests decided it).
+  Observers (`WaitSettled`, quiescence) wait on an attempt-based durability
+  barrier; a permanently failing store no longer wedges quiescence.
+- **Precise dirty tracking (starhost)**: map-tree mutations mark through a
+  marker threaded into the converted dicts; container READS no longer
+  dirty. List-bearing trees dirty conservatively — native Starlark list
+  mutators cannot be intercepted (boundary locked by a dedicated test;
+  a future list wrapper flips exactly that test).
+- **`max_in_flight` aggregates across `overlap: all` runs** (M2 R17
+  closed): the jobs manager shares one admission pool across a pipeline's
+  concurrent run engines — the limit is a pipeline total, not per-run.
+  Single-run behavior unchanged.
+- **`telemetry:` section shape** (§5.10): `{redact: [globs],
+  span_sample_rate: 0.0}`. Redaction is dot-separated field paths with
+  path.Match globs per segment, applied to TAIL ENTRIES ONLY (mask `"***"`)
+  before the 512-byte truncation — the spool/dead letters/deliveries are
+  the data path and are never altered; non-JSON tails pass through.
+  Per-message spans are opt-in (default 0 = none), roots named
+  `eventboat.message` ended at settled/dead_letter.
+- **gRPC plugin crash policy** (M3 trim closed): `grpc.restart:
+  fast-fail | restart` (default fast-fail = exact M3 semantics).
+  `restart` respawns with exponential backoff (250ms doubling, 30s cap,
+  ladder resets after 30s uptime), re-delivers config and the latest
+  Settled state (pull sources resume past the settled watermark —
+  duplicates are the at-least-once contract), retries source streams and
+  sink writes once per call; every respawn counts
+  `eventboat_plugin_restarts_total{plugin}`.
+- **CI surface**: golangci-lint v2 (zero findings; documented exclusions
+  only), kafka testcontainers job (real KRaft broker: roundtrip, dead
+  letters, rebalance), nightly + manual soak workflow
+  (`.github/workflows/soak.yml`; mixed load + injected faults, asserts
+  settle-exactly-once and no goroutine leaks), bench job with loose
+  thresholds ([scripts/bench-gate.sh](scripts/bench-gate.sh) — an
+  order-of-magnitude gate, not a noise gate; WASM stays informational).
+
 ## Repository layout
 
 ```
 cmd/eventboat/        CLI: verify / test / run / trigger / jobs / explain / replay / convert / repl / lsp / plugin / mcp
 proto/                 eventboat.plugin.v1 — the out-of-process plugin protocol (.proto source)
 pkg/pluginv1/          generated protocol stubs (importable by third-party plugins)
-docs/                  plugins.md (gRPC SDK), wasm.md (guest ABI and tier guide), codecs.md (codec guide), k8s.md (deployment)
+docs/                  plugins.md (gRPC SDK + crash policy), wasm.md (guest ABI and tier guide), codecs.md (codec guide), k8s.md (deployment), naming-checklist.md (§8.4 record)
 internal/config/      typed config, strict loader, env+constants+parameters substitution, codecs: declarations
 internal/ir/          static IR: DAG, compiled CEL/Starlark/CESQL, topology checks, job semantics, lint, codec resolution
 internal/lang/        celhost (predicates), cesqlhost (CESQL dialect + official TCK), starhost (Starlark sandbox host)
@@ -648,9 +700,11 @@ internal/ops/         the operations service behind MCP and Admin REST
 internal/mcpserver/   MCP tools (official Go SDK)
 internal/admin/       Admin REST + SSE + embedded read-only UI
 internal/runtimecfg/  kind: Runtime deployment configuration
-internal/obs/         OpenTelemetry: dual export, 27 metrics, spans
+internal/obs/         OpenTelemetry: dual export, 28 metrics, spans
 internal/testkit/     injection/capture/fault-injection primitives + fakepull test source
 internal/testrun/     §3.2 contract-test runner
+internal/inttests/    env-gated integration suites: kafka/ (real broker via testcontainers), soak/ (long-run stability)
+scripts/              bench-gate.sh — the CI loose performance threshold gate
 examples/             linear, branching (CEL), fan-in, job-sync (sql), codecs (csv+avro), plugins/ (gRPC), editors/vscode, k8s
 legacy/               archived v2 implementation (not imported, not modified)
 ```
@@ -661,6 +715,12 @@ legacy/               archived v2 implementation (not imported, not modified)
 go build ./...
 go test ./...          # includes the seven TestInvariant_* reliability tests
 go test -race ./...
+
+# integration suites (CI-only; local runs skip without the env)
+EVENTBOAT_KAFKA_TEST=1 go test ./internal/inttests/kafka/    # needs Docker
+EVENTBOAT_SOAK_TEST=1 EVENTBOAT_SOAK_DURATION=2m go test ./internal/inttests/soak/
+
+bash scripts/bench-gate.sh   # the loose perf gate CI enforces
 ```
 
 Design documents: [redesign-v3.md](redesign-v3.md) (the v3 spec — the single

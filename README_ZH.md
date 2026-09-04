@@ -9,12 +9,16 @@ DAG 流动（过滤、映射、路由），落到目的地——全程 at-least-
 语言），映射就是 [Starlark](https://github.com/google/starlark-go)（Python
 方言）：零自研语言，Agent 语料最大化。
 
-> **状态：v3 POC**（[redesign-v3.md](redesign-v3.md) 的 M1 + M2 + M3 + M4 里程碑）。
+> **状态：v0.1.0-beta**（[redesign-v3.md](redesign-v3.md) 的 M1 + M2 + M3 + M4
+> 里程碑，加上 [redesign-v3-review-beta.md](redesign-v3-review-beta.md) 的
+> beta 硬化轮——除 [CHANGELOG.md](CHANGELOG.md) 所列旋钮外无新产品面）。
 > v2 实现已整体归档至 [legacy/](legacy/)，互不兼容。实现前的独立设计审查见
 > [redesign-v3-review.md](redesign-v3-review.md)（M1，通过，13 项发现）、
 > [redesign-v3-review-m2.md](redesign-v3-review-m2.md)（M2，通过）、
-> [redesign-v3-review-m3.md](redesign-v3-review-m3.md)（M3，通过）与
-> [redesign-v3-review-m4.md](redesign-v3-review-m4.md)（M4，通过）。
+> [redesign-v3-review-m3.md](redesign-v3-review-m3.md)（M3，通过）、
+> [redesign-v3-review-m4.md](redesign-v3-review-m4.md)（M4，通过）与
+> redesign-v3-review-beta.md（beta 轮，通过）。定名前置调研记录：
+> [docs/naming-checklist.md](docs/naming-checklist.md)。
 > License：Apache-2.0。English readme: [README.md](README.md)。
 
 ## 工作原理
@@ -203,6 +207,32 @@ cases:
   有序分片为 P1。`workers` 提供 transform 节点级并发。
 - **与框架字段撞名的插件名**在注册时拒绝（审查 R5）。
 
+## Beta 硬化轮（2026-09-04）——裁决摘要
+
+完整台账（进本轮 / 留 beta+ 的逐条理由）与前后基准数字见
+[redesign-v3-review-beta.md](redesign-v3-review-beta.md)；用户视角摘要见
+[CHANGELOG.md](CHANGELOG.md)：
+
+- **settle 持久化移出 tracker 锁**：前缀推进在锁内计算、落盘在结算
+  goroutine 锁外执行；单调守卫保证 checkpoint/水位/指标乱序 flush 不回退。
+  预研的"异步 worker"方案被实现期否决——不变量 7 测试中途直读存储依赖同
+  goroutine 持久化序（七不变量零改动约束拍板）。观察者走尝试型持久屏障。
+- **starhost 精确 dirty**：map 树写经标记闭包精确置脏，容器**读**不再置
+  脏（只读脚本跳过全量写回，嵌套只读基准 -23%）；含 list 的树保守置脏
+  （原生 list 变异无法拦截，边界有专属测试锁死）。
+- **`max_in_flight` 在 `overlap: all` 下按管道聚合**（M2 R17 关闭）：
+  并发 run 共享一个准入池，限额是管道总量。
+- **`telemetry:` 段**（§5.10）：`{redact: [glob 路径], span_sample_rate:
+  0.0}`。脱敏只作用于 **tail 呈现层**（掩码 `"***"`，截断前），数据面
+  （spool/死信/投递）永不改动；逐消息 span 按率可选（默认 0）。
+- **gRPC 插件崩溃策略**（M3 裁剪关闭）：`grpc.restart: fast-fail | restart`
+  （默认 fast-fail = M3 语义原样）；`restart` 指数退避重生 + 重发配置与
+  最新 Settled 状态 + 流/写重试，计数 `eventboat_plugin_restarts_total`。
+- **CI 面**：golangci-lint v2 基线（零发现）；kafka testcontainers 集成
+  job（真实 KRaft broker）；夜间 + 手动 soak workflow（注入故障的长跑，
+  断言恰好一次结算与无 goroutine 泄漏）；bench job 升级为宽松阈值门
+  （[scripts/bench-gate.sh](scripts/bench-gate.sh)）。
+
 ## 仓库布局
 
 ```
@@ -224,10 +254,12 @@ internal/ops/         MCP 与 Admin REST 背后的操作服务
 internal/mcpserver/   MCP 工具（官方 Go SDK）
 internal/admin/       Admin REST + SSE + 内嵌只读 UI
 internal/runtimecfg/  kind: Runtime 部署配置
-internal/obs/         OpenTelemetry：双导出、27 指标、span
+internal/obs/         OpenTelemetry：双导出、28 指标、span
 internal/testkit/     注入/捕获/故障注入原语
 internal/testrun/     §3.2 合约测试 runner
-docs/                 plugins.md、wasm.md、codecs.md、k8s.md
+internal/inttests/    环境门控集成套件：kafka/（testcontainers 真实 broker）、soak/（长跑稳定性）
+scripts/              bench-gate.sh——CI 宽松性能阈值门
+docs/                 plugins.md、wasm.md、codecs.md、k8s.md、naming-checklist.md
 examples/             线性、CEL 分支、fan-in、job-sync（sql）、codecs（csv+avro）、plugins（gRPC）、editors/vscode、k8s
 legacy/               归档的 v2 实现（不导入、不修改；convert 只读消费）
 ```
@@ -238,6 +270,12 @@ legacy/               归档的 v2 实现（不导入、不修改；convert 只�
 go build ./...
 go test ./...          # 含七条 TestInvariant_* 可靠性测试、convert 快照/验收、LSP 协议集成、codec conformance
 go test -race ./...
+
+# 集成套件（仅 CI 跑；本地无环境变量时自动跳过）
+EVENTBOAT_KAFKA_TEST=1 go test ./internal/inttests/kafka/    # 需 Docker
+EVENTBOAT_SOAK_TEST=1 EVENTBOAT_SOAK_DURATION=2m go test ./internal/inttests/soak/
+
+bash scripts/bench-gate.sh   # CI 的宽松性能门
 ```
 
 设计文档：[redesign-v3.md](redesign-v3.md)（v3 唯一设计规范）、四份实现前
