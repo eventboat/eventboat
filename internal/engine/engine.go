@@ -132,6 +132,14 @@ type Engine struct {
 
 	admitSem chan struct{}
 
+	// admitting counts accepts waiting on the admission semaphore, and
+	// replayDone flips once Run's crash replay has registered everything:
+	// WaitSettled must not read "settled" while either is in flight (an
+	// admission-blocked message or an unregistered replay both look like
+	// outstanding==0 for a moment — flaky-test class, M3 CI).
+	admitting  atomic.Int64
+	replayDone atomic.Bool
+
 	acquired   map[int64]bool // spool seqs holding an admission slot
 	acquiredMu sync.Mutex
 
@@ -387,6 +395,7 @@ func (e *Engine) Run(ctx context.Context) error {
 	}); err != nil {
 		return fmt.Errorf("engine: replay: %w", err)
 	}
+	e.replayDone.Store(true)
 
 	// Workers: transforms then sinks.
 	for _, name := range e.IR.Order {
@@ -579,9 +588,12 @@ func firstNonEmpty(a, b string) string {
 // nothing is visible before the append succeeds).
 func (e *Engine) accept(raw registry.Message, sourceNode string) error {
 	// Backpressure: block while too many unsettled messages are in flight.
+	e.admitting.Add(1)
 	select {
 	case e.admitSem <- struct{}{}:
+		e.admitting.Add(-1)
 	case <-e.ctx.Done():
+		e.admitting.Add(-1)
 		e.Metrics.Backpressured.Add(1)
 		e.Opts.Obs.RecordBackpressure(e.IR.Config.Name, sourceNode)
 		return e.ctx.Err()
@@ -795,7 +807,7 @@ func (e *Engine) WaitSettled(ctx context.Context) error {
 	defer tick.Stop()
 	for {
 		outstanding, _, _ := e.settle.snapshot()
-		if outstanding == 0 {
+		if outstanding == 0 && e.replayDone.Load() && e.admitting.Load() == 0 {
 			return nil
 		}
 		select {
