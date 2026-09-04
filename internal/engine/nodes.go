@@ -341,6 +341,7 @@ func (e *Engine) deadLetterMsg(seq int64, msg registry.Message, node, edge, reas
 		if err == nil {
 			e.Metrics.DeadLettered.Add(1)
 			e.Opts.Obs.RecordDeadLetter(e.IR.Config.Name, node, obs.ReasonClass(reason))
+			e.finishSpan(seq, "dead_letter", reason)
 			e.settle.done(seq)
 			return
 		}

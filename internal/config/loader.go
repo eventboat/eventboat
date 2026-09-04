@@ -126,6 +126,7 @@ func LoadBytes(file string, data []byte) *Result {
 	allowedTop := map[string]bool{
 		"apiVersion": true, "kind": true, "metadata": true,
 		"edge_defaults": true, "constants": true, "limits": true,
+		"telemetry": true,
 		"run": true, "parameters": true, "hooks": true,
 		"codecs": true,
 		"sources": true, "transforms": true, "sinks": true,
@@ -133,8 +134,8 @@ func LoadBytes(file string, data []byte) *Result {
 	for _, kv := range mappingPairs(root) {
 		key := kv.key
 		if !allowedTop[key] {
-			hint := "supported top-level keys: apiVersion, kind, metadata, edge_defaults, constants, limits, run, parameters, hooks, codecs, sources, transforms, sinks"
-			if key == "dlq" || key == "telemetry" {
+			hint := "supported top-level keys: apiVersion, kind, metadata, edge_defaults, constants, limits, telemetry, run, parameters, hooks, codecs, sources, transforms, sinks"
+			if key == "dlq" {
 				hint = key + " is defined by redesign-v3.md §5.10 but not implemented yet"
 			}
 			res.Diagnostics = append(res.Diagnostics, Diagnostic{
@@ -228,6 +229,7 @@ func LoadBytes(file string, data []byte) *Result {
 	parseRun(file, raw, p, lines, res)
 	parseParameters(file, raw, p, lines, res)
 	parseHooks(file, raw, p, lines, res)
+	parseTelemetry(file, raw, p, lines, res)
 
 	parseSection(file, raw, "sources", SectionSource, p, lines, res)
 	parseSection(file, raw, "transforms", SectionTransform, p, lines, res)
@@ -453,6 +455,69 @@ func parseRun(file string, raw map[string]any, p *Pipeline, lines *lineIndex, re
 		}
 	}
 	p.Run = r
+}
+
+// parseTelemetry parses the `telemetry:` section (§5.10): per-pipeline
+// telemetry customization. Shape here; pattern syntax is verified at verify
+// (ir.Build) alongside the other semantic checks.
+func parseTelemetry(file string, raw map[string]any, p *Pipeline, lines *lineIndex, res *Result) {
+	tn, present := raw["telemetry"]
+	if !present {
+		return
+	}
+	tm, ok := tn.(map[string]any)
+	if !ok {
+		res.Diagnostics = append(res.Diagnostics, Diagnostic{
+			Severity: "error", Code: "cfg_telemetry_type", File: file, Line: lines.line("telemetry"),
+			Message: "telemetry must be a mapping", Hint: `telemetry: { redact: [payload.user.email], span_sample_rate: 0.0 }`,
+		})
+		return
+	}
+	for k := range tm {
+		switch k {
+		case "redact", "span_sample_rate":
+		default:
+			res.Diagnostics = append(res.Diagnostics, Diagnostic{
+				Severity: "error", Code: "cfg_unknown_field", File: file, Line: lines.line("telemetry"),
+				Message: fmt.Sprintf("unknown telemetry field %q", k),
+				Hint:    "allowed: redact, span_sample_rate",
+			})
+		}
+	}
+	t := &Telemetry{}
+	if v, ok := tm["redact"]; ok {
+		list, ok := v.([]any)
+		if !ok {
+			res.Diagnostics = append(res.Diagnostics, Diagnostic{
+				Severity: "error", Code: "cfg_telemetry_redact", File: file, Line: lines.line("telemetry", "redact"),
+				Message: "telemetry.redact must be a list of field-path globs", Hint: `redact: [payload.user.email, meta.authorization]`,
+			})
+		} else {
+			for _, item := range list {
+				s, ok := item.(string)
+				if !ok || strings.TrimSpace(s) == "" {
+					res.Diagnostics = append(res.Diagnostics, Diagnostic{
+						Severity: "error", Code: "cfg_telemetry_redact", File: file, Line: lines.line("telemetry", "redact"),
+						Message: fmt.Sprintf("telemetry.redact entries must be non-empty strings, got %v", item), Hint: "",
+					})
+					continue
+				}
+				t.Redact = append(t.Redact, s)
+			}
+		}
+	}
+	if v, ok := tm["span_sample_rate"]; ok {
+		f, ok := v.(float64)
+		if !ok || f < 0 || f > 1 {
+			res.Diagnostics = append(res.Diagnostics, Diagnostic{
+				Severity: "error", Code: "cfg_telemetry_span_rate", File: file, Line: lines.line("telemetry", "span_sample_rate"),
+				Message: fmt.Sprintf("telemetry.span_sample_rate must be a number in [0, 1], got %v", v), Hint: "0 disables per-message spans (default)",
+			})
+		} else {
+			t.SpanSampleRate = f
+		}
+	}
+	p.Telemetry = t
 }
 
 // parseParameters validates typed parameter declarations (§5.9).

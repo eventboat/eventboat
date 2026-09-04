@@ -142,6 +142,19 @@ func (o *Obs) Handler() http.Handler {
 	return o.handler
 }
 
+// NewWithTracer builds an Obs with noop metrics and the given provider's
+// tracer — tests inject in-memory recorders to assert span emission
+// (production builds providers through Setup).
+func NewWithTracer(tp trace.TracerProvider) (*Obs, error) {
+	o := &Obs{}
+	o.meter = otel.GetMeterProvider().Meter("eventboat")
+	o.tracer = tp.Tracer("eventboat")
+	if err := o.createInstruments(); err != nil {
+		return nil, err
+	}
+	return o, nil
+}
+
 // Tracer returns the trace provider's tracer (nil-safe: a disabled tracer
 // is a noop through the global provider).
 func (o *Obs) Tracer() trace.Tracer {

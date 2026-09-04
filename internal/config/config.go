@@ -65,6 +65,7 @@ type Pipeline struct {
 	ConstantsUsed map[string]bool // constants referenced via ${constants.x} (pre-substitution truth)
 	EdgeDefaults  EdgeAttrs
 	Limits        *Limits
+	Telemetry     *Telemetry // per-pipeline telemetry customization (§5.10; nil = defaults)
 	Run           *RunSpec
 	Parameters    map[string]*ParameterSpec // declared job parameters (nil without a run block)
 	Hooks         *HooksSpec
@@ -74,6 +75,16 @@ type Pipeline struct {
 	Sinks         map[string]*Node
 	// Order preserves a deterministic listing of all node names.
 	Order []string
+}
+
+// Telemetry is the pipeline-level telemetry customization (§5.10: "本管道
+// 遥测定制"; global export endpoints stay in the Runtime config — resource
+// vs runtime separation). Redact masks matched field values in tail entries
+// ONLY (presentation data); the spool, dead letters and deliveries are the
+// data path and are never altered.
+type Telemetry struct {
+	Redact         []string // dot-separated glob field paths (path.Match per segment)
+	SpanSampleRate float64  // per-message span sampling; 0 (default) = none
 }
 
 // CodecDecl is one named codec declaration under `codecs:` (§5.10): a name

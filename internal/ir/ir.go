@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -402,6 +403,8 @@ func Build(cfg *config.Pipeline, reg *registry.Registry, starOpts starhost.Optio
 	// Job pipeline semantics (§3.1 item 4, §5.8).
 	checkJobSemantics(p, reg, parameters, file, add)
 
+	checkTelemetry(cfg, file, add)
+
 	lint(p, file, add)
 
 	if hasError(diags) {
@@ -503,8 +506,7 @@ func checkDeclaredVersion(p *Pipeline, n *Node, registered int, file string, add
 // checkJobSemantics enforces the job-pipeline rules of §5.8 (M2 review):
 // pull-capability sources, cron syntax, parameter reference legality, hook
 // sink schemas and the continuous-pipeline rejections.
-func checkJobSemantics(p *Pipeline, reg *registry.Registry, parameters map[string]any, file string, add func(config.Diagnostic)) {
-	cfg := p.Config
+func checkJobSemantics(p *Pipeline, reg *registry.Registry, parameters map[string]any, file string, add func(config.Diagnostic)) {	cfg := p.Config
 	job := cfg.IsJob()
 
 	// Cron syntax.
@@ -819,6 +821,29 @@ func topoSort(p *Pipeline) []string {
 }
 
 // lint implements the POC subset of §3.1 item 5.
+// checkTelemetry validates telemetry.redact patterns: each is a
+// dot-separated field path where every segment is a path.Match glob. A bad
+// pattern would silently never match — it is a verify error instead.
+func checkTelemetry(cfg *config.Pipeline, file string, add func(config.Diagnostic)) {
+	if cfg.Telemetry == nil {
+		return
+	}
+	for _, pattern := range cfg.Telemetry.Redact {
+		if pattern == "" {
+			continue // the loader already rejects empty entries
+		}
+		for _, seg := range strings.Split(pattern, ".") {
+			if _, err := path.Match(seg, ""); err != nil {
+				add(config.Diagnostic{Severity: "error", Code: "telemetry_redact_pattern", File: file,
+					Line:    0,
+					Message: fmt.Sprintf("telemetry.redact pattern %q is not a valid field-path glob: %v", pattern, err),
+					Hint:    `dot-separated segments, each a glob, e.g. payload.user.email or payload.credit_card*`})
+				break
+			}
+		}
+	}
+}
+
 func lint(p *Pipeline, file string, add func(config.Diagnostic)) {
 	// Literal predicates: dead branches.
 	for _, name := range p.Order {

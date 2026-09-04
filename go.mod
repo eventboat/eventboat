@@ -8,6 +8,8 @@ require (
 	github.com/cloudevents/sdk-go/v2 v2.16.2
 	github.com/go-sql-driver/mysql v1.10.1
 	github.com/google/uuid v1.6.0
+	github.com/gurkankaymak/hocon v1.2.23
+	github.com/hamba/avro/v2 v2.31.0
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/modelcontextprotocol/go-sdk v1.7.0
 	github.com/prometheus/client_golang v1.24.1
@@ -46,8 +48,6 @@ require (
 	github.com/google/go-cmp v0.7.0 // indirect
 	github.com/google/jsonschema-go v0.4.3 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.30.0 // indirect
-	github.com/gurkankaymak/hocon v1.2.23 // indirect
-	github.com/hamba/avro/v2 v2.31.0 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
 	github.com/jackc/puddle/v2 v2.2.2 // indirect

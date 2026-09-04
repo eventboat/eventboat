@@ -249,8 +249,11 @@ func (s *Service) startManaged(ctx context.Context, cfg *config.Pipeline, file s
 		}
 		opts := jobs.Options{}
 		opts.EngineOptions = engine.DefaultOptions().WithLimits(cfg.Limits)
-		opts.EngineOptions.SinkWrapper = s.tailWrapper(cfg.Name)
+		opts.EngineOptions.SinkWrapper = s.tailWrapper(cfg)
 		opts.EngineOptions.Obs = s.opts.Obs
+		if cfg.Telemetry != nil {
+			opts.EngineOptions.SpanSampleRate = cfg.Telemetry.SpanSampleRate
+		}
 		jm, err := jobs.New(cfg, file, st, s.reg, opts)
 		if err != nil {
 			cancel()
@@ -277,8 +280,11 @@ func (s *Service) startManaged(ctx context.Context, cfg *config.Pipeline, file s
 			return nil, err
 		}
 		opts := engine.DefaultOptions().WithLimits(cfg.Limits)
-		opts.SinkWrapper = s.tailWrapper(cfg.Name)
+		opts.SinkWrapper = s.tailWrapper(cfg)
 		opts.Obs = s.opts.Obs
+		if cfg.Telemetry != nil {
+			opts.SpanSampleRate = cfg.Telemetry.SpanSampleRate
+		}
 		eng, err := engine.New(pip, st, s.reg, opts)
 		if err != nil {
 			cancel()
@@ -487,29 +493,36 @@ func (s *Service) Tail(node string, n int) []TailEntry {
 	return append([]TailEntry(nil), entries...)
 }
 
-func (s *Service) tailWrapper(pipeline string) func(node string, snk registry.Sink) registry.Sink {
+func (s *Service) tailWrapper(cfg *config.Pipeline) func(node string, snk registry.Sink) registry.Sink {
+	// Tail entries show the payload document; patterns are compiled against
+	// the payload root (meta.* patterns have nothing to match there).
+	redact := compileRedactForRoot(nil, "payload")
+	if cfg.Telemetry != nil {
+		redact = compileRedactForRoot(cfg.Telemetry.Redact, "payload")
+	}
 	return func(node string, snk registry.Sink) registry.Sink {
-		return &tailSink{inner: snk, svc: s, node: node}
+		return &tailSink{inner: snk, svc: s, node: node, redact: redact}
 	}
 }
 
 type tailSink struct {
-	inner registry.Sink
-	svc   *Service
-	node  string
+	inner  registry.Sink
+	svc    *Service
+	node   string
+	redact []redactor
 }
 
 func (t *tailSink) Write(ctx context.Context, msgs []registry.Message) error {
 	err := t.inner.Write(ctx, msgs)
 	if err == nil {
-		t.svc.recordTail(t.node, msgs)
+		t.svc.recordTail(t.node, msgs, t.redact)
 	}
 	return err
 }
 
 func (t *tailSink) Close() error { return t.inner.Close() }
 
-func (s *Service) recordTail(node string, msgs []registry.Message) {
+func (s *Service) recordTail(node string, msgs []registry.Message, redact []redactor) {
 	s.tailMu.Lock()
 	defer s.tailMu.Unlock()
 	for _, m := range msgs {
@@ -517,6 +530,9 @@ func (s *Service) recordTail(node string, msgs []registry.Message) {
 		if payload == "" {
 			payload = string(m.Raw)
 		}
+		// Redaction is presentation-only (tail entries); the spool, dead
+		// letters and deliveries are the data path and are never altered.
+		payload = redactJSON(payload, redact)
 		if len(payload) > 512 {
 			payload = payload[:512] + "…"
 		}

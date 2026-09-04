@@ -8,11 +8,14 @@ package engine
 import (
 	"context"
 	"fmt"
+	"math/rand/v2"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/eventboat/eventboat/internal/config"
 	"github.com/eventboat/eventboat/internal/ir"
@@ -42,6 +45,14 @@ type Options struct {
 	// so max_in_flight aggregates across overlap:all runs instead of
 	// multiplying per run (M2 review R17). nil = per-engine semaphore.
 	Admission chan struct{}
+
+	// SpanSampleRate is the per-message span sampling rate (pipeline
+	// telemetry.span_sample_rate, §6.6/R16: per-message spans only when the
+	// pipeline opts in). 0 (default) = no spans, zero cost; 1 = all
+	// messages. Spans cover accept → terminal state (settled or dead
+	// letter); they are roots (the engine does not thread the span context
+	// through the DAG — correlation rides the attributes).
+	SpanSampleRate float64
 
 	// Obs receives OpenTelemetry events (nil-safe: nil disables telemetry).
 	Obs *obs.Obs
@@ -158,6 +169,9 @@ type Engine struct {
 	acceptMu   sync.Mutex
 	acceptedAt map[int64]time.Time // spool seq → accept time (settle latency)
 
+	spanMu sync.Mutex
+	spans  map[int64]trace.Span // spool seq → sampled per-message span (nil rate = empty)
+
 	persistMu        sync.Mutex
 	persistedThrough int64 // highest checkpoint successfully written
 	flushAttempted   int64 // highest advance whose persistence was attempted
@@ -229,6 +243,7 @@ func New(p *ir.Pipeline, st store.Store, reg *registry.Registry, opts Options) (
 		srcDone:       map[string]bool{},
 		acceptedAt:    map[int64]time.Time{},
 		srcPersisted:  map[string]int64{},
+		spans:         map[int64]trace.Span{},
 	}
 
 	for _, name := range p.Order {
@@ -319,6 +334,7 @@ func New(p *ir.Pipeline, st store.Store, reg *registry.Registry, opts Options) (
 // accept-to-settle latency.
 func (e *Engine) onSettled(seq int64) {
 	e.Metrics.SettledCount.Add(1)
+	e.finishSpan(seq, "settled", "")
 	e.acceptMu.Lock()
 	accepted := e.acceptedAt[seq]
 	delete(e.acceptedAt, seq)
@@ -685,9 +701,51 @@ func (e *Engine) accept(raw registry.Message, sourceNode string) error {
 	e.acquiredMu.Lock()
 	e.acquired[seq] = true
 	e.acquiredMu.Unlock()
+	e.startMessageSpan(seq, msg.ID, sourceNode)
 	e.settle.arrived(seq, sourceNode, raw.SrcSeq)
 	e.dispatchFrom(sourceNode, seq, msg)
 	return nil
+}
+
+// startMessageSpan samples and starts one per-message span
+// (telemetry.span_sample_rate > 0 only; R16: sampling is opt-in). The span
+// context is deliberately not propagated through the DAG — correlation rides
+// the attributes (pipeline/message_id/source).
+func (e *Engine) startMessageSpan(seq int64, messageID, source string) {
+	rate := e.Opts.SpanSampleRate
+	if rate <= 0 {
+		return
+	}
+	if rate < 1 && rand.Float64() >= rate {
+		return
+	}
+	_, span := e.Opts.Obs.Tracer().Start(e.ctx, "eventboat.message",
+		trace.WithAttributes(
+			attribute.String("eventboat.pipeline", e.IR.Config.Name),
+			attribute.String("eventboat.message_id", messageID),
+			attribute.String("eventboat.source", source),
+			attribute.Int64("eventboat.spool_seq", seq),
+		))
+	e.spanMu.Lock()
+	e.spans[seq] = span
+	e.spanMu.Unlock()
+}
+
+// finishSpan ends one sampled span at its terminal state; unknown seqs
+// (unsampled, or ended by a racing terminal path) are no-ops.
+func (e *Engine) finishSpan(seq int64, terminal, errText string) {
+	e.spanMu.Lock()
+	span := e.spans[seq]
+	delete(e.spans, seq)
+	e.spanMu.Unlock()
+	if span == nil {
+		return
+	}
+	span.SetAttributes(attribute.String("eventboat.terminal_state", terminal))
+	if errText != "" {
+		span.SetAttributes(attribute.String("eventboat.error", errText))
+	}
+	span.End()
 }
 
 // dispatchFrom decodes (at source entry) and fans a spooled message out of
