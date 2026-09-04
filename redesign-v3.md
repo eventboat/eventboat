@@ -987,7 +987,7 @@ internal/
 9. **catchup_window 语义细节**：错过多个调度窗口时补跑几次（建议最多一次，带告警）；窗口内作业仍在 running 时的行为。
 10. ~~部署级配置文件的形态~~ **已定（M2，redesign-v3-review-m2.md R13）**：`kind: Runtime` YAML（storage/admin/mcp/telemetry 字段集，严格白名单，未知字段=错误）+ CLI 标志覆盖；查找顺序 `--runtime <file>` > `./eventboat.yaml` > 全默认；M1 的 `--data-dir`/`--ephemeral` 保留为覆盖标志。
 11. ~~License~~ **已定（2026-09-03）：Apache-2.0**——含专利授权，利于生态与未来商业化选项；仓库 `LICENSE` 文件与两份 README 已同步。
-12. ~~v2 代码的存续策略~~ **已定（2026-09-03）**：POC 阶段全新实现、**不向后兼容 v2**——v2 代码整体归档（`legacy/`），不导入不修改；`convert` 工具按需，不阻塞任何里程碑。
+12. ~~v2 代码的存续策略~~ **已定（2026-09-03）**：POC 阶段全新实现、**不向后兼容 v2**——v2 代码整体归档（`legacy/`），不导入不修改；`convert` 工具按需，不阻塞任何里程碑。**后续（2026-09-04）**：v0.1.0-beta 发布后 `legacy/` 已从工作树移除（convert 验收测试所需 12 个 v2 fixture 拷贝至 `internal/convert/testdata/v2/`），v2 可经 git 历史与 v0.1.0-beta tag 考古恢复。
 
 ---
 

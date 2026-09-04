@@ -15,8 +15,9 @@ agents that write your pipelines.
 > [redesign-v3.md](redesign-v3.md), plus the beta hardening round of
 > [redesign-v3-review-beta.md](redesign-v3-review-beta.md) — no new product
 > surface beyond the knobs listed in [CHANGELOG.md](CHANGELOG.md)).
-> The v2 implementation is archived under [legacy/](legacy/) and is not
-> compatible. Pre-implementation design reviews: [redesign-v3-review.md](redesign-v3-review.md)
+> The v2 implementation is not compatible; its archived tree was removed
+> from the worktree after the beta (recoverable from git history and the
+> v0.1.0-beta tag). Pre-implementation design reviews: [redesign-v3-review.md](redesign-v3-review.md)
 > (M1, verdict: pass, 13 findings), [redesign-v3-review-m2.md](redesign-v3-review-m2.md)
 > (M2, verdict: pass, no blockers), [redesign-v3-review-m3.md](redesign-v3-review-m3.md)
 > (M3, verdict: pass, no blockers), [redesign-v3-review-m4.md](redesign-v3-review-m4.md)
@@ -100,7 +101,7 @@ eventboat [--json] plugin catalog           # registered plugins with ABI versio
 # CESQL edge dialect: when: { lang: cesql, expr: "region = 'EU' AND data.amount > 100" }
 
 # the ecosystem surface (M4, §7.4): convert, LSP, codecs, schema export, repl
-eventboat convert legacy/_examples/02-route-branching.yaml -o v3.yaml --report v3.md
+eventboat convert internal/convert/testdata/v2/02-route-branching.yaml -o v3.yaml --report v3.md
 eventboat verify --config v3.yaml                     # converted output must verify
 eventboat lsp                                          # language server over stdio (editors/editors/vscode)
 eventboat [--json] plugin schema kafka                 # one schema, pretty or JSON
@@ -249,7 +250,9 @@ implementation-time discoveries:
   (previously bare name strings) — consumers must parse accordingly.
 - **convert**: the legacy loader is NOT importable (a separate module's
   `internal/` packages), so the v2 shapes live as a read-only copy in
-  `internal/convert` (legacy/ untouched). "Auto-migrated" means
+  `internal/convert` (the legacy tree itself was never touched and has
+  since been removed from the worktree; v2 stays recoverable via git
+  history and the v0.1.0-beta tag). "Auto-migrated" means
   machine-checked: generated scripts compile under the real Starlark host,
   generated configs pass the real verify; anything else becomes a report
   item with reason + suggested rewrite. Route transforms fold into ordered
@@ -706,7 +709,6 @@ internal/testrun/     §3.2 contract-test runner
 internal/inttests/    env-gated integration suites: kafka/ (real broker via testcontainers), soak/ (long-run stability)
 scripts/              bench-gate.sh — the CI loose performance threshold gate
 examples/             linear, branching (CEL), fan-in, job-sync (sql), codecs (csv+avro), plugins/ (gRPC), editors/vscode, k8s
-legacy/               archived v2 implementation (not imported, not modified)
 ```
 
 ## Development

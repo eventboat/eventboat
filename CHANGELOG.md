@@ -4,6 +4,17 @@ All notable changes to Eventboat. The format follows
 [Keep a Changelog](https://keepachangelog.com/); versions follow semver
 (pre-1.0: the API surface may still shift between minor versions).
 
+## Unreleased
+
+### Removed
+
+- **The archived v2 tree (`legacy/`) is gone from the worktree.** Nothing
+  imported it (it was a separate Go module), and the v0.1.0-beta tag
+  preserves the full archive, so v2 remains recoverable via git history.
+  The 12 v2 fixtures consumed by the convert acceptance tests now live in
+  `internal/convert/testdata/v2/`; golden reports were re-pinned with only
+  the embedded source-path line changing. No behavior change.
+
 ## v0.1.0-beta (2026-09-04)
 
 First beta: the v3 POC milestones (M1–M4) hardened — debt cleared, tests

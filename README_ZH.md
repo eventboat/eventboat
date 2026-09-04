@@ -12,7 +12,8 @@ DAG 流动（过滤、映射、路由），落到目的地——全程 at-least-
 > **状态：v0.1.0-beta**（[redesign-v3.md](redesign-v3.md) 的 M1 + M2 + M3 + M4
 > 里程碑，加上 [redesign-v3-review-beta.md](redesign-v3-review-beta.md) 的
 > beta 硬化轮——除 [CHANGELOG.md](CHANGELOG.md) 所列旋钮外无新产品面）。
-> v2 实现已整体归档至 [legacy/](legacy/)，互不兼容。实现前的独立设计审查见
+> v2 实现互不兼容；其归档树已在 beta 后从工作树移除（可经 git 历史与
+> v0.1.0-beta tag 考古恢复）。实现前的独立设计审查见
 > [redesign-v3-review.md](redesign-v3-review.md)（M1，通过，13 项发现）、
 > [redesign-v3-review-m2.md](redesign-v3-review-m2.md)（M2，通过）、
 > [redesign-v3-review-m3.md](redesign-v3-review-m3.md)（M3，通过）、
@@ -92,7 +93,9 @@ eventboat run --config my.yaml --ephemeral
   走 starhost、产出走全量 verify），子集外逐条进报告（原因 + 建议改法）。
   route/filter 折叠为有序边守卫；v2 无匹配静默丢弃 → v3 settle-as-filtered +
   计数（结局相同、可观测）。**legacy 全部 12 个示例/testdata convert 后
-  verify 全绿进 CI**（快照 + 三例语义等价永久测试）。legacy/ 只读不动。
+  verify 全绿进 CI**（快照 + 三例语义等价永久测试，fixture 现存于
+  `internal/convert/testdata/v2/`）。legacy 归档期间只读未动；移树后可经
+  git 历史与 v0.1.0-beta tag 考古恢复。
 - **LSP（编辑器内写管道）**：`eventboat lsp`（stdio）。诊断 = 真实 verify
   管线（与 CLI/MCP 同一代码路径，零第二套校验）；补全 = 顶层段/框架字段/
   插件名（registry catalog）/插件字段（JSON Schema）/边属性/codec 名；
@@ -261,7 +264,6 @@ internal/inttests/    环境门控集成套件：kafka/（testcontainers 真实 
 scripts/              bench-gate.sh——CI 宽松性能阈值门
 docs/                 plugins.md、wasm.md、codecs.md、k8s.md、naming-checklist.md
 examples/             线性、CEL 分支、fan-in、job-sync（sql）、codecs（csv+avro）、plugins（gRPC）、editors/vscode、k8s
-legacy/               归档的 v2 实现（不导入、不修改；convert 只读消费）
 ```
 
 ## 开发
