@@ -87,16 +87,20 @@ func (s *ManualSource) Emit(raw []byte, cursor string) {
 		}
 		s.cursors[seq] = cursor
 	}
+	runCtx := s.runCtx // read under the lock: Run may restart concurrently
 	s.mu.Unlock()
+	if runCtx == nil {
+		return
+	}
 	done := make(chan struct{})
 	select {
 	case s.emitted <- manualEmission{msg: registry.Message{Raw: raw, SrcName: s.Name, SrcSeq: seq, Cursor: cursor}, done: done}:
-	case <-s.runCtx.Done():
+	case <-runCtx.Done():
 		return
 	}
 	select {
 	case <-done:
-	case <-s.runCtx.Done():
+	case <-runCtx.Done():
 	}
 }
 

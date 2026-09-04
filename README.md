@@ -234,6 +234,34 @@ Other recorded trims:
   binds 127.0.0.1 by default and has NO authentication (POC boundary —
   recorded).
 
+### Observability (M2, §6.6)
+
+- **Dual export via the OTel Go SDK**: one MeterProvider with two readers —
+  Prometheus exposition at `/metrics` (daemon surface) and OTLP/HTTP push
+  when `telemetry.otlp_endpoint` is configured. Fully disabled telemetry
+  costs nothing (noop providers). Single-pipeline `run` gets OTLP only (no
+  HTTP surface); `run --config-dir` / `mcp --http` serve both.
+- **25 metrics, `eventboat_` prefix** — exactly the review's list:
+  messages_in_total, messages_settled_total, dead_letter_total (with
+  reason_class), dlq_write_failures_total, cel_eval_errors_total,
+  fanout_no_match_total, delivery_retries_total, optional_drops_total,
+  decode_errors_total, spool_failures_total, backpressure_events_total,
+  script_step_budget_exhausted_total, jobs_started_total,
+  jobs_overlap_skipped_total, jobs_catchup_skipped_total,
+  jobs_completed_total (by status), job_rows_read_total,
+  job_rows_delivered_total; histograms script_duration_seconds,
+  sink_write_duration_seconds, job_duration_seconds,
+  settle_latency_seconds; gauges in_flight_messages, spool_depth,
+  pipeline_paused.
+- **Spans** (review R16: no per-message spans at routing rates): one span
+  per job run (`eventboat.job.run`, attributes pipeline/run_id/trigger,
+  terminal status + recorded errors); deploy/job events also flow through
+  the SSE stream. Script backtraces ride the dead-letter records and span
+  error events; per-message span sampling is P2.
+- The M1 atomic counters remain the engine's internal bookkeeping and the
+  `--json` CLI/status source; OTel instruments record the same events
+  (`SettledCount` split from the checkpoint pointer, review R5).
+
 ### explain / replay (M2, §3.3) — rulings
 
 - **Scripts dry-run in message-level explain** (review R10): the Starlark

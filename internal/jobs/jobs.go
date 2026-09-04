@@ -16,11 +16,14 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/robfig/cron/v3"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/eventboat/eventboat/internal/config"
 	"github.com/eventboat/eventboat/internal/engine"
 	"github.com/eventboat/eventboat/internal/ir"
 	"github.com/eventboat/eventboat/internal/lang/starhost"
+	"github.com/eventboat/eventboat/internal/obs"
 	"github.com/eventboat/eventboat/internal/registry"
 	"github.com/eventboat/eventboat/internal/store"
 )
@@ -35,6 +38,9 @@ type Options struct {
 	CatchupTicksSkipped func(delta int64)
 	OverlapSkips        func(delta int64)
 }
+
+// obs returns the telemetry sink from the engine options (nil-safe).
+func (o Options) obs() *obs.Obs { return o.EngineOptions.Obs }
 
 func (o Options) clock() func() time.Time {
 	if o.Clock != nil {
@@ -211,6 +217,7 @@ func (m *Manager) maybeCatchup(ctx context.Context) {
 			catchable = &missed[i]
 		} else {
 			m.opts.CatchupTicksSkipped(1)
+			m.opts.obs().RecordCatchupSkip(m.cfg.Name)
 		}
 	}
 	if catchable != nil {
@@ -272,6 +279,7 @@ func (m *Manager) spawn(ctx context.Context, params map[string]any, trigger, sch
 	if overlap != "all" && len(m.current) > 0 {
 		if overlap == "skip" {
 			m.opts.OverlapSkips(1)
+			m.opts.obs().RecordOverlapSkip(m.cfg.Name)
 			m.mu.Unlock()
 			return "", nil, fmt.Errorf("jobs: previous run still active (overlap: skip)")
 		}
@@ -348,17 +356,34 @@ func (m *Manager) runAsync(ctx context.Context, jr store.JobRun, triggerParams, 
 
 // runOnce drives one full run lifecycle: load config → substitute params →
 // build IR → engine to quiescence → terminal state → hooks → retention.
+// The whole run is one trace span carrying trigger, parameters and terminal
+// status as attributes (§6.6 spans; review R16: batch granularity).
 func (m *Manager) runOnce(ctx context.Context, jr *store.JobRun, triggerParams, resolved map[string]any) {
 	now := m.opts.clock()()
 	jr.Status = store.JobRunning
 	jr.StartedAt = now
 	_ = m.st.UpdateJobRun(*jr)
+	m.opts.obs().RecordJobStart(m.cfg.Name, jr.TriggerType)
+	runCtx, span := m.opts.obs().Tracer().Start(ctx, "eventboat.job.run",
+		trace.WithAttributes(
+			attribute.String("eventboat.pipeline", m.cfg.Name),
+			attribute.String("eventboat.run_id", jr.RunID),
+			attribute.String("eventboat.trigger", jr.TriggerType),
+		))
+	defer span.End()
+	ctx = runCtx
 
 	fail := func(status, msg string) {
 		jr.Status = status
 		jr.Error = msg
 		jr.EndedAt = m.opts.clock()()
 		_ = m.st.UpdateJobRun(*jr)
+		span.SetAttributes(attribute.String("eventboat.status", status))
+		if msg != "" {
+			span.RecordError(fmt.Errorf("%s", msg))
+		}
+		m.opts.obs().RecordJobEnd(m.cfg.Name, status, jr.EndedAt.Sub(jr.StartedAt),
+			jr.RowsRead, jr.Delivered, jr.DeadLettered)
 		if status == store.JobFailed || status == store.JobPartial {
 			m.fireHook(ctx, "failure", jr)
 		}

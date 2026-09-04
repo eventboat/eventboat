@@ -3,10 +3,12 @@ package engine
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/eventboat/eventboat/internal/ir"
 	"github.com/eventboat/eventboat/internal/lang/starhost"
+	"github.com/eventboat/eventboat/internal/obs"
 	"github.com/eventboat/eventboat/internal/registry"
 	"github.com/eventboat/eventboat/internal/store"
 )
@@ -31,6 +33,7 @@ func (e *Engine) processTransform(node *ir.Node, inst *instance) {
 	if node.Script != nil {
 		e.Metrics.TransformRuns.Add(1)
 		retries, backoff := e.deliveryOf(inst.via)
+		scriptStart := time.Now()
 
 		var payloadState, metaState *starhost.MsgState
 		var serr *starhost.ScriptError
@@ -53,9 +56,12 @@ func (e *Engine) processTransform(node *ir.Node, inst *instance) {
 			}
 		}
 		if serr != nil {
+			e.Opts.Obs.RecordScript(e.IR.Config.Name, node.Name, time.Since(scriptStart),
+				strings.Contains(serr.Msg, "too many steps"))
 			e.deadLetter(inst, node.Name, "script: "+serr.Msg, serr.Backtrace)
 			return
 		}
+		e.Opts.Obs.RecordScript(e.IR.Config.Name, node.Name, time.Since(scriptStart), false)
 		if payloadState.Dirty() {
 			inst.msg.Decoded = payloadState.GoValue()
 		}
@@ -205,12 +211,15 @@ func (e *Engine) writeBatch(node *ir.Node, sink registry.Sink, insts []*instance
 	for attempt := 0; attempt <= retries; attempt++ {
 		if attempt > 0 {
 			e.Metrics.Retries.Add(1)
+			e.Opts.Obs.RecordRetry(e.IR.Config.Name, node.Name)
 			if !e.sleepBackoff(backoff, attempt) {
 				return // shutdown: unsettled, replayed later
 			}
 		}
 		writeCtx, cancel := context.WithTimeout(e.ctx, timeout)
+		writeStart := time.Now()
 		werr := sink.Write(writeCtx, msgs)
+		e.Opts.Obs.RecordSinkWrite(e.IR.Config.Name, node.Name, time.Since(writeStart))
 		cancel()
 		if werr == nil {
 			for _, r := range batch {
@@ -222,6 +231,7 @@ func (e *Engine) writeBatch(node *ir.Node, sink registry.Sink, insts []*instance
 	for _, r := range batch {
 		if r.inst.via != nil && !r.inst.via.Required {
 			e.Metrics.OptionalDrops.Add(1)
+			e.Opts.Obs.RecordOptionalDrop(e.IR.Config.Name, r.inst.via.From+" -> "+node.Name)
 			e.settle.done(r.inst.seq)
 			continue
 		}
@@ -267,10 +277,12 @@ func (e *Engine) deadLetterMsg(seq int64, msg registry.Message, node, edge, reas
 		err := e.Store.WriteDeadLetter(dl)
 		if err == nil {
 			e.Metrics.DeadLettered.Add(1)
+			e.Opts.Obs.RecordDeadLetter(e.IR.Config.Name, node, obs.ReasonClass(reason))
 			e.settle.done(seq)
 			return
 		}
 		e.Metrics.DlqFailures.Add(1)
+		e.Opts.Obs.RecordDlqFailure(e.IR.Config.Name)
 		select {
 		case <-time.After(e.Opts.DLBackoff):
 		case <-e.ctx.Done():

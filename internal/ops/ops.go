@@ -21,6 +21,7 @@ import (
 	"github.com/eventboat/eventboat/internal/jobs"
 	"github.com/eventboat/eventboat/internal/lang/celhost"
 	"github.com/eventboat/eventboat/internal/lang/starhost"
+	"github.com/eventboat/eventboat/internal/obs"
 	"github.com/eventboat/eventboat/internal/registry"
 	"github.com/eventboat/eventboat/internal/store"
 	"github.com/eventboat/eventboat/internal/testrun"
@@ -35,6 +36,8 @@ type Options struct {
 	StoreFor func(pipeline string) (store.Store, error)
 	// Clock for rate windows (tests).
 	Clock func() time.Time
+	// Obs receives telemetry (nil disables).
+	Obs *obs.Obs
 }
 
 // Service manages the running pipelines of one Eventboat process.
@@ -247,6 +250,7 @@ func (s *Service) startManaged(ctx context.Context, cfg *config.Pipeline, file s
 		opts := jobs.Options{}
 		opts.EngineOptions = engine.DefaultOptions().WithLimits(cfg.Limits)
 		opts.EngineOptions.SinkWrapper = s.tailWrapper(cfg.Name)
+		opts.EngineOptions.Obs = s.opts.Obs
 		jm, err := jobs.New(cfg, file, st, s.reg, opts)
 		if err != nil {
 			cancel()
@@ -274,6 +278,7 @@ func (s *Service) startManaged(ctx context.Context, cfg *config.Pipeline, file s
 		}
 		opts := engine.DefaultOptions().WithLimits(cfg.Limits)
 		opts.SinkWrapper = s.tailWrapper(cfg.Name)
+		opts.Obs = s.opts.Obs
 		eng, err := engine.New(pip, st, s.reg, opts)
 		if err != nil {
 			cancel()
@@ -415,6 +420,20 @@ func (s *Service) Status() []PipelineStatus {
 	s.rateMu.Lock()
 	s.rateAt = now
 	s.rateMu.Unlock()
+	// Push the pipeline-level gauges on every snapshot (the SSE stream and
+	// UI poll Status; /metrics scrapes the values recorded here).
+	for _, st := range out {
+		m := s.pipelines[st.Pipeline]
+		spoolDepth := 0
+		if m != nil && m.eng != nil {
+			_, settledThrough, arrivedMax := m.eng.SettleSnapshot()
+			spoolDepth = int(arrivedMax - settledThrough)
+			if spoolDepth < 0 {
+				spoolDepth = 0
+			}
+		}
+		s.opts.Obs.SetGauges(st.Pipeline, st.InFlight, spoolDepth, st.Status == "paused")
+	}
 	return out
 }
 

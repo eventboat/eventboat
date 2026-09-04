@@ -14,7 +14,9 @@ import (
 	"github.com/eventboat/eventboat/internal/ir"
 	"github.com/eventboat/eventboat/internal/jobs"
 	"github.com/eventboat/eventboat/internal/lang/starhost"
+	"github.com/eventboat/eventboat/internal/obs"
 	"github.com/eventboat/eventboat/internal/registry"
+	"github.com/eventboat/eventboat/internal/runtimecfg"
 	"github.com/eventboat/eventboat/internal/store"
 )
 
@@ -22,6 +24,7 @@ func cmdRun(args []string, jsonOut bool) int {
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
 	configPath := fs.String("config", "", "pipeline configuration file")
 	configDir := fs.String("config-dir", "", "directory of pipeline YAML files (multi-pipeline daemon with admin surface)")
+	runtimeFile := fs.String("runtime", "", "Runtime configuration file (telemetry endpoints; default: ./eventboat.yaml)")
 	dataDir := fs.String("data-dir", "data", "SQLite storage directory (deployment-level concern, POC flag)")
 	ephemeral := fs.Bool("ephemeral", false, "in-memory store: nothing persists across restarts")
 	if err := fs.Parse(args); err != nil {
@@ -57,9 +60,30 @@ func cmdRun(args []string, jsonOut bool) int {
 	}
 
 	// Job pipelines run under the jobs manager (scheduler + admission + run
-	// history, §5.8); continuous pipelines run the plain engine.
+	// history, §5.8); continuous pipelines run the plain engine. Telemetry
+	// follows the Runtime config (OTLP push; the Prometheus exposition needs
+	// the daemon surface: run --config-dir / mcp --http).
+	rt, err := runtimecfg.Load(*runtimeFile)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "run: %v\n", err)
+		return 2
+	}
+	if *dataDir != "" {
+		rt.Storage.DataDir = *dataDir
+	}
+	observer, err := obs.Setup(context.Background(), obs.Config{
+		OTLPEndpoint: rt.Telemetry.OTLPEndpoint,
+		SampleRatio:  rt.Telemetry.SampleRatio,
+		Prometheus:   false, // no HTTP surface in single-pipeline mode
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "run: telemetry: %v\n", err)
+		return 2
+	}
+	defer func() { _ = observer.Shutdown(context.Background()) }()
+
 	if pip.Config.IsJob() {
-		return runJobPipeline(*configPath, pip, reg, *dataDir, *ephemeral, jsonOut)
+		return runJobPipeline(*configPath, pip, reg, rt.Storage.DataDir, *ephemeral || rt.Storage.Ephemeral, jsonOut, observer)
 	}
 
 	var st store.Store
@@ -79,7 +103,9 @@ func cmdRun(args []string, jsonOut bool) int {
 		st = sqlite
 	}
 
-	eng, err := engine.New(pip, st, reg, engine.DefaultOptions().WithLimits(pip.Config.Limits))
+	engOpts := engine.DefaultOptions().WithLimits(pip.Config.Limits)
+	engOpts.Obs = observer
+	eng, err := engine.New(pip, st, reg, engOpts)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "run: %v\n", err)
 		return 2
@@ -149,7 +175,7 @@ func storeLabel(ephemeral bool, dataDir string) string {
 // runJobPipeline executes a job pipeline under the jobs manager until the
 // context is canceled: crash recovery of in-flight runs, catchup for missed
 // schedule ticks, then the cron scheduler (§5.8).
-func runJobPipeline(configPath string, pip *ir.Pipeline, reg *registry.Registry, dataDir string, ephemeral bool, jsonOut bool) int {
+func runJobPipeline(configPath string, pip *ir.Pipeline, reg *registry.Registry, dataDir string, ephemeral bool, jsonOut bool, observer *obs.Obs) int {
 	var st store.Store
 	if ephemeral {
 		st = store.NewMemory(pip.Config.Name)
@@ -169,6 +195,7 @@ func runJobPipeline(configPath string, pip *ir.Pipeline, reg *registry.Registry,
 
 	opts := jobs.Options{}
 	opts.EngineOptions = engine.DefaultOptions().WithLimits(pip.Config.Limits)
+	opts.EngineOptions.Obs = observer
 	m, err := jobs.New(pip.Config, configPath, st, reg, opts)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "run: %v\n", err)

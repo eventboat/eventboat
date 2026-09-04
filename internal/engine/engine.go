@@ -17,6 +17,7 @@ import (
 	"github.com/eventboat/eventboat/internal/config"
 	"github.com/eventboat/eventboat/internal/ir"
 	"github.com/eventboat/eventboat/internal/lang/starhost"
+	"github.com/eventboat/eventboat/internal/obs"
 	"github.com/eventboat/eventboat/internal/registry"
 	"github.com/eventboat/eventboat/internal/store"
 )
@@ -33,6 +34,9 @@ type Options struct {
 	DefaultTimeout time.Duration // per sink-write attempt when unset on edge
 	DrainTimeout   time.Duration // graceful drain bound before hard cancel
 	StarOptions    starhost.Options
+
+	// Obs receives OpenTelemetry events (nil-safe: nil disables telemetry).
+	Obs *obs.Obs
 
 	// OnSourceError reports a pull-source failure (job pipelines route this
 	// to a failed run; continuous sources have no error channel).
@@ -121,6 +125,9 @@ type Engine struct {
 	acquired   map[int64]bool // spool seqs holding an admission slot
 	acquiredMu sync.Mutex
 
+	acceptMu   sync.Mutex
+	acceptedAt map[int64]time.Time // spool seq → accept time (settle latency)
+
 	persistMu        sync.Mutex
 	persistedThrough int64
 
@@ -177,17 +184,18 @@ func New(p *ir.Pipeline, st store.Store, reg *registry.Registry, opts Options) (
 	}
 
 	e := &Engine{
-		IR:       p,
-		Store:    st,
-		Reg:      reg,
-		Opts:     opts,
-		chans:    map[string]chan *instance{},
-		sinks:    map[string]registry.Sink{},
-		codecs:   map[string]registry.Codec{},
-		sources:  map[string]registry.Source{},
-		acquired: map[int64]bool{},
-		srcErr:   map[string]error{},
-		srcDone:  map[string]bool{},
+		IR:         p,
+		Store:      st,
+		Reg:        reg,
+		Opts:       opts,
+		chans:      map[string]chan *instance{},
+		sinks:      map[string]registry.Sink{},
+		codecs:     map[string]registry.Codec{},
+		sources:    map[string]registry.Source{},
+		acquired:   map[int64]bool{},
+		srcErr:     map[string]error{},
+		srcDone:    map[string]bool{},
+		acceptedAt: map[int64]time.Time{},
 	}
 
 	for _, name := range p.Order {
@@ -257,10 +265,20 @@ func New(p *ir.Pipeline, st store.Store, reg *registry.Registry, opts Options) (
 	return e, nil
 }
 
-// onSettled releases the backpressure slot of one settled message and counts
-// it (R5: a count, distinct from the checkpoint pointer).
+// onSettled releases the backpressure slot of one settled message, counts
+// it (R5: a count, distinct from the checkpoint pointer) and records its
+// accept-to-settle latency.
 func (e *Engine) onSettled(seq int64) {
 	e.Metrics.SettledCount.Add(1)
+	e.acceptMu.Lock()
+	accepted := e.acceptedAt[seq]
+	delete(e.acceptedAt, seq)
+	e.acceptMu.Unlock()
+	latency := time.Duration(0)
+	if !accepted.IsZero() {
+		latency = e.Opts.Clock().Sub(accepted)
+	}
+	e.Opts.Obs.RecordSettled(e.IR.Config.Name, latency)
 	e.releaseAdmission(seq)
 }
 
@@ -543,6 +561,7 @@ func (e *Engine) accept(raw registry.Message, sourceNode string) error {
 	case e.admitSem <- struct{}{}:
 	case <-e.ctx.Done():
 		e.Metrics.Backpressured.Add(1)
+		e.Opts.Obs.RecordBackpressure(e.IR.Config.Name, sourceNode)
 		return e.ctx.Err()
 	}
 
@@ -570,12 +589,17 @@ func (e *Engine) accept(raw registry.Message, sourceNode string) error {
 	msg.Codec = codecName
 
 	e.Metrics.MessagesIn.Add(1)
+	e.Opts.Obs.RecordMessageIn(e.IR.Config.Name, sourceNode)
 	seq, err := e.Store.AppendSpool(e.IR.Config.Name, msg, ingest)
 	if err != nil {
 		<-e.admitSem
 		e.Metrics.SpoolFailures.Add(1)
+		e.Opts.Obs.RecordSpoolFailure(e.IR.Config.Name)
 		return fmt.Errorf("engine: spool append failed; message NOT delivered: %w", err)
 	}
+	e.acceptMu.Lock()
+	e.acceptedAt[seq] = ingest
+	e.acceptMu.Unlock()
 	e.acquiredMu.Lock()
 	e.acquired[seq] = true
 	e.acquiredMu.Unlock()
@@ -597,6 +621,7 @@ func (e *Engine) dispatchFrom(sourceNode string, seq int64, msg registry.Message
 		v, derr := codec.Decode(msg.Raw)
 		if derr != nil {
 			e.Metrics.DecodeErrors.Add(1)
+			e.Opts.Obs.RecordDecodeError(e.IR.Config.Name, sourceNode)
 			e.deadLetterMsg(seq, msg, sourceNode, "", "decode: "+derr.Error(), "")
 			return
 		}
@@ -616,6 +641,7 @@ func (e *Engine) fanOut(node *ir.Node, seq int64, msg registry.Message) {
 			ok, evalErr := edge.When.Eval(msg.Decoded, msg.Meta)
 			if evalErr != nil {
 				e.Metrics.CelEvalErrors.Add(1)
+				e.Opts.Obs.RecordCelError(e.IR.Config.Name, edge.From+" -> "+edge.To)
 				continue
 			}
 			if !ok {
@@ -626,6 +652,7 @@ func (e *Engine) fanOut(node *ir.Node, seq int64, msg registry.Message) {
 	}
 	if len(matched) == 0 {
 		e.Metrics.NoMatch.Add(1)
+		e.Opts.Obs.RecordNoMatch(e.IR.Config.Name, node.Name)
 		e.settle.done(seq)
 		return
 	}

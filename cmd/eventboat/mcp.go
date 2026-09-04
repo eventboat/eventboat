@@ -15,6 +15,7 @@ import (
 
 	"github.com/eventboat/eventboat/internal/admin"
 	"github.com/eventboat/eventboat/internal/mcpserver"
+	"github.com/eventboat/eventboat/internal/obs"
 	"github.com/eventboat/eventboat/internal/ops"
 	"github.com/eventboat/eventboat/internal/registry"
 	"github.com/eventboat/eventboat/internal/runtimecfg"
@@ -58,7 +59,8 @@ func cmdMCP(args []string, jsonOut bool) int {
 		return 2
 	}
 
-	svc := newOpsService(reg, rt)
+	svc, metricsHandler, obsShutdown := newOpsService(reg, rt)
+	defer func() { _ = obsShutdown(context.Background()) }()
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
 
@@ -82,7 +84,7 @@ func cmdMCP(args []string, jsonOut bool) int {
 	}
 
 	handler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server }, nil)
-	adminH := admin.Handler(svc, nil, handler)
+	adminH := admin.Handler(svc, metricsHandler, handler)
 	fmt.Printf("eventboat: admin + MCP listening on %s (UI: http://%s/admin/)\n", rt.Admin.Listen, rt.Admin.Listen)
 	if err := admin.Serve(ctx, rt.Admin.Listen, adminH); err != nil {
 		fmt.Fprintf(os.Stderr, "mcp: %v\n", err)
@@ -91,10 +93,20 @@ func cmdMCP(args []string, jsonOut bool) int {
 	return 0
 }
 
-// newOpsService builds the ops service from the runtime config.
-func newOpsService(reg *registry.Registry, rt runtimecfg.Config) *ops.Service {
+// newOpsService builds the ops service from the runtime config (including
+// the telemetry stack; metricsHandler serves /metrics when Prometheus is on).
+func newOpsService(reg *registry.Registry, rt runtimecfg.Config) (svc *ops.Service, metricsHandler http.Handler, shutdown func(context.Context) error) {
 	dir := rt.Storage.DataDir
-	return ops.New(ops.Options{
+	observer, err := obs.Setup(context.Background(), obs.Config{
+		OTLPEndpoint: rt.Telemetry.OTLPEndpoint,
+		SampleRatio:  rt.Telemetry.SampleRatio,
+		Prometheus:   rt.Telemetry.Prometheus,
+	})
+	if err != nil {
+		observer = nil // telemetry must never take the runtime down
+	}
+	svc = ops.New(ops.Options{
+		Obs:     observer,
 		DataDir: dir,
 		Reg:     reg,
 		StoreFor: func(pipeline string) (store.Store, error) {
@@ -108,6 +120,10 @@ func newOpsService(reg *registry.Registry, rt runtimecfg.Config) *ops.Service {
 			return store.OpenSQLite(filepath.Join(sdir, sanitize(pipeline)+".db"))
 		},
 	})
+	if observer != nil {
+		return svc, observer.Handler(), observer.Shutdown
+	}
+	return svc, nil, func(context.Context) error { return nil }
 }
 
 func sanitize(name string) string {
@@ -174,7 +190,8 @@ func cmdRunDir(args []string, jsonOut bool) int {
 		fmt.Fprintf(os.Stderr, "run: %v\n", err)
 		return 2
 	}
-	svc := newOpsService(reg, rt)
+	svc, metricsHandler, obsShutdown := newOpsService(reg, rt)
+	defer func() { _ = obsShutdown(context.Background()) }()
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
 	if err := deployDir(ctx, svc, *configDir); err != nil {
@@ -194,7 +211,7 @@ func cmdRunDir(args []string, jsonOut bool) int {
 	if rt.Admin.Enable {
 		server := mcpserver.NewServer(svc, "eventboat", "v3")
 		mcpHandler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server }, nil)
-		handler := admin.Handler(svc, nil, mcpHandler)
+		handler := admin.Handler(svc, metricsHandler, mcpHandler)
 		go func() {
 			fmt.Printf("eventboat: admin + MCP on http://%s/admin/\n", rt.Admin.Listen)
 			_ = admin.Serve(ctx, rt.Admin.Listen, handler)
