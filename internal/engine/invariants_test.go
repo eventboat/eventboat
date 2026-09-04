@@ -298,9 +298,26 @@ func TestInvariant_RedeliveryKeepsMessageIdStable(t *testing.T) {
 	t.Cleanup(func() { _ = st1.Close() })
 	noCheckpoint := &testkit.StoreWrapper{Inner: st1}
 	noCheckpoint.SetCheckpointHook = func(seq int64) error { return errString("checkpoint write failed") }
-	eng1, _ := runEngine(t, pip, noCheckpoint, h.reg, fastOptions())
+	eng1, stop1 := runEngine(t, pip, noCheckpoint, h.reg, fastOptions())
 	h.source("in").Emit([]byte(`{"i":9}`), "")
-	waitSettled(t, eng1)
+	// Wait for the settle COUNT, not WaitSettled: until the emission is
+	// consumed (the engine may still be starting up when Emit returns),
+	// outstanding==0 reads as settled and the wait would race — then stop1
+	// would cancel mid-emission and the scenario falls apart (flaked under
+	// load; found while hardening M3 CI).
+	deadline := time.Now().Add(5 * time.Second)
+	for eng1.Metrics.SettledCount.Load() < 1 && time.Now().Before(deadline) {
+		time.Sleep(2 * time.Millisecond)
+	}
+	if eng1.Metrics.SettledCount.Load() < 1 {
+		t.Fatalf("eng1: the emitted message never settled (messagesIn=%d settled=%d dead=%d noMatch=%d decodeErr=%d)",
+			eng1.Metrics.MessagesIn.Load(), eng1.Metrics.SettledCount.Load(), eng1.Metrics.DeadLettered.Load(),
+			eng1.Metrics.NoMatch.Load(), eng1.Metrics.DecodeErrors.Load())
+	}
+	// Stop before reopening the database: eng1's forever-failing checkpoint
+	// loop must not race the second connection's reads (this is the crash the
+	// scenario models — flaked as an empty replay under load, pre-existing).
+	stop1()
 
 	st2, err := store.OpenSQLite(dbPath)
 	if err != nil {
@@ -314,10 +331,20 @@ func TestInvariant_RedeliveryKeepsMessageIdStable(t *testing.T) {
 	// instead of preserving the spooled ID, the replay would carry fresh-*.
 	fresh := 0
 	opts.NewID = func() string { fresh++; return fmt.Sprintf("fresh-%03d", fresh) }
-	eng2, _ := runEngine(t, pip, st2, h.reg, opts)
-	waitSettled(t, eng2)
+	_, stop2 := runEngine(t, pip, st2, h.reg, opts)
+	defer stop2()
+	// Wait for the replayed delivery itself, not WaitSettled: until the
+	// replay registers, outstanding==0 reads as "settled" and the wait races
+	// engine startup (flaked under load; the invariant under test is the
+	// message_id, so wait for exactly the expected delivery).
+	replayDeadline := time.Now().Add(5 * time.Second)
+	recovered2, writes2, _ := recovered.snapshot()
+	for writes2 < 1 && time.Now().Before(replayDeadline) {
+		time.Sleep(2 * time.Millisecond)
+		recovered2, writes2, _ = recovered.snapshot()
+	}
 
-	replayed, _, _ := recovered.snapshot()
+	replayed := recovered2
 	if len(replayed) != 1 {
 		t.Fatalf("replay delivered %d, want the 1 unsettled-checkpoint message", len(replayed))
 	}

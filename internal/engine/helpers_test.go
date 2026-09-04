@@ -165,7 +165,12 @@ func runEngine(t *testing.T, pip *ir.Pipeline, st store.Store, reg *registry.Reg
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	go func() { done <- eng.Run(ctx) }()
+	go func() {
+		if err := eng.Run(ctx); err != nil {
+			t.Errorf("engine %q Run: %v", pip.Config.Name, err)
+		}
+		done <- nil
+	}()
 	var once sync.Once
 	stop := func() {
 		once.Do(func() {
@@ -173,6 +178,8 @@ func runEngine(t *testing.T, pip *ir.Pipeline, st store.Store, reg *registry.Reg
 			select {
 			case <-done:
 			case <-time.After(3 * time.Second):
+				// Deliberately tolerated: tests with wedged (non-cancellable)
+				// sinks model crash-style shutdowns and drain slowly.
 			}
 		})
 	}

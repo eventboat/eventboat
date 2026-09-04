@@ -75,7 +75,10 @@ func (s *ManualSource) Run(ctx context.Context, emit func(registry.Message)) {
 
 // Emit pushes a raw message and blocks until the engine has accepted it
 // (or the engine context is done). Cursor (when non-empty) participates in
-// the settle watermark via Settled.
+// the settle watermark via Settled. Across engine restarts sharing this
+// source, Emit first waits for the (re)started engine's live run context —
+// otherwise the emission races Run's assignment and can be dropped against
+// the previous engine's canceled context.
 func (s *ManualSource) Emit(raw []byte, cursor string) {
 	<-s.started
 	s.mu.Lock()
@@ -87,7 +90,7 @@ func (s *ManualSource) Emit(raw []byte, cursor string) {
 		}
 		s.cursors[seq] = cursor
 	}
-	runCtx := s.runCtx // read under the lock: Run may restart concurrently
+	runCtx := s.liveRunCtxLocked()
 	s.mu.Unlock()
 	if runCtx == nil {
 		return
@@ -101,6 +104,23 @@ func (s *ManualSource) Emit(raw []byte, cursor string) {
 	select {
 	case <-done:
 	case <-runCtx.Done():
+	}
+}
+
+// liveRunCtxLocked returns a non-canceled run context, waiting up to 5s for
+// the engine's Run to (re)assign it. Caller holds s.mu.
+func (s *ManualSource) liveRunCtxLocked() context.Context {
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if s.runCtx != nil && s.runCtx.Err() == nil {
+			return s.runCtx
+		}
+		if time.Now().After(deadline) {
+			return nil
+		}
+		s.mu.Unlock()
+		time.Sleep(time.Millisecond)
+		s.mu.Lock()
 	}
 }
 
