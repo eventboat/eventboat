@@ -6,6 +6,26 @@ All notable changes to Eventboat. The format follows
 
 ## Unreleased
 
+### Changed
+
+- **Builtin plugin configs are now defined by typed structs.** Each plugin
+  declares one config struct (`json` tags name keys, `schema` tags declare
+  constraints and defaults) and registers through
+  `registry.RegisterSourceT/RegisterSinkT/RegisterCodecT`: the JSON Schema
+  is generated from the struct, the factory receives a decoded,
+  defaults-applied value instead of `map[string]any`, and the same
+  `default` tag drives both the schema annotation and runtime default
+  injection (nested structs and `[]struct` included). This removes the
+  drift surface where every plugin hand-maintained a schema string plus
+  manual type assertions with a second copy of its defaults. The
+  validation pipeline, `plugin_schema` diagnostics and external gRPC
+  manifest handling are unchanged; `plugin catalog`/`plugin schema`
+  output is semantically identical (re-formatted). Generated schemas are
+  pinned by goldens in `internal/registry/builtin/testdata/schemas/`
+  (regenerate with `-update-schemas`). The string-based `Register*` API
+  remains available as an escape hatch. Transforms (script/split/wasm)
+  keep their line-precise hand parsing.
+
 ### Added
 
 - **Container image, published to GHCR as

@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["schema"],
+  "properties": {
+    "schema": {
+      "type": "string",
+      "minLength": 1,
+      "description": "inline Avro schema (JSON), e.g. a record definition"
+    }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["brokers", "topics"],
+  "properties": {
+    "brokers": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1,
+      "description": "Kafka broker addresses"
+    },
+    "topics": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1
+    },
+    "group_id": {
+      "type": "string",
+      "default": "eventboat",
+      "description": "Consumer group id"
+    }
+  },
+  "additionalProperties": false
+}

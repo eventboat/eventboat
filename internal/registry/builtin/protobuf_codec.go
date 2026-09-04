@@ -29,24 +29,14 @@ import (
 // encode path Go → protojson → dynamic message — honest double conversion,
 // documented as not the hot path (§redesign-v3-review-m4.md §一).
 
-const protobufCodecSchema = `{
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "type": "object",
-  "required": ["descriptor_set", "message"],
-  "properties": {
-    "descriptor_set": { "type": "string", "minLength": 1, "description": "path to a compiled FileDescriptorSet (.pb), relative to the pipeline file" },
-    "message": { "type": "string", "minLength": 1, "description": "fully-qualified message name, e.g. com.example.Order" }
-  },
-  "additionalProperties": false
-}`
+type protobufCodecConfig struct {
+	DescriptorSet string `json:"descriptor_set" schema:"minLen=1,desc=path to a compiled FileDescriptorSet (.pb), relative to the pipeline file"`
+	Message       string `json:"message" schema:"minLen=1,desc=fully-qualified message name, e.g. com.example.Order"`
+}
 
 func registerProtobufCodec(reg *registry.Registry) error {
-	return reg.RegisterCodec("protobuf", 1, protobufCodecSchema, func(cfg map[string]any, dir string) (registry.Codec, error) {
-		setPath, _ := cfg["descriptor_set"].(string)
-		msgName, _ := cfg["message"].(string)
-		if setPath == "" || msgName == "" {
-			return nil, fmt.Errorf("protobuf codec: descriptor_set and message are required")
-		}
+	return registry.RegisterCodecT(reg, "protobuf", 1, func(c protobufCodecConfig, dir string) (registry.Codec, error) {
+		setPath := c.DescriptorSet
 		if !filepath.IsAbs(setPath) && dir != "" {
 			setPath = filepath.Join(dir, setPath)
 		}
@@ -73,13 +63,13 @@ func registerProtobufCodec(reg *registry.Registry) error {
 				return nil, fmt.Errorf("protobuf codec: register %s: %w", fd.GetName(), err)
 			}
 		}
-		desc, err := files.FindDescriptorByName(protoreflect.FullName(msgName))
+		desc, err := files.FindDescriptorByName(protoreflect.FullName(c.Message))
 		if err != nil {
-			return nil, fmt.Errorf("protobuf codec: message %q not found in the descriptor set: %w", msgName, err)
+			return nil, fmt.Errorf("protobuf codec: message %q not found in the descriptor set: %w", c.Message, err)
 		}
 		md, ok := desc.(protoreflect.MessageDescriptor)
 		if !ok {
-			return nil, fmt.Errorf("protobuf codec: %q is not a message", msgName)
+			return nil, fmt.Errorf("protobuf codec: %q is not a message", c.Message)
 		}
 		return &protobufCodec{desc: md}, nil
 	})

@@ -11,20 +11,13 @@ import (
 	"github.com/eventboat/eventboat/internal/registry"
 )
 
-const fileSinkSchema = `{
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "type": "object",
-  "required": ["path"],
-  "properties": {
-    "path": { "type": "string", "description": "output file (JSON lines)" }
-  },
-  "additionalProperties": false
-}`
+type fileSinkConfig struct {
+	Path string `json:"path" schema:"desc=output file (JSON lines)"`
+}
 
 func registerFileSink(reg *registry.Registry) error {
-	return reg.RegisterSink("file", 1, fileSinkSchema, func(cfg map[string]any) (registry.Sink, error) {
-		path, _ := cfg["path"].(string)
-		return &fileSink{path: path}, nil
+	return registry.RegisterSinkT(reg, "file", 1, func(c fileSinkConfig) (registry.Sink, error) {
+		return &fileSink{path: c.Path}, nil
 	})
 }
 
@@ -77,15 +70,10 @@ func (s *fileSink) Close() error {
 	return nil
 }
 
-const dropSinkSchema = `{
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "type": "object",
-  "properties": {},
-  "additionalProperties": false
-}`
+type dropSinkConfig struct{}
 
 func registerDropSink(reg *registry.Registry) error {
-	return reg.RegisterSink("drop", 1, dropSinkSchema, func(cfg map[string]any) (registry.Sink, error) {
+	return registry.RegisterSinkT(reg, "drop", 1, func(c dropSinkConfig) (registry.Sink, error) {
 		return &dropSink{}, nil
 	})
 }

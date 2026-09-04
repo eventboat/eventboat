@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["brokers", "topic"],
+  "properties": {
+    "brokers": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1,
+      "description": "Kafka broker addresses"
+    },
+    "topic": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false
+}

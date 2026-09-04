@@ -8,19 +8,13 @@ import (
 	"github.com/eventboat/eventboat/internal/registry"
 )
 
-const jsonCodecSchema = `{
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "type": "object",
-  "properties": {
-    "pretty": { "type": "boolean", "description": "encode with indentation (sink side)" }
-  },
-  "additionalProperties": false
-}`
+type jsonCodecConfig struct {
+	Pretty bool `json:"pretty" schema:"optional,desc=encode with indentation (sink side)"`
+}
 
 func registerJSONCodec(reg *registry.Registry) error {
-	return reg.RegisterCodec("json", 1, jsonCodecSchema, func(cfg map[string]any, _ string) (registry.Codec, error) {
-		pretty, _ := cfg["pretty"].(bool)
-		return &jsonCodec{pretty: pretty}, nil
+	return registry.RegisterCodecT(reg, "json", 1, func(c jsonCodecConfig, _ string) (registry.Codec, error) {
+		return &jsonCodec{pretty: c.Pretty}, nil
 	})
 }
 
@@ -58,15 +52,10 @@ func (c *jsonCodec) Encode(v any) ([]byte, error) {
 	return b, nil
 }
 
-const rawCodecSchema = `{
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "type": "object",
-  "properties": {},
-  "additionalProperties": false
-}`
+type rawCodecConfig struct{}
 
 func registerRawCodec(reg *registry.Registry) error {
-	return reg.RegisterCodec("raw", 1, rawCodecSchema, func(cfg map[string]any, _ string) (registry.Codec, error) {
+	return registry.RegisterCodecT(reg, "raw", 1, func(c rawCodecConfig, _ string) (registry.Codec, error) {
 		return &rawCodec{}, nil
 	})
 }

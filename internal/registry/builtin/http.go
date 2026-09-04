@@ -12,27 +12,15 @@ import (
 	"github.com/eventboat/eventboat/internal/registry"
 )
 
-const httpServerSourceSchema = `{
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "type": "object",
-  "required": ["listen"],
-  "properties": {
-    "listen":        { "type": "string", "description": "host:port to listen on" },
-    "path":          { "type": "string", "default": "/" },
-    "max_body_bytes": { "type": "integer", "minimum": 1, "default": 1048576 }
-  },
-  "additionalProperties": false
-}`
+type httpServerSourceConfig struct {
+	Listen      string `json:"listen" schema:"desc=host:port to listen on"`
+	Path        string `json:"path" schema:"default=/"`
+	MaxBodyByte int64  `json:"max_body_bytes" schema:"min=1,default=1048576"`
+}
 
 func registerHTTPServerSource(reg *registry.Registry) error {
-	return reg.RegisterSource("http_server", 1, httpServerSourceSchema, nil, func(cfg map[string]any) (registry.Source, error) {
-		listen, _ := cfg["listen"].(string)
-		path, _ := cfg["path"].(string)
-		if path == "" {
-			path = "/"
-		}
-		maxBody := intMs(cfg["max_body_bytes"], 1<<20)
-		return &httpServerSource{listen: listen, path: path, maxBody: int64(maxBody)}, nil
+	return registry.RegisterSourceT(reg, "http_server", 1, nil, func(c httpServerSourceConfig) (registry.Source, error) {
+		return &httpServerSource{listen: c.Listen, path: c.Path, maxBody: c.MaxBodyByte}, nil
 	})
 }
 
@@ -93,34 +81,26 @@ func (s *httpServerSource) Settled(ctx context.Context, throughSrcSeq int64) ([]
 
 func (s *httpServerSource) Close() error { return nil }
 
-const httpSinkSchema = `{
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "type": "object",
-  "required": ["url"],
-  "properties": {
-    "url":        { "type": "string" },
-    "timeout_ms": { "type": "integer", "minimum": 1, "default": 10000 },
-    "headers":    { "type": "object", "additionalProperties": { "type": "string" } }
-  },
-  "additionalProperties": false
-}`
+type httpSinkConfig struct {
+	URL       string            `json:"url"`
+	TimeoutMS int               `json:"timeout_ms" schema:"min=1,default=10000"`
+	Headers   map[string]string `json:"headers" schema:"optional"`
+}
 
 func registerHTTPSink(reg *registry.Registry) error {
-	return reg.RegisterSink("http", 1, httpSinkSchema, func(cfg map[string]any) (registry.Sink, error) {
-		url, _ := cfg["url"].(string)
-		if !strings.Contains(url, "://") {
+	return registry.RegisterSinkT(reg, "http", 1, func(c httpSinkConfig) (registry.Sink, error) {
+		if !strings.Contains(c.URL, "://") {
 			return nil, fmt.Errorf("http sink: url must be absolute")
 		}
-		timeout := time.Duration(intMs(cfg["timeout_ms"], 10000)) * time.Millisecond
-		headers := map[string]string{}
-		if raw, ok := cfg["headers"].(map[string]any); ok {
-			for k, v := range raw {
-				if s, ok := v.(string); ok {
-					headers[k] = s
-				}
-			}
+		headers := c.Headers
+		if headers == nil {
+			headers = map[string]string{}
 		}
-		return &httpSink{url: url, client: &http.Client{Timeout: timeout}, headers: headers}, nil
+		return &httpSink{
+			url:     c.URL,
+			client:  &http.Client{Timeout: time.Duration(c.TimeoutMS) * time.Millisecond},
+			headers: headers,
+		}, nil
 	})
 }
 

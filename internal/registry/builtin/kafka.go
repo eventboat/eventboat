@@ -3,7 +3,6 @@ package builtin
 import (
 	"context"
 	"fmt"
-	"strings"
 	"sync"
 
 	"github.com/segmentio/kafka-go"
@@ -11,30 +10,15 @@ import (
 	"github.com/eventboat/eventboat/internal/registry"
 )
 
-const kafkaSourceSchema = `{
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "type": "object",
-  "required": ["brokers", "topics"],
-  "properties": {
-    "brokers":  { "type": "array", "items": { "type": "string" }, "minItems": 1 },
-    "topics":   { "type": "array", "items": { "type": "string" }, "minItems": 1 },
-    "group_id": { "type": "string", "default": "eventboat" }
-  },
-  "additionalProperties": false
-}`
+type kafkaSourceConfig struct {
+	Brokers []string `json:"brokers" schema:"minItems=1,desc=Kafka broker addresses"`
+	Topics  []string `json:"topics" schema:"minItems=1"`
+	GroupID string   `json:"group_id" schema:"default=eventboat,desc=Consumer group id"`
+}
 
 func registerKafkaSource(reg *registry.Registry) error {
-	return reg.RegisterSource("kafka", 1, kafkaSourceSchema, nil, func(cfg map[string]any) (registry.Source, error) {
-		brokers := stringSlice(cfg["brokers"])
-		topics := stringSlice(cfg["topics"])
-		if len(brokers) == 0 || len(topics) == 0 {
-			return nil, fmt.Errorf("kafka source: brokers and topics are required")
-		}
-		group, _ := cfg["group_id"].(string)
-		if group == "" {
-			group = "eventboat"
-		}
-		return &kafkaSource{brokers: brokers, topics: topics, group: group}, nil
+	return registry.RegisterSourceT(reg, "kafka", 1, nil, func(c kafkaSourceConfig) (registry.Source, error) {
+		return &kafkaSource{brokers: c.Brokers, topics: c.Topics, group: c.GroupID}, nil
 	})
 }
 
@@ -115,27 +99,16 @@ func (s *kafkaSource) Close() error {
 	return nil
 }
 
-const kafkaSinkSchema = `{
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "type": "object",
-  "required": ["brokers", "topic"],
-  "properties": {
-    "brokers": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
-    "topic":   { "type": "string" }
-  },
-  "additionalProperties": false
-}`
+type kafkaSinkConfig struct {
+	Brokers []string `json:"brokers" schema:"minItems=1,desc=Kafka broker addresses"`
+	Topic   string   `json:"topic"`
+}
 
 func registerKafkaSink(reg *registry.Registry) error {
-	return reg.RegisterSink("kafka", 1, kafkaSinkSchema, func(cfg map[string]any) (registry.Sink, error) {
-		brokers := stringSlice(cfg["brokers"])
-		topic, _ := cfg["topic"].(string)
-		if len(brokers) == 0 || topic == "" {
-			return nil, fmt.Errorf("kafka sink: brokers and topic are required")
-		}
+	return registry.RegisterSinkT(reg, "kafka", 1, func(c kafkaSinkConfig) (registry.Sink, error) {
 		return &kafkaSink{writer: &kafka.Writer{
-			Addr:         kafka.TCP(brokers...),
-			Topic:        topic,
+			Addr:         kafka.TCP(c.Brokers...),
+			Topic:        c.Topic,
 			Balancer:     &kafka.Hash{}, // stable partitioning by Key when present
 			RequiredAcks: kafka.RequireOne,
 			BatchSize:    1, // engine owns batching
@@ -161,17 +134,3 @@ func (s *kafkaSink) Write(ctx context.Context, msgs []registry.Message) error {
 }
 
 func (s *kafkaSink) Close() error { return s.writer.Close() }
-
-func stringSlice(v any) []string {
-	list, ok := v.([]any)
-	if !ok {
-		return nil
-	}
-	out := make([]string, 0, len(list))
-	for _, item := range list {
-		if s, ok := item.(string); ok {
-			out = append(out, strings.TrimSpace(s))
-		}
-	}
-	return out
-}

@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["driver", "dsn", "query"],
+  "properties": {
+    "driver": {
+      "type": "string",
+      "enum": ["mysql", "postgres", "sqlite"],
+      "description": "database driver (all pure Go)"
+    },
+    "dsn": {
+      "type": "string",
+      "minLength": 1,
+      "description": "data source name"
+    },
+    "query": {
+      "type": "string",
+      "minLength": 1,
+      "description": "base query; :name placeholders bind args; key columns must be selected"
+    },
+    "args": {
+      "type": "object",
+      "description": "named argument bindings; values may reference ${parameters.x}"
+    },
+    "cursor": {
+      "type": "object",
+      "properties": {
+        "column": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false,
+      "description": "watermark column for from: cursor resume"
+    },
+    "pagination": {
+      "type": "object",
+      "properties": {
+        "key": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1
+        },
+        "page_size": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 1000
+        }
+      },
+      "additionalProperties": false,
+      "description": "keyset pagination key columns and page size"
+    },
+    "emit": {
+      "type": "string",
+      "enum": ["row", "page"],
+      "default": "row",
+      "description": "one message per row, or one per page (array payload for transform.split)"
+    }
+  },
+  "additionalProperties": false
+}

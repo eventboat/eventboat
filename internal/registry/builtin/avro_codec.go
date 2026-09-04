@@ -16,23 +16,13 @@ import (
 // float/double → CEL double, string/boolean direct, bytes → base64 string at
 // the JSON boundary, unions → dyn (docs/codecs.md).
 
-const avroCodecSchema = `{
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "type": "object",
-  "required": ["schema"],
-  "properties": {
-    "schema": { "type": "string", "minLength": 1, "description": "inline Avro schema (JSON), e.g. a record definition" }
-  },
-  "additionalProperties": false
-}`
+type avroCodecConfig struct {
+	Schema string `json:"schema" schema:"minLen=1,desc=inline Avro schema (JSON), e.g. a record definition"`
+}
 
 func registerAvroCodec(reg *registry.Registry) error {
-	return reg.RegisterCodec("avro", 1, avroCodecSchema, func(cfg map[string]any, _ string) (registry.Codec, error) {
-		src, _ := cfg["schema"].(string)
-		if src == "" {
-			return nil, fmt.Errorf("avro codec: schema is required")
-		}
-		parsed, err := avro.Parse(src)
+	return registry.RegisterCodecT(reg, "avro", 1, func(c avroCodecConfig, _ string) (registry.Codec, error) {
+		parsed, err := avro.Parse(c.Schema)
 		if err != nil {
 			return nil, fmt.Errorf("avro codec: invalid schema: %w", err)
 		}

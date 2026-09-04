@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["descriptor_set", "message"],
+  "properties": {
+    "descriptor_set": {
+      "type": "string",
+      "minLength": 1,
+      "description": "path to a compiled FileDescriptorSet (.pb), relative to the pipeline file"
+    },
+    "message": {
+      "type": "string",
+      "minLength": 1,
+      "description": "fully-qualified message name, e.g. com.example.Order"
+    }
+  },
+  "additionalProperties": false
+}

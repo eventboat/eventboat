@@ -15,27 +15,19 @@ import (
 	"github.com/eventboat/eventboat/internal/registry"
 )
 
-const fileSourceSchema = `{
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "type": "object",
-  "required": ["path"],
-  "properties": {
-    "path":       { "type": "string", "minLength": 1, "description": "file to tail, one message per line" },
-    "poll_every_ms": { "type": "integer", "minimum": 10, "default": 250 },
-    "start_at":   { "type": "string", "enum": ["beginning", "end"], "default": "beginning" }
-  },
-  "additionalProperties": false
-}`
+type fileSourceConfig struct {
+	Path      string `json:"path" schema:"minLen=1,desc=file to tail, one message per line"`
+	PollEvery int    `json:"poll_every_ms" schema:"min=10,default=250"`
+	StartAt   string `json:"start_at" schema:"enum=beginning|end,default=beginning"`
+}
 
 func registerFileSource(reg *registry.Registry) error {
-	return reg.RegisterSource("file", 1, fileSourceSchema, nil, func(cfg map[string]any) (registry.Source, error) {
-		path, _ := cfg["path"].(string)
-		poll := intMs(cfg["poll_every_ms"], 250)
-		startAt, _ := cfg["start_at"].(string)
-		if startAt == "" {
-			startAt = "beginning"
-		}
-		return &fileSource{path: path, pollEvery: time.Duration(poll) * time.Millisecond, startAt: startAt}, nil
+	return registry.RegisterSourceT(reg, "file", 1, nil, func(c fileSourceConfig) (registry.Source, error) {
+		return &fileSource{
+			path:      c.Path,
+			pollEvery: time.Duration(c.PollEvery) * time.Millisecond,
+			startAt:   c.StartAt,
+		}, nil
 	})
 }
 
@@ -168,16 +160,4 @@ func (s *fileSource) Close() error {
 		return s.f.Close()
 	}
 	return nil
-}
-
-func intMs(v any, def int) int {
-	switch t := v.(type) {
-	case int:
-		return t
-	case int64:
-		return int(t)
-	case float64:
-		return int(t)
-	}
-	return def
 }

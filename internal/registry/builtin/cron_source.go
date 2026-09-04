@@ -11,28 +11,17 @@ import (
 	"github.com/eventboat/eventboat/internal/registry"
 )
 
-const cronSourceSchema = `{
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "type": "object",
-  "required": ["expression"],
-  "properties": {
-    "expression": { "type": "string", "description": "cron expression (5-field, standard)" },
-    "payload":    { "type": "string", "description": "raw payload emitted at each tick", "default": "{}" }
-  },
-  "additionalProperties": false
-}`
+type cronSourceConfig struct {
+	Expression string `json:"expression" schema:"desc=cron expression (5-field, standard)"`
+	Payload    string `json:"payload" schema:"default={},desc=raw payload emitted at each tick"`
+}
 
 func registerCronSource(reg *registry.Registry) error {
-	return reg.RegisterSource("cron", 1, cronSourceSchema, nil, func(cfg map[string]any) (registry.Source, error) {
-		expr, _ := cfg["expression"].(string)
-		if _, err := cron.ParseStandard(expr); err != nil {
+	return registry.RegisterSourceT(reg, "cron", 1, nil, func(c cronSourceConfig) (registry.Source, error) {
+		if _, err := cron.ParseStandard(c.Expression); err != nil {
 			return nil, fmt.Errorf("cron source: invalid expression: %w", err)
 		}
-		payload, _ := cfg["payload"].(string)
-		if payload == "" {
-			payload = "{}"
-		}
-		return &cronSource{expr: expr, payload: []byte(payload)}, nil
+		return &cronSource{expr: c.Expression, payload: []byte(c.Payload)}, nil
 	})
 }
 

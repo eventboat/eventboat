@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["expression"],
+  "properties": {
+    "expression": {
+      "type": "string",
+      "description": "cron expression (5-field, standard)"
+    },
+    "payload": {
+      "type": "string",
+      "default": "{}",
+      "description": "raw payload emitted at each tick"
+    }
+  },
+  "additionalProperties": false
+}

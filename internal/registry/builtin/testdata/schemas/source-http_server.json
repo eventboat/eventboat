@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["listen"],
+  "properties": {
+    "listen": {
+      "type": "string",
+      "description": "host:port to listen on"
+    },
+    "path": {
+      "type": "string",
+      "default": "/"
+    },
+    "max_body_bytes": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 1.048576e+06
+    }
+  },
+  "additionalProperties": false
+}

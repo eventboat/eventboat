@@ -18,89 +18,72 @@ import (
 // header). CEL type mapping: string/int/float/bool columns decode to the
 // corresponding CEL types (docs/codecs.md).
 
-const csvCodecSchema = `{
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "type": "object",
-  "properties": {
-    "columns": {
-      "type": "array",
-      "minItems": 1,
-      "items": {
-        "type": "object",
-        "required": ["name"],
-        "properties": {
-          "name": { "type": "string", "minLength": 1 },
-          "type": { "type": "string", "enum": ["string", "int", "float", "bool"], "default": "string" }
-        },
-        "additionalProperties": false
-      }
-    },
-    "header": { "type": "boolean", "default": false, "description": "the first record this instance decodes defines the column names (all string typed)" }
-  },
-  "additionalProperties": false
-}`
+type csvColumnSpec struct {
+	Name string `json:"name" schema:"minLen=1"`
+	Type string `json:"type" schema:"enum=string|int|float|bool,default=string"`
+}
+
+type csvCodecConfig struct {
+	Columns []csvColumnSpec `json:"columns" schema:"optional,minItems=1"`
+	Header  bool            `json:"header" schema:"default=false,desc=the first record this instance decodes defines the column names (all string typed)"`
+}
+
+func csvCoercer(name, typ string) (func(string) (any, error), error) {
+	switch typ {
+	case "string":
+		return func(s string) (any, error) { return s, nil }, nil
+	case "int":
+		return func(s string) (any, error) {
+			n, err := strconv.ParseInt(s, 10, 64)
+			if err != nil {
+				return nil, fmt.Errorf("csv codec: column %q: %q is not an int", name, s)
+			}
+			return n, nil
+		}, nil
+	case "float":
+		return func(s string) (any, error) {
+			f, err := strconv.ParseFloat(s, 64)
+			if err != nil {
+				return nil, fmt.Errorf("csv codec: column %q: %q is not a float", name, s)
+			}
+			return f, nil
+		}, nil
+	case "bool":
+		return func(s string) (any, error) {
+			b, err := strconv.ParseBool(s)
+			if err != nil {
+				return nil, fmt.Errorf("csv codec: column %q: %q is not a bool", name, s)
+			}
+			return b, nil
+		}, nil
+	}
+	return nil, fmt.Errorf("csv codec: column %q: unsupported type %q", name, typ)
+}
+
+func registerCSVCodec(reg *registry.Registry) error {
+	return registry.RegisterCodecT(reg, "csv", 1, func(c csvCodecConfig, _ string) (registry.Codec, error) {
+		out := &csvCodec{header: c.Header}
+		for _, col := range c.Columns {
+			coerce, err := csvCoercer(col.Name, col.Type)
+			if err != nil {
+				return nil, err
+			}
+			out.columns = append(out.columns, csvColumn{name: col.Name, typ: col.Type, coerce: coerce})
+		}
+		if out.header && len(out.columns) > 0 {
+			return nil, fmt.Errorf("csv codec: set either columns or header, not both")
+		}
+		if !out.header && len(out.columns) == 0 {
+			return nil, fmt.Errorf("csv codec: set columns or header: true")
+		}
+		return out, nil
+	})
+}
 
 type csvColumn struct {
 	name   string
 	typ    string
 	coerce func(string) (any, error)
-}
-
-func registerCSVCodec(reg *registry.Registry) error {
-	return reg.RegisterCodec("csv", 1, csvCodecSchema, func(cfg map[string]any, _ string) (registry.Codec, error) {
-		c := &csvCodec{}
-		if cols, ok := cfg["columns"].([]any); ok && len(cols) > 0 {
-			for i, raw := range cols {
-				m, ok := raw.(map[string]any)
-				if !ok {
-					return nil, fmt.Errorf("csv codec: column %d must be an object", i)
-				}
-				name, _ := m["name"].(string)
-				typ, _ := m["type"].(string)
-				if typ == "" {
-					typ = "string"
-				}
-				col := csvColumn{name: name, typ: typ}
-				switch typ {
-				case "string":
-					col.coerce = func(s string) (any, error) { return s, nil }
-				case "int":
-					col.coerce = func(s string) (any, error) {
-						n, err := strconv.ParseInt(s, 10, 64)
-						if err != nil {
-							return nil, fmt.Errorf("csv codec: column %q: %q is not an int", name, s)
-						}
-						return n, nil
-					}
-				case "float":
-					col.coerce = func(s string) (any, error) {
-						f, err := strconv.ParseFloat(s, 64)
-						if err != nil {
-							return nil, fmt.Errorf("csv codec: column %q: %q is not a float", name, s)
-						}
-						return f, nil
-					}
-				case "bool":
-					col.coerce = func(s string) (any, error) {
-						b, err := strconv.ParseBool(s)
-						if err != nil {
-							return nil, fmt.Errorf("csv codec: column %q: %q is not a bool", name, s)
-						}
-						return b, nil
-					}
-				}
-				c.columns = append(c.columns, col)
-			}
-		}
-		c.header = cfg["header"] == true
-		if c.header && len(c.columns) > 0 {
-			return nil, fmt.Errorf("csv codec: set either columns or header, not both")
-		}
-		if !c.header && len(c.columns) == 0 {
-			return nil, fmt.Errorf("csv codec: set columns or header: true")
-		}
-		return c, nil
-	})
 }
 
 type csvCodec struct {

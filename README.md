@@ -692,6 +692,40 @@ keep protocol-pure stdout (the LSP protocol test and MCP agent-loop test
 run green over the migrated binary). Help output is pinned by golden
 snapshots (`cmd/eventboat/testdata/help/`).
 
+### Decision ledger — typed plugin config registration (2026-09-05)
+
+Builtin plugins no longer hand-maintain two representations of their config
+contract. Each plugin defines one config struct (`json` tags name the keys,
+`schema` tags declare constraints: `optional`, `default=`, `enum=a|b|c`,
+`min=`, `max=`, `minLen=`, `minItems=`, `desc=`); `registry.
+RegisterSourceT/RegisterSinkT/RegisterCodecT` generates the JSON Schema from
+the struct and wraps the factory with typed decode. The same `default` tag
+that annotates the schema is applied to zero-valued fields after decode
+(recursing into nested structs and `[]struct`, e.g. csv column types), so
+schema-documented defaults are the runtime behavior — the old drift where
+`group_id: "eventboat"` lived in the schema string *and* the factory is
+gone. Cross-field rules JSON Schema cannot express (cron parseability, sql
+cursor/pagination, csv columns/header exclusivity) stay in the now typed
+build functions; belt-and-braces re-checks of schema-guaranteed constraints
+were deleted with the manual casts.
+
+**Choice: a ~400-line own reflection generator over
+[google/jsonschema-go](https://github.com/google/jsonschema-go) (already in
+the dependency tree via the MCP SDK) or invopop/jsonschema.** google's
+inference supports description-only tags — no enum, default, minItems or
+minLength — so constraints would still need a homemade tag layer bolted on
+top, two conventions for one struct; invopop derives `required` from
+`omitempty` (marshaling semantics we don't use) and adds a new dependency.
+The own generator keeps go.mod unchanged, emits properties in declaration
+order, and feeds the existing santhosh-tekuri compile/validate pipeline
+unchanged — `SchemaError` output, `plugin_schema` diagnostics and the
+external gRPC manifest path are byte-compatible. Generated schemas are
+pinned by goldens (`internal/registry/builtin/testdata/schemas/`,
+`-update-schemas`), making every schema change a reviewable diff. The
+string-based `Register*` API stays as an escape hatch; transforms
+(script/split/wasm) keep their hand parsing in `config/sections.go` — its
+per-field line-precise diagnostics are worth more than uniformity.
+
 ## Repository layout
 
 ```
@@ -707,7 +741,7 @@ internal/rpcplugin/   gRPC plugin host: process spawn/handshake, source/sink ada
 internal/engine/      spool admission, DAG execution, settle, delivery, DLQ, pull sources
 internal/jobs/        job runtime: scheduler, catchup, overlap, run lifecycle, hooks
 internal/store/       SQLite + in-memory spool/checkpoint/dead-letter/job-history stores
-internal/registry/    plugin registration with mandatory JSON Schemas + ABI versions (codecs included, M4)
+internal/registry/    plugin registration: JSON Schemas generated from typed config structs (RegisterSourceT/…) + ABI versions; string-schema API retained as escape hatch
 internal/registry/builtin/  kafka/http_server/cron/file/sql sources, kafka/http/file/drop sinks, json/raw/csv/avro/protobuf codecs
 internal/lsp/         language server: minimal JSON-RPC 2.0, verify diagnostics, completion, hover
 internal/explain/     deterministic walkthroughs + topology rendering

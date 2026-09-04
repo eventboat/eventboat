@@ -16,76 +16,37 @@ import (
 	"github.com/eventboat/eventboat/internal/registry"
 )
 
-const sqlSourceSchema = `{
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "type": "object",
-  "required": ["driver", "dsn", "query"],
-  "properties": {
-    "driver":    { "type": "string", "enum": ["mysql", "postgres", "sqlite"], "description": "database driver (all pure Go)" },
-    "dsn":       { "type": "string", "minLength": 1, "description": "data source name" },
-    "query":     { "type": "string", "minLength": 1, "description": "base query; :name placeholders bind args; key columns must be selected" },
-    "args":      { "type": "object", "description": "named argument bindings; values may reference ${parameters.x}" },
-    "cursor":    { "type": "object", "properties": { "column": { "type": "string", "minLength": 1 } }, "additionalProperties": false,
-                   "description": "watermark column for from: cursor resume" },
-    "pagination": { "type": "object",
-                    "properties": { "key": { "type": "array", "items": { "type": "string", "minLength": 1 }, "minItems": 1 },
-                                    "page_size": { "type": "integer", "minimum": 1, "default": 1000 } },
-                    "additionalProperties": false,
-                    "description": "keyset pagination key columns and page size" },
-    "emit":      { "type": "string", "enum": ["row", "page"], "default": "row", "description": "one message per row, or one per page (array payload for transform.split)" }
-  },
-  "additionalProperties": false
-}`
+type sqlCursorConfig struct {
+	Column string `json:"column" schema:"optional,minLen=1"`
+}
+
+type sqlPaginationConfig struct {
+	Key      []string `json:"key" schema:"optional,minItems=1"`
+	PageSize int      `json:"page_size" schema:"min=1,default=1000"`
+}
+
+type sqlSourceConfig struct {
+	Driver     string              `json:"driver" schema:"enum=mysql|postgres|sqlite,desc=database driver (all pure Go)"`
+	DSN        string              `json:"dsn" schema:"minLen=1,desc=data source name"`
+	Query      string              `json:"query" schema:"minLen=1,desc=base query; :name placeholders bind args; key columns must be selected"`
+	Args       map[string]any      `json:"args" schema:"optional,desc=named argument bindings; values may reference ${parameters.x}"`
+	Cursor     sqlCursorConfig     `json:"cursor" schema:"optional,desc=watermark column for from: cursor resume"`
+	Pagination sqlPaginationConfig `json:"pagination" schema:"optional,desc=keyset pagination key columns and page size"`
+	Emit       string              `json:"emit" schema:"enum=row|page,default=row,desc=one message per row, or one per page (array payload for transform.split)"`
+}
 
 func registerSQLSource(reg *registry.Registry) error {
-	return reg.RegisterSource("sql", 1, sqlSourceSchema, []string{"pull"}, func(cfg map[string]any) (registry.Source, error) {
-		driver, _ := cfg["driver"].(string)
-		switch driver {
-		case "mysql", "postgres", "sqlite":
-		case "":
-			return nil, fmt.Errorf("sql source: driver is required (mysql | postgres | sqlite)")
-		default:
-			return nil, fmt.Errorf("sql source: unsupported driver %q (mysql | postgres | sqlite)", driver)
-		}
-		dsn, _ := cfg["dsn"].(string)
-		if dsn == "" {
-			return nil, fmt.Errorf("sql source: dsn is required")
-		}
-		query, _ := cfg["query"].(string)
-		if strings.TrimSpace(query) == "" {
+	return registry.RegisterSourceT(reg, "sql", 1, []string{"pull"}, func(c sqlSourceConfig) (registry.Source, error) {
+		if strings.TrimSpace(c.Query) == "" {
 			return nil, fmt.Errorf("sql source: query is required")
 		}
-		args := map[string]any{}
-		if a, ok := cfg["args"].(map[string]any); ok {
-			args = a
-		}
-		cursorCol := ""
-		if c, ok := cfg["cursor"].(map[string]any); ok {
-			cursorCol, _ = c["column"].(string)
-		}
-		var key []string
-		pageSize := 1000
-		emit := "row"
-		if pg, ok := cfg["pagination"].(map[string]any); ok {
-			if k, ok := pg["key"].([]any); ok {
-				for _, el := range k {
-					if s, ok := el.(string); ok && s != "" {
-						key = append(key, s)
-					}
-				}
-			}
-			if v, ok := pg["page_size"]; ok {
-				if f, ok := sqlFloat(v); ok && f >= 1 {
-					pageSize = int(f)
-				}
+		key := c.Pagination.Key
+		for _, k := range key {
+			if k == "" {
+				return nil, fmt.Errorf("sql source: pagination.key columns must be non-empty")
 			}
 		}
-		if e, ok := cfg["emit"].(string); ok && e != "" {
-			emit = e
-		}
-		if emit != "row" && emit != "page" {
-			return nil, fmt.Errorf("sql source: emit must be row or page, got %q", emit)
-		}
+		cursorCol := c.Cursor.Column
 		if cursorCol == "" && len(key) == 0 {
 			return nil, fmt.Errorf("sql source: cursor.column or pagination.key is required (the source needs a resume watermark)")
 		}
@@ -93,8 +54,8 @@ func registerSQLSource(reg *registry.Registry) error {
 			key = []string{cursorCol}
 		}
 		return &sqlSource{
-			driver: driver, dsn: dsn, query: query, args: args,
-			cursor: cursorCol, key: key, pageSize: pageSize, emit: emit,
+			driver: c.Driver, dsn: c.DSN, query: c.Query, args: c.Args,
+			cursor: cursorCol, key: key, pageSize: c.Pagination.PageSize, emit: c.Emit,
 			pending: map[int64]pendingRow{},
 		}, nil
 	})

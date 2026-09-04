@@ -111,21 +111,6 @@ func sortStringsInPlace(s []string) {
 	}
 }
 
-// sqlFloat converts config scalar values to float (page_size etc.).
-func sqlFloat(v any) (float64, bool) {
-	switch t := v.(type) {
-	case int:
-		return float64(t), true
-	case int64:
-		return float64(t), true
-	case uint64:
-		return float64(t), true
-	case float64:
-		return t, true
-	}
-	return 0, false
-}
-
 // quoteCols quotes key column names per dialect (backticks on mysql, double
 // quotes on postgres, bare on sqlite which accepts all styles).
 func quoteCols(dialect string, cols []string) []string {
