@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"syscall"
 
 	"github.com/eventboat/eventboat/internal/config"
 	"github.com/eventboat/eventboat/internal/engine"
@@ -92,7 +93,7 @@ func cmdTrigger(args []string, jsonOut bool) int {
 		return 2
 	}
 
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	if err := m.Start(ctx); err != nil {
 		fmt.Fprintf(os.Stderr, "trigger: %v\n", err)

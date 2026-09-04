@@ -21,6 +21,18 @@ All notable changes to Eventboat. The format follows
   the published image and pins the nonroot securityContext
   (`runAsNonRoot` + `fsGroup: 65532`).
 
+### Fixed
+
+- **SIGTERM now triggers graceful shutdown** in every long-running verb
+  (`run` single-pipeline and `--config-dir`, `mcp`, `replay`,
+  `trigger`). Previously only SIGINT was registered, so `docker stop`
+  and Kubernetes pod termination killed the process mid-flight without
+  the final settle report (at-least-once still held via checkpoint
+  recovery, but the clean drain was skipped). `lsp` already handled
+  both signals; the others now match it. Verified against the published
+  image shape: `docker stop` now logs the settle status line and exits
+  0.
+
 ## v0.2.0-rc1 (2026-09-05)
 
 First release candidate: all four design milestones (M1–M4) plus the beta

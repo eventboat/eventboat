@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	mcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -61,7 +62,7 @@ func cmdMCP(args []string, jsonOut bool) int {
 
 	svc, metricsHandler, obsShutdown := newOpsService(reg, rt)
 	defer func() { _ = obsShutdown(context.Background()) }()
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
 	if *configDir != "" {
@@ -192,7 +193,7 @@ func cmdRunDir(args []string, jsonOut bool) int {
 	}
 	svc, metricsHandler, obsShutdown := newOpsService(reg, rt)
 	defer func() { _ = obsShutdown(context.Background()) }()
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	if err := deployDir(ctx, svc, *configDir); err != nil {
 		fmt.Fprintf(os.Stderr, "run: %v\n", err)

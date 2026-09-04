@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"syscall"
 
 	"github.com/eventboat/eventboat/internal/config"
 	"github.com/eventboat/eventboat/internal/engine"
@@ -111,7 +112,7 @@ func cmdRun(args []string, jsonOut bool) int {
 		return 2
 	}
 
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
 	if !jsonOut {
@@ -202,7 +203,7 @@ func runJobPipeline(configPath string, pip *ir.Pipeline, reg *registry.Registry,
 		return 2
 	}
 
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	if err := m.Start(ctx); err != nil {
 		fmt.Fprintf(os.Stderr, "run: %v\n", err)

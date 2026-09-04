@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/eventboat/eventboat/internal/config"
@@ -308,7 +309,7 @@ func cmdReplay(args []string, jsonOut bool) int {
 		fmt.Fprintf(os.Stderr, "replay: %v\n", err)
 		return 2
 	}
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	runDone := make(chan error, 1)
 	go func() { runDone <- eng.Run(ctx) }()
