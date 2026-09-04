@@ -38,3 +38,24 @@ jobs:
         run: go test -race ./...
         env:
           EVENTBOAT_WASM_GUEST: ${{ github.workspace }}/internal/wasmhost/testdata/aggregate.wasm
+
+  # Optional benchmark job (M3 §4.6 discipline: reproducible numbers, not a
+  # regression gate — absolute numbers are machine-dependent). Results appear
+  # in the job log; the README records a reference machine's numbers.
+  bench:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+          cache: true
+      - name: Build WASM guest
+        run: |
+          cd internal/wasmhost/testdata/guest
+          GOOS=wasip1 GOARCH=wasm go build -buildmode=c-shared -o ../aggregate.wasm .
+      - name: Benchmarks (CEL predicate, Starlark scripts, Starlark vs WASM)
+        run: go test -bench . -benchtime 1s -run XXX ./internal/lang/... ./internal/wasmhost/...
+        env:
+          EVENTBOAT_WASM_GUEST: ${{ github.workspace }}/internal/wasmhost/testdata/aggregate.wasm

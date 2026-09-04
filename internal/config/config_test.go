@@ -136,7 +136,7 @@ transforms:
     from: [in]
     wasm:
       module: guests/heavy.wasm
-      timeout_ms: 0
+      timeout_ms: -1
       max_memory_pages: 99999
       allow: [net]
   both:

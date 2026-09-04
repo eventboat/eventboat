@@ -28,28 +28,39 @@ import (
 	"github.com/eventboat/eventboat/internal/config"
 )
 
-// Defaults for the per-invoke wall-clock bound and memory cap (R1). Both are
-// configurable per node; wazero pages are 64 KiB.
+// Defaults mirror config.DefaultWasm*; the config layer owns the values.
 const (
-	DefaultTimeoutMs      = 1000
-	DefaultMaxMemoryPages = 512 // 32 MiB
+	DefaultTimeoutMs      = config.DefaultWasmTimeoutMs
+	DefaultMaxMemoryPages = config.DefaultWasmMaxMemoryPages
 )
 
 // Compile compiles a guest module once; the result is safe to share across
-// workers of the node it was compiled for. maxMemoryPages caps linear memory
-// (a runtime-level option in wazero, hence per-Compiled; 0 = default).
-func Compile(ctx context.Context, path string, maxMemoryPages int) (*Compiled, error) {
+// workers of the node it was compiled for. Memory cap and kill switch come
+// from the node config: a wall-clock budget > 0 (the default) enables
+// wazero's CloseOnContextDone so per-invoke deadlines can kill runaway
+// guests — measured at ~5x slower on loop-heavy guests on some platforms;
+// timeout_ms: 0 compiles the fast way with NO kill switch (a runaway guest
+// then wedges its worker until the pipeline restarts).
+func Compile(ctx context.Context, path string, cfg *config.WasmConfig) (*Compiled, error) {
 	wasmBytes, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("wasmhost: read module: %w", err)
 	}
-	pages := maxMemoryPages
+	pages := 0
+	timeout := DefaultTimeoutMs
+	if cfg != nil {
+		pages = cfg.MaxMemoryPages
+		timeout = cfg.TimeoutMs
+	}
 	if pages <= 0 {
 		pages = DefaultMaxMemoryPages
 	}
-	r := wazero.NewRuntimeWithConfig(ctx, wazero.NewRuntimeConfig().
-		WithCloseOnContextDone(true).
-		WithMemoryLimitPages(uint32(pages)))
+	rCfg := wazero.NewRuntimeConfig().
+		WithMemoryLimitPages(uint32(pages))
+	if timeout != 0 {
+		rCfg = rCfg.WithCloseOnContextDone(true)
+	}
+	r := wazero.NewRuntimeWithConfig(ctx, rCfg)
 	// Capability floor: WASI preview1 with wazero's defaults — deterministic
 	// fake clocks, no filesystem, no env/args, stdio discarded unless the
 	// node opts into the "log" capability (R4).
@@ -85,21 +96,21 @@ func (c *Compiled) Close(ctx context.Context) error {
 // worker goroutine; concurrent Invokes on the same Invoker are not allowed
 // (wazero modules are not goroutine-safe, R4).
 func (c *Compiled) NewInvoker(cfg *config.WasmConfig, logf func(string, ...any)) *Invoker {
-	timeout := time.Duration(cfg.TimeoutMs) * time.Millisecond
-	if timeout <= 0 {
-		timeout = time.Duration(DefaultTimeoutMs) * time.Millisecond
-	}
-	entry := cfg.Entrypoint
-	if entry == "" {
-		entry = "transform"
-	}
+	timeoutMs := DefaultTimeoutMs
+	entry := "transform"
 	allowLog := false
-	for _, a := range cfg.Allow {
-		if a == "log" {
-			allowLog = true
+	if cfg != nil {
+		timeoutMs = cfg.TimeoutMs // 0 = fast mode: no budget, matching Compile
+		if cfg.Entrypoint != "" {
+			entry = cfg.Entrypoint
+		}
+		for _, a := range cfg.Allow {
+			if a == "log" {
+				allowLog = true
+			}
 		}
 	}
-	return &Invoker{compiled: c, entrypoint: entry, timeout: timeout, allowLog: allowLog, logf: logf}
+	return &Invoker{compiled: c, entrypoint: entry, timeout: time.Duration(timeoutMs) * time.Millisecond, logf: logf, allowLog: allowLog}
 }
 
 // Invoker owns one lazily created module instance and re-creates it after a
@@ -118,10 +129,15 @@ type Invoker struct {
 
 // Invoke runs one transform: payload in, payload out. An error is a
 // transform failure the engine treats exactly like a Starlark failure
-// (delivery retries, then dead letter).
+// (delivery retries, then dead letter). With no wall-clock budget
+// (timeout_ms: 0) the context deadline is not enforced — fast mode.
 func (inv *Invoker) Invoke(parent context.Context, payload []byte) ([]byte, error) {
-	ctx, cancel := context.WithTimeout(parent, inv.timeout)
-	defer cancel()
+	ctx := parent
+	if inv.timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(parent, inv.timeout)
+		defer cancel()
+	}
 	if err := inv.ensure(ctx); err != nil {
 		return nil, err
 	}

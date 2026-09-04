@@ -19,7 +19,7 @@ transforms:
     wasm:
       module: transforms/heavy.wasm   # path relative to the pipeline file
       entrypoint: transform           # exported function name (default: transform)
-      timeout_ms: 1000                # per-invoke wall-clock budget (default 1000)
+      timeout_ms: 1000                # per-invoke wall-clock budget (default 1000; 0 = fast mode, see below)
       max_memory_pages: 512           # linear memory cap, 64 KiB pages (default 512 = 32 MiB)
       allow: []                       # capability allowlist; known: log
 ```
@@ -40,9 +40,15 @@ transforms:
   edge's `delivery` policy retries them, then the message dead-letters with
   the error text. Identical to the Starlark error path.
 - **Resource model**: wazero has no instruction-count metering, so the
-  budget is **wall-clock per invoke** (`timeout_ms`, enforced by killing the
-  instance exactly at the deadline) plus a **hard memory cap**
-  (`max_memory_pages`). A killed instance is re-instantiated transparently
+  budget is **wall-clock per invoke** (`timeout_ms`) plus a **hard memory
+  cap** (`max_memory_pages`). Enforcing the deadline requires wazero's
+  context-close mechanism, which costs **~5x throughput on loop-heavy
+  guests** (measured; see the benchmark) — that is the price of being able to
+  kill a runaway guest at exactly the deadline. `timeout_ms: 0` selects
+  **fast mode**: no deadline enforcement and no kill switch — a runaway
+  guest then wedges its worker until the pipeline restarts. Choose fast mode
+  for trusted, well-tested guests doing heavy computation; keep the default
+  for anything else. A killed instance is re-instantiated transparently
   before the next message. Timers are counted in
   `eventboat_wasm_timeouts_total`; durations in
   `eventboat_wasm_transform_duration_seconds`.
@@ -128,7 +134,20 @@ go test ./internal/wasmhost/ -bench BenchmarkHeavyTransform -benchtime 2s
 ```
 
 Reference numbers and how to reproduce them are in the
-[README](../README.md#performance). Short version: heavy per-message
-computation is where WASM wins by an order of magnitude; for simple field
-mapping Starlark wins (instantiation and JSON crossing costs dominate at
-small workloads) — which is exactly why the ladder exists.
+[README](../README.md#performance). Short version, from the benchmark machine
+(Windows/amd64, i5-14600KF, 2000-element × 20-pass aggregate per message):
+
+| variant | per message | allocations |
+|---|---|---|
+| Starlark heavy script | 5.9 ms | 122,092 |
+| WASM, default (deadline armed) | 13.1 ms | 19 |
+| WASM, fast mode (`timeout_ms: 0`) | 2.5 ms | 4 |
+| Starlark light script | 22 µs | 2,023 |
+| WASM light | 103 µs | 15 |
+
+Two honest conclusions: heavy per-message computation is where WASM wins
+(2.3x and ~30,000x fewer allocations in fast mode), but the kill switch is
+expensive — with the default deadline armed this workload is *slower* than
+Starlark on this machine. For simple field mapping Starlark wins outright
+(instantiation and JSON crossing dominate at small workloads) — which is
+exactly why the ladder exists.

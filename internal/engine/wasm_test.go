@@ -45,7 +45,7 @@ sinks:
 	eng, _ := runEngine(t, pip, store.NewMemory("wasm"), h.reg, fastOptions())
 
 	src := h.source("wasm")
-	src.Emit([]byte(`{"values":[1,2,3]}`), "")
+	src.Emit([]byte(`{"samples":[1,2,3]}`), "")
 	waitSettled(t, eng)
 
 	got, _, _ := h.sink("out").snapshot()
@@ -83,7 +83,7 @@ sinks:
 
 	src := h.source("wasmf")
 	// Empty values: the guest reports a domain error → retry → dead letter.
-	src.Emit([]byte(`{"values":[]}`), "")
+	src.Emit([]byte(`{"samples":[]}`), "")
 	waitSettled(t, eng)
 
 	if got := eng.Metrics.DeadLettered.Load(); got != 1 {
@@ -101,7 +101,7 @@ sinks:
 	if err != nil || len(dlq) != 1 {
 		t.Fatalf("dead letters: %v, %d", err, len(dlq))
 	}
-	if want := "values must not be empty"; !strings.Contains(dlq[0].Reason, want) {
+	if want := "samples must not be empty"; !strings.Contains(dlq[0].Reason, want) {
 		t.Fatalf("dead letter reason %q does not contain %q", dlq[0].Reason, want)
 	}
 }

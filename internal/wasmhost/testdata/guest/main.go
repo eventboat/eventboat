@@ -4,7 +4,7 @@
 //
 //	GOOS=wasip1 GOARCH=wasm go build -buildmode=c-shared -o ../aggregate.wasm .
 //
-// Payload in: {"values": [numbers], "passes": optional int}
+// Payload in: {"samples": [numbers], "passes": optional int}
 // Payload out: {"count":N,"sum":S,"mean":M,"min":m,"max":x}
 //
 // The compute loop is deliberately heavy (multiple passes over the array):
@@ -65,14 +65,14 @@ func lengthPrefixed(b []byte) []byte {
 
 func aggregate(in []byte) ([]byte, error) {
 	var req struct {
-		Values []float64 `json:"values"`
+		Values []float64 `json:"samples"`
 		Passes int       `json:"passes"`
 	}
 	if err := json.Unmarshal(in, &req); err != nil {
 		return nil, err
 	}
 	if len(req.Values) == 0 {
-		return nil, errString("values must not be empty")
+		return nil, errString("samples must not be empty")
 	}
 	passes := req.Passes
 	if passes <= 0 {

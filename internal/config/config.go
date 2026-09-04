@@ -211,12 +211,18 @@ type SplitConfig struct{}
 // WasmConfig declares a WASM transform (ladder tier 3, redesign-v3.md §4.5;
 // wire format and sandbox per redesign-v3-review-m3 R3/R4/R7).
 type WasmConfig struct {
-	Module          string   // module path, relative to the pipeline file
-	Entrypoint      string   // exported function name; "" means "transform"
-	TimeoutMs       int      // per-invoke wall-clock bound; 0 = 1000
-	MaxMemoryPages  int      // wazero memory pages cap; 0 = 512 (32 MiB)
-	Allow           []string // capability allowlist; default none; known: log
+	Module         string   // module path, relative to the pipeline file
+	Entrypoint     string   // exported function name; "" means "transform"
+	TimeoutMs      int      // per-invoke wall-clock budget; DefaultWasmTimeoutMs unless set; 0 = no budget (fast mode, no kill switch)
+	MaxMemoryPages int      // wazero memory pages cap; 0 = DefaultWasmMaxMemoryPages
+	Allow          []string // capability allowlist; default none; known: log
 }
+
+// Defaults applied when the corresponding wasm field is absent.
+const (
+	DefaultWasmTimeoutMs      = 1000
+	DefaultWasmMaxMemoryPages = 512 // 32 MiB
+)
 
 // BufferConfig is the in-memory per-edge buffer sizing (surge absorption
 // only; reliability comes from the spool, not from buffers).

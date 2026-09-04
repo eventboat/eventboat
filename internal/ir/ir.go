@@ -299,7 +299,7 @@ func Build(cfg *config.Pipeline, reg *registry.Registry, starOpts starhost.Optio
 				if !filepath.IsAbs(modPath) && filepath.Dir(file) != "." {
 					modPath = filepath.Join(filepath.Dir(file), modPath)
 				}
-				compiled, err := wasmhost.Compile(context.Background(), modPath, n.Config.Wasm.MaxMemoryPages)
+				compiled, err := wasmhost.Compile(context.Background(), modPath, n.Config.Wasm)
 				if err != nil {
 					add(config.Diagnostic{Severity: "error", Code: "expr_wasm_compile", File: file, Line: n.Config.Line,
 						Message: fmt.Sprintf("transform %q: %v", name, err),

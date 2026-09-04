@@ -189,7 +189,7 @@ func parseNode(file, name string, section Section, nodeRaw any, line, pluginLine
 					})
 				}
 			}
-			w := &WasmConfig{TimeoutMs: 0, MaxMemoryPages: 0}
+			w := &WasmConfig{TimeoutMs: DefaultWasmTimeoutMs, MaxMemoryPages: DefaultWasmMaxMemoryPages}
 			mod, ok := wm["module"].(string)
 			if !ok || strings.TrimSpace(mod) == "" {
 				res.Diagnostics = append(res.Diagnostics, Diagnostic{
@@ -204,11 +204,11 @@ func parseNode(file, name string, section Section, nodeRaw any, line, pluginLine
 				w.Entrypoint = v
 			}
 			if v, ok := wm["timeout_ms"]; ok {
-				w.TimeoutMs = asInt(v, 0)
-				if w.TimeoutMs < 1 {
+				w.TimeoutMs = asInt(v, -1)
+				if w.TimeoutMs < 0 {
 					res.Diagnostics = append(res.Diagnostics, Diagnostic{
 						Severity: "error", Code: "cfg_wasm_range", File: file, Line: line,
-						Message: "wasm.timeout_ms must be >= 1", Hint: "",
+						Message: "wasm.timeout_ms must be >= 0", Hint: "",
 					})
 					w.TimeoutMs = 0
 				}
