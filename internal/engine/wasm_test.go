@@ -191,14 +191,14 @@ func TestWasmSlowCallWatchdog(t *testing.T) {
 		logs = append(logs, fmt.Sprintf(f, a...))
 		mu.Unlock()
 	}
-	inv := compiled.NewInvoker(&config.WasmConfig{}, logf, 50) // 50ms watchdog
-	defer inv.Close()
 
-	// Short call: no warning.
-	if _, err := inv.Invoke(ctx, []byte(`{"samples":[1,2,3]}`)); err != nil {
+	// Short-call phase: a 5s threshold leaves ample headroom even for a cold
+	// first invoke (instantiation + JSON) on a slow CI box under -race.
+	calm := compiled.NewInvoker(&config.WasmConfig{}, logf, 5000)
+	defer calm.Close()
+	if _, err := calm.Invoke(ctx, []byte(`{"samples":[1,2,3]}`)); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(80 * time.Millisecond)
 	mu.Lock()
 	if len(logs) != 0 {
 		mu.Unlock()
@@ -206,26 +206,43 @@ func TestWasmSlowCallWatchdog(t *testing.T) {
 	}
 	mu.Unlock()
 
-	// Long call (10M float ops): exactly one warning, and the call still
-	// completes (fast mode never kills).
+	// Long-call phase: a 1ms threshold guarantees the watchdog fires; the
+	// call (10M float ops) must still complete — fast mode never kills — and
+	// the warning must fire exactly once (throttled per call).
+	hot := compiled.NewInvoker(&config.WasmConfig{}, logf, 1)
+	defer hot.Close()
 	values := make([]float64, 200_000)
 	in, _ := json.Marshal(map[string]any{"samples": values, "passes": 50})
-	if _, err := inv.Invoke(ctx, in); err != nil {
+	if _, err := hot.Invoke(ctx, in); err != nil {
 		t.Fatalf("fast-mode invoke must complete: %v", err)
 	}
-	time.Sleep(80 * time.Millisecond) // let any straggler timer fire flush
+	deadline := time.Now().Add(2 * time.Second)
 	mu.Lock()
 	defer mu.Unlock()
+	for time.Now().Before(deadline) {
+		if countWatchdogLogs(logs) >= 1 {
+			break
+		}
+		mu.Unlock()
+		time.Sleep(10 * time.Millisecond)
+		mu.Lock()
+	}
+	if n := countWatchdogLogs(logs); n != 1 {
+		t.Fatalf("watchdog fired %d times, want exactly 1 (throttled per call); logs=%v", n, logs)
+	}
+	for _, l := range logs {
+		if strings.Contains(l, "still running") && !strings.Contains(l, "transform") {
+			t.Errorf("watchdog log misses the entrypoint: %q", l)
+		}
+	}
+}
+
+func countWatchdogLogs(logs []string) int {
 	n := 0
 	for _, l := range logs {
 		if strings.Contains(l, "still running") {
 			n++
-			if !strings.Contains(l, "transform") {
-				t.Errorf("watchdog log misses the entrypoint: %q", l)
-			}
 		}
 	}
-	if n != 1 {
-		t.Fatalf("watchdog fired %d times, want exactly 1 (throttled per call); logs=%v", n, logs)
-	}
+	return n
 }
