@@ -12,7 +12,7 @@ import (
 // internal/convert).
 func TestConvertCLI(t *testing.T) {
 	t.Setenv("WEBHOOK_TARGET_URL", "https://httpbin.example/post")
-	src := filepath.Join("..", "..", "legacy", "_examples", "04-http-webhook.yaml")
+	src := filepath.Join("..", "..", "internal", "convert", "testdata", "v2", "04-http-webhook.yaml")
 	out := filepath.Join(t.TempDir(), "out.yaml")
 	report := filepath.Join(t.TempDir(), "report.md")
 

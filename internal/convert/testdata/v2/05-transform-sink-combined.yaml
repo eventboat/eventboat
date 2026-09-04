@@ -1,0 +1,33 @@
+# 模式：Transform + Sink 合体 step
+# 单 step 同时声明 transform 与 sink，自动展开为 {name} → {name}-sink 内边。
+apiVersion: riverpod/v1
+kind: Pipeline
+metadata:
+  name: transform-sink-combined
+
+steps:
+  cron-source:
+    source:
+      type: cron
+      decoder: json
+      config:
+        schedule: "0 0 * * * *"
+        payload: '{"message":"hello"}'
+
+  enrich:
+    depends_on: [cron-source]
+    transform:
+      type: map
+      config:
+        dsl: |
+          payload.message = payload.message + " riverpod"
+
+  publish:
+    depends_on: [enrich]
+    transform:
+      type: map
+      config:
+        dsl: |
+          metadata.published = true
+    sink:
+      type: drop

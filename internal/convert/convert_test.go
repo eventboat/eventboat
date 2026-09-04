@@ -117,23 +117,25 @@ func TestGuardComposition(t *testing.T) {
 	}
 }
 
-// fixtures are every archived v2 example plus the two v2 testdata pipelines:
-// three writing styles, YAML and HOCON, all v2 feature areas (route, fan-in,
-// combined steps, edge delivery, dlq, flat pipeline). Names disambiguate the
-// two linear.* files from different directories.
+// fixtures are every archived v2 example plus the two v2 testdata pipelines,
+// copied here when the legacy tree was removed from the worktree (v2 stays
+// recoverable via git history and the v0.1.0-beta tag): three writing styles,
+// YAML and HOCON, all v2 feature areas (route, fan-in, combined steps, edge
+// delivery, dlq, flat pipeline). Names keep the two linear.* fixtures
+// distinct from 01-linear-etl.
 var fixtures = []struct{ path, name string }{
-	{"../../legacy/_examples/01-linear-etl.yaml", "01-linear-etl"},
-	{"../../legacy/_examples/02-route-branching.yaml", "02-route-branching"},
-	{"../../legacy/_examples/03-fan-in.yaml", "03-fan-in"},
-	{"../../legacy/_examples/04-http-webhook.yaml", "04-http-webhook"},
-	{"../../legacy/_examples/05-transform-sink-combined.yaml", "05-transform-sink-combined"},
-	{"../../legacy/_examples/06-edge-delivery.yaml", "06-edge-delivery"},
-	{"../../legacy/_examples/07-flat-pipeline.yaml", "07-flat-pipeline"},
-	{"../../legacy/_examples/08-hocon-linear.conf", "08-hocon-linear"},
-	{"../../legacy/_examples/multi-pipeline/heartbeat.yaml", "mp-heartbeat"},
-	{"../../legacy/_examples/multi-pipeline/metrics-ingest.yaml", "mp-metrics-ingest"},
-	{"../../legacy/testdata/pipelines/linear.yaml", "testdata-linear-yaml"},
-	{"../../legacy/testdata/pipelines/linear.conf", "testdata-linear-conf"},
+	{"testdata/v2/01-linear-etl.yaml", "01-linear-etl"},
+	{"testdata/v2/02-route-branching.yaml", "02-route-branching"},
+	{"testdata/v2/03-fan-in.yaml", "03-fan-in"},
+	{"testdata/v2/04-http-webhook.yaml", "04-http-webhook"},
+	{"testdata/v2/05-transform-sink-combined.yaml", "05-transform-sink-combined"},
+	{"testdata/v2/06-edge-delivery.yaml", "06-edge-delivery"},
+	{"testdata/v2/07-flat-pipeline.yaml", "07-flat-pipeline"},
+	{"testdata/v2/08-hocon-linear.conf", "08-hocon-linear"},
+	{"testdata/v2/heartbeat.yaml", "mp-heartbeat"},
+	{"testdata/v2/metrics-ingest.yaml", "mp-metrics-ingest"},
+	{"testdata/v2/linear.yaml", "testdata-linear-yaml"},
+	{"testdata/v2/linear.conf", "testdata-linear-conf"},
 }
 
 // TestAcceptanceConvertedExamplesVerify: the M4 acceptance anchor — every

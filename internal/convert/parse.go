@@ -45,8 +45,9 @@ func markTopKeys(raw map[string]any, cfg *v2PipelineConfig) {
 	_, cfg.HasDLQKey = raw["dlq"]
 }
 
-// parseV2HOCON follows the archived loader's path (legacy/internal/config/
-// hocon.go): normalize CRLF (upstream parser defect workaround), parse with
+// parseV2HOCON follows the archived loader's path (hocon.go in the legacy
+// tree, recoverable from git history or the v0.1.0-beta tag): normalize CRLF
+// (upstream parser defect workaround), parse with
 // the same public library, convert to a plain tree, round-trip through YAML
 // so the strict struct decoding and the DependsOnList/CodecRef unmarshalers
 // apply identically to both formats.

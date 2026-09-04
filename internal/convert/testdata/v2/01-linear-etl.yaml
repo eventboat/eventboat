@@ -1,0 +1,42 @@
+# 模式：线性 ETL（Source → map → filter → sink）
+# 无需外部依赖；cron 定时产生 JSON，drop 吞没输出。
+apiVersion: riverpod/v1
+kind: Pipeline
+metadata:
+  name: linear-etl
+
+engine:
+  max_workers: 8
+  max_inflight: 1000
+
+steps:
+  cron-source:
+    source:
+      type: cron
+      decoder: json
+      config:
+        schedule: "0 */5 * * * *"
+        timezone: Asia/Shanghai
+        payload: '{"price":10,"quantity":5,"sku":"A-001"}'
+
+  enrich:
+    depends_on: [cron-source]
+    transform:
+      type: map
+      workers: 2
+      config:
+        dsl: |
+          payload.total = payload.price * payload.quantity
+          metadata.enriched_at = "riverpod"
+
+  filter-high:
+    depends_on: [enrich]
+    transform:
+      type: filter
+      config:
+        dsl: "payload.total > 20"
+
+  drop-sink:
+    depends_on: [filter-high]
+    sink:
+      type: drop

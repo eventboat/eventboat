@@ -1,6 +1,6 @@
 # eventboat convert — v2 → v3 migration report
 
-- **Source**: ../../legacy/_examples/07-flat-pipeline.yaml (style: pipeline[] (YAML))
+- **Source**: testdata/v2/07-flat-pipeline.yaml (style: pipeline[] (YAML))
 - **Statements**: 1 auto / 0 manual
 - **Structural notes**: 2 · **Manual items**: 1
 - **Verify (v3)**: PASS (0 errors, 0 warnings)

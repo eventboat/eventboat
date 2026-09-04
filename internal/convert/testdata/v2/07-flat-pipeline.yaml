@@ -1,0 +1,38 @@
+# 模式：平坦 pipeline[] 写法（与 steps 等价，二选一）
+# 适合极简管道或从早期草案迁移；每行显式声明 kind 与 type。
+apiVersion: riverpod/v1
+kind: Pipeline
+metadata:
+  name: flat-pipeline
+
+engine:
+  max_workers: 4
+
+pipeline:
+  - id: cron-source
+    kind: source
+    type: cron
+    decoder: json
+    config:
+      schedule: "0 0 * * * *"
+      payload: '{"value":1}'
+
+  - id: double
+    kind: transform
+    type: map
+    depends_on: [cron-source]
+    config:
+      dsl: |
+        payload.value = payload.value * 2
+
+  - id: keep-positive
+    kind: transform
+    type: filter
+    depends_on: [double]
+    config:
+      dsl: "payload.value > 0"
+
+  - id: drop-sink
+    kind: sink
+    type: drop
+    depends_on: [keep-positive]

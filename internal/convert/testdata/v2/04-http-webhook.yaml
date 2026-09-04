@@ -1,0 +1,34 @@
+# 模式：HTTP Webhook 接入
+# http_server 接收 POST body，经 map  enrichment 后转发至外部 HTTP 端点。
+# 运行前设置 WEBHOOK_TARGET_URL，例如：https://httpbin.org/post
+apiVersion: riverpod/v1
+kind: Pipeline
+metadata:
+  name: http-webhook
+
+steps:
+  webhook-in:
+    source:
+      type: http_server
+      decoder: json
+      config:
+        address: ":8080"
+        path: /events
+
+  enrich:
+    depends_on: [webhook-in]
+    transform:
+      type: map
+      config:
+        dsl: |
+          metadata.received_via = "webhook"
+          payload.received = true
+
+  http-out:
+    depends_on: [enrich]
+    sink:
+      type: http
+      encoder: json
+      config:
+        url: "${WEBHOOK_TARGET_URL}"
+        method: POST

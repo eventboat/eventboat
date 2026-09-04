@@ -1,6 +1,6 @@
 # eventboat convert — v2 → v3 migration report
 
-- **Source**: ../../legacy/_examples/02-route-branching.yaml (style: steps (YAML))
+- **Source**: testdata/v2/02-route-branching.yaml (style: steps (YAML))
 - **Statements**: 1 auto / 0 manual
 - **Structural notes**: 3 · **Manual items**: 0
 - **Verify (v3)**: PASS (0 errors, 0 warnings)

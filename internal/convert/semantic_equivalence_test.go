@@ -69,7 +69,7 @@ func newPayload(t *testing.T, prog *starhost.Program, payload map[string]any) *s
 // sink edge must pass exactly the messages the v2 filter passed, with the
 // same computed total (script identical in shape to the v2 dsl).
 func TestEquivalence01LinearFilter(t *testing.T) {
-	_, built := convertFixture(t, "../../legacy/_examples/01-linear-etl.yaml")
+	_, built := convertFixture(t, "testdata/v2/01-linear-etl.yaml")
 	sink := built.Nodes["drop-sink"]
 	if sink == nil || len(sink.In) != 1 || sink.In[0].From != "enrich" {
 		t.Fatalf("unexpected sink edges: %+v", sink.In)
@@ -98,7 +98,7 @@ func TestEquivalence01LinearFilter(t *testing.T) {
 // first-match semantics) folded into ordered edge guards must route each
 // region to exactly the sink the v2 route transform chose.
 func TestEquivalence02RouteFirstMatch(t *testing.T) {
-	_, built := convertFixture(t, "../../legacy/_examples/02-route-branching.yaml")
+	_, built := convertFixture(t, "testdata/v2/02-route-branching.yaml")
 	edgeFrom := func(node, from string) *ir.Edge {
 		for i := range built.Nodes[node].In {
 			if built.Nodes[node].In[i].From == from {
@@ -149,7 +149,7 @@ func TestEquivalence02RouteFirstMatch(t *testing.T) {
 // are gone (dead letters live in the store).
 func TestEquivalence06EdgeDelivery(t *testing.T) {
 	t.Setenv("PRIMARY_SINK_URL", "https://primary.example/api")
-	cfg, built := convertFixture(t, "../../legacy/_examples/06-edge-delivery.yaml")
+	cfg, built := convertFixture(t, "testdata/v2/06-edge-delivery.yaml")
 	primary := built.Nodes["primary-out"]
 	if primary == nil {
 		t.Fatal("primary-out missing")

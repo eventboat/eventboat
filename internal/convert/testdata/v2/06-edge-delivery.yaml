@@ -1,0 +1,58 @@
+# 模式：边级 buffer / retry / DLQ / best-effort
+# 主路径 sink 带重试；失败消息经 pipeline 级 dlq 写入 dlq-sink；analytics 为 optional 边。
+apiVersion: riverpod/v1
+kind: Pipeline
+metadata:
+  name: edge-delivery
+
+edgeDefaults:
+  buffer: { type: memory, size: 64, strategy: block }
+  required: true
+
+dlq:
+  sink: dlq-sink
+  include_current_payload: true
+
+steps:
+  cron-source:
+    source:
+      type: cron
+      decoder: json
+      config:
+        schedule: "0 */1 * * * *"
+        payload: '{"id":"evt-1","payload":"data"}'
+
+  enrich:
+    depends_on: [cron-source]
+    transform:
+      type: map
+      config:
+        dsl: |
+          payload.enriched = true
+
+  primary-out:
+    depends_on:
+      enrich:
+        buffer: { type: memory, size: 128, strategy: block }
+        delivery:
+          retry: { max: 3, backoff: exponential }
+          timeout: 5s
+          dlq: dlq-sink
+    sink:
+      type: http
+      encoder: json
+      config:
+        url: "${PRIMARY_SINK_URL}"
+
+  analytics-out:
+    depends_on:
+      enrich:
+        required: false
+        buffer: { type: memory, size: 16, strategy: drop_newest }
+    sink:
+      type: drop
+
+  # DLQ sink 被 dlq.sink 引用，合法地没有入边：失败消息由引擎直接投递至此 stage
+  dlq-sink:
+    sink:
+      type: drop

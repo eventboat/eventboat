@@ -1,6 +1,6 @@
 // Package convert implements the v2 → v3 migration tool (redesign-v3.md
-// §7.3): it parses any archived v2 pipeline shape (read-only; legacy/ itself
-// is never imported or modified — its internal packages are not importable
+// §7.3): it parses any archived v2 pipeline shape (read-only; the legacy
+// tree is never imported — its internal packages were not importable
 // across the module boundary, see redesign-v3-review-m4.md R1), translates
 // the eql1 DSL to CEL predicates + Starlark scripts, and emits the v3
 // three-section form plus a per-item migration report.
@@ -12,10 +12,10 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// The structs below mirror legacy/internal/config/config.go (the archived v2
-// loader) verbatim so that every historical writing style decodes; the
-// normalization semantics in normalize.go follow legacy/internal/config/
-// normalize.go. Read-only copies: legacy/ is frozen.
+// The structs below mirror the archived v2 loader (config.go in the legacy
+// tree, recoverable from git history or the v0.1.0-beta tag) verbatim so
+// that every historical writing style decodes; the normalization semantics
+// in normalize.go follow its normalize.go. Read-only copies.
 
 type v2PipelineConfig struct {
 	APIVersion    string            `yaml:"apiVersion"`

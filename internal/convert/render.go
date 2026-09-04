@@ -16,7 +16,8 @@ import (
 	"cel.dev/cel-go/common/types/ref"
 )
 
-// The eql1 DSL (legacy/internal/eql/eql.go) is line-oriented: each line is
+// The eql1 DSL (eql.go in the archived legacy tree) is line-oriented: each
+// line is
 // `path = <CEL expr>` or `del(path)`; comments start with `#`. The converter
 // reuses the same two statement regexes, then renders the RHS from the CEL
 // AST into Starlark (redesign-v3-review-m4.md R2). Anything outside the

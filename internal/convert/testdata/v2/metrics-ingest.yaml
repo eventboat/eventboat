@@ -1,0 +1,28 @@
+# 多 Pipeline 示例之二：指标采样
+apiVersion: riverpod/v1
+kind: Pipeline
+metadata:
+  name: metrics-ingest
+
+steps:
+  sample:
+    source:
+      type: cron
+      decoder: json
+      config:
+        schedule: "0 */15 * * * *"
+        payload: '{"pipeline":"metrics-ingest","cpu":0.42,"mem_mb":512}'
+
+  normalize:
+    depends_on: [sample]
+    transform:
+      type: map
+      config:
+        dsl: |
+          payload.ts = "riverpod"
+          metadata.metric = true
+
+  drop:
+    depends_on: [normalize]
+    sink:
+      type: drop

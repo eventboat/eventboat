@@ -1,6 +1,6 @@
 # eventboat convert — v2 → v3 migration report
 
-- **Source**: ../../legacy/_examples/multi-pipeline/heartbeat.yaml (style: steps (YAML))
+- **Source**: testdata/v2/heartbeat.yaml (style: steps (YAML))
 - **Statements**: 0 auto / 0 manual
 - **Structural notes**: 1 · **Manual items**: 0
 - **Verify (v3)**: PASS (0 errors, 0 warnings)

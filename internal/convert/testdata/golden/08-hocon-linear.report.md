@@ -1,6 +1,6 @@
 # eventboat convert — v2 → v3 migration report
 
-- **Source**: ../../legacy/_examples/08-hocon-linear.conf (style: steps (HOCON))
+- **Source**: testdata/v2/08-hocon-linear.conf (style: steps (HOCON))
 - **Statements**: 2 auto / 0 manual
 - **Structural notes**: 2 · **Manual items**: 2
 - **Verify (v3)**: PASS (0 errors, 0 warnings)
