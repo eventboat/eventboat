@@ -69,6 +69,12 @@ type Manager struct {
 	stopped bool
 	stopCh  chan struct{}
 	wg      sync.WaitGroup
+
+	// admission is the pipeline-aggregated spool admission pool shared by
+	// every concurrent run's engine (M2 review R17: max_in_flight aggregates
+	// across overlap:all runs instead of multiplying per run). Lazily sized
+	// from the first run's resolved limits — same pipeline config each run.
+	admission chan struct{}
 }
 
 type runningRun struct {
@@ -454,6 +460,7 @@ func (m *Manager) runOnce(ctx context.Context, jr *store.JobRun, triggerParams, 
 	}
 
 	opts := m.opts.EngineOptions.WithLimits(cfg.Limits)
+	opts.Admission = m.admissionPool(opts.HighWatermark)
 	opts.MetaStamps = map[string]any{
 		"job_run_id":  jr.RunID,
 		"job_trigger": jr.TriggerType,
@@ -528,6 +535,22 @@ func (m *Manager) runOnce(ctx context.Context, jr *store.JobRun, triggerParams, 
 
 func (m *Manager) quiesced(eng *engine.Engine) bool {
 	return eng.Quiesced()
+}
+
+// admissionPool returns the shared spool admission pool, creating it on first
+// use (capacity = the pipeline's resolved max_in_flight, defaulted the same
+// way engine.New defaults it; same config every run, so first-run sizing is
+// stable).
+func (m *Manager) admissionPool(highWatermark int) chan struct{} {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.admission == nil {
+		if highWatermark <= 0 {
+			highWatermark = engine.DefaultHighWatermark
+		}
+		m.admission = make(chan struct{}, highWatermark)
+	}
+	return m.admission
 }
 
 // sourceWatermarks reads each source's persisted {watermark} state.

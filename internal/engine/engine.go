@@ -36,6 +36,13 @@ type Options struct {
 	DrainTimeout   time.Duration // graceful drain bound before hard cancel
 	StarOptions    starhost.Options
 
+	// Admission optionally replaces the per-engine admission semaphore with a
+	// SHARED pool (same capacity semantics: one slot per unsettled message).
+	// The jobs manager hands one pool to every concurrent run of a pipeline
+	// so max_in_flight aggregates across overlap:all runs instead of
+	// multiplying per run (M2 review R17). nil = per-engine semaphore.
+	Admission chan struct{}
+
 	// Obs receives OpenTelemetry events (nil-safe: nil disables telemetry).
 	Obs *obs.Obs
 
@@ -64,14 +71,19 @@ type Options struct {
 	WasmSlowCallWarnMs int
 }
 
+// DefaultHighWatermark is the spool admission limit applied when neither the
+// pipeline's limits section nor Options set one. Exported so pool owners
+// (the jobs manager's aggregated admission) size identically to engine.New.
+const DefaultHighWatermark = 10_000
+
 // DefaultOptions returns production defaults.
 func DefaultOptions() Options {
 	return Options{
 		Clock:              time.Now,
-		NewID:              func() string { return uuid.New().String() },
+		NewID:              func() string { return uuid.NewString() },
 		BackoffBase:        100 * time.Millisecond,
 		DLBackoff:          500 * time.Millisecond,
-		HighWatermark:      10_000,
+		HighWatermark:      DefaultHighWatermark,
 		ChannelSize:        128,
 		BatchFlush:         time.Second,
 		DefaultTimeout:     30 * time.Second,
@@ -188,7 +200,7 @@ func New(p *ir.Pipeline, st store.Store, reg *registry.Registry, opts Options) (
 		opts.DLBackoff = 500 * time.Millisecond
 	}
 	if opts.HighWatermark <= 0 {
-		opts.HighWatermark = 10_000
+		opts.HighWatermark = DefaultHighWatermark
 	}
 	if opts.ChannelSize <= 0 {
 		opts.ChannelSize = 128
@@ -294,7 +306,11 @@ func New(p *ir.Pipeline, st store.Store, reg *registry.Registry, opts Options) (
 		}
 	}
 	e.settle = newSettleTracker(p.Config.Name, sourceNames, e.onSettled, e.persistCheckpoint)
-	e.admitSem = make(chan struct{}, opts.HighWatermark)
+	if opts.Admission != nil {
+		e.admitSem = opts.Admission // shared pool: pipeline-aggregated quota
+	} else {
+		e.admitSem = make(chan struct{}, opts.HighWatermark)
+	}
 	return e, nil
 }
 

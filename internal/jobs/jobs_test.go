@@ -756,6 +756,32 @@ sinks:
 
 // --- helpers ---
 
+// The pipeline-aggregated admission pool (M2 review R17): every concurrent
+// run's engine draws from ONE shared semaphore, so max_in_flight is a
+// pipeline total under overlap:all rather than per-run. The pool's capacity
+// is resolved once from the first run's limits (same pipeline config every
+// run). The gating mechanism itself is locked engine-side
+// (TestSharedAdmissionPoolCapsConcurrentEngines); FakePull's per-Pull state
+// reset makes a concurrent two-pull integration test unsound with the shared
+// test double, so the wiring is asserted here.
+func TestAdmissionPoolSharedAndStable(t *testing.T) {
+	testkit.ResetFakePull()
+	h := newJobHarness(t, "", "all", "0s", false, "")
+	m := h.buildManager(store.NewMemory("nightly"), time.Now)
+
+	first := m.admissionPool(4)
+	second := m.admissionPool(1000)
+	if first != second {
+		t.Fatal("admissionPool must return the SAME pool across calls")
+	}
+	if cap(first) != 4 {
+		t.Fatalf("pool capacity = %d, want 4 (first sizing wins)", cap(first))
+	}
+	if m.admissionPool(0) != first || cap(first) != 4 {
+		t.Fatalf("pool capacity = %d after zero-watermark probe, want 4 (stable)", cap(first))
+	}
+}
+
 func waitFor(t *testing.T, timeout time.Duration, cond func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
