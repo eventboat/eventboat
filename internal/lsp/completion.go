@@ -23,28 +23,28 @@ var topLevelSections = []string{
 
 // Framework fields per section (mirrors config.sections.go nodeWhitelist).
 var frameworkFields = map[string][]string{
-	"sources":   {"decoder", "grpc", "version"},
+	"sources":    {"decoder", "grpc", "version"},
 	"transforms": {"from", "workers", "script", "split", "wasm"},
-	"sinks":     {"from", "encoder", "workers", "order_key", "batch", "grpc", "version"},
+	"sinks":      {"from", "encoder", "workers", "order_key", "batch", "grpc", "version"},
 }
 
 var frameworkDocs = map[string]string{
-	"from":       "upstream edges: a name, a list, or `{name: {when: ...}}` — one edge per entry",
-	"decoder":    "codec name applied to inbound bytes at the source (default json)",
-	"encoder":    "codec name applied to the payload at the sink (default json)",
-	"workers":    "per-node concurrency for transforms (default 1)",
-	"order_key":  "CEL expression evaluated into the message key (e.g. kafka partition key)",
-	"batch":      "engine-owned sink batching: {size, timeout_ms}",
-	"script":     "Starlark statement sequence; payload/meta/constants bindings (§4.3)",
-	"split":      "mark the transform as a splitter: a JSON array payload becomes one message per element",
-	"wasm":       "WASM transform tier: {module, entrypoint, timeout_ms, max_memory_pages, allow} (docs/wasm.md)",
-	"grpc":       "external gRPC plugin block: {command, env, schema} (docs/plugins.md)",
-	"version":    "pin the plugin ABI version; mismatch with the registry is a verify error",
-	"when":       "CEL predicate on the edge (§4.2); errors = not passed + counter",
-	"route":      "named route sugar: compiles to `meta.route == \"<name>\"` (§5.4)",
-	"delivery":   "per-edge delivery policy: {retries, backoff, timeout_ms}",
-	"required":   "required edge (default true); false = failures drop instead of dead-lettering",
-	"buffer":     "in-memory per-edge surge buffer: {type: memory, max_events}",
+	"from":      "upstream edges: a name, a list, or `{name: {when: ...}}` — one edge per entry",
+	"decoder":   "codec name applied to inbound bytes at the source (default json)",
+	"encoder":   "codec name applied to the payload at the sink (default json)",
+	"workers":   "per-node concurrency for transforms (default 1)",
+	"order_key": "CEL expression evaluated into the message key (e.g. kafka partition key)",
+	"batch":     "engine-owned sink batching: {size, timeout_ms}",
+	"script":    "Starlark statement sequence; payload/meta/constants bindings (§4.3)",
+	"split":     "mark the transform as a splitter: a JSON array payload becomes one message per element",
+	"wasm":      "WASM transform tier: {module, entrypoint, timeout_ms, max_memory_pages, allow} (docs/wasm.md)",
+	"grpc":      "external gRPC plugin block: {command, env, schema} (docs/plugins.md)",
+	"version":   "pin the plugin ABI version; mismatch with the registry is a verify error",
+	"when":      "CEL predicate on the edge (§4.2); errors = not passed + counter",
+	"route":     "named route sugar: compiles to `meta.route == \"<name>\"` (§5.4)",
+	"delivery":  "per-edge delivery policy: {retries, backoff, timeout_ms}",
+	"required":  "required edge (default true); false = failures drop instead of dead-lettering",
+	"buffer":    "in-memory per-edge surge buffer: {type: memory, max_events}",
 }
 
 // stackEntry is one `key:` line above the cursor.
@@ -375,7 +375,7 @@ func (s *Server) pluginItems(section string) []completionItem {
 		for _, m := range s.reg.Catalog().Sources {
 			out = append(out, completionItem{
 				Label: m.Name, Kind: kindProperty,
-				Detail: "source plugin (v" + itoa(m.Version) + ")" + capsSuffix(m.Capabilities),
+				Detail:     "source plugin (v" + itoa(m.Version) + ")" + capsSuffix(m.Capabilities),
 				InsertText: m.Name + ":",
 			})
 		}
@@ -383,7 +383,7 @@ func (s *Server) pluginItems(section string) []completionItem {
 		for _, m := range s.reg.Catalog().Sinks {
 			out = append(out, completionItem{
 				Label: m.Name, Kind: kindProperty,
-				Detail: "sink plugin (v" + itoa(m.Version) + ")",
+				Detail:     "sink plugin (v" + itoa(m.Version) + ")",
 				InsertText: m.Name + ":",
 			})
 		}

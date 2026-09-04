@@ -56,7 +56,7 @@ func (s *cronSource) Run(ctx context.Context, emit func(registry.Message)) {
 	// A cron source has no deterministic replayable offset; we schedule on the
 	// wall clock and let the spool provide durability once a tick is emitted.
 	sched := cron.New()
-	sched.AddFunc(s.expr, func() {
+	_, _ = sched.AddFunc(s.expr, func() {
 		s.mu.Lock()
 		if s.closed {
 			s.mu.Unlock()

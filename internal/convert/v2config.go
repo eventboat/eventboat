@@ -18,20 +18,20 @@ import (
 // normalize.go. Read-only copies: legacy/ is frozen.
 
 type v2PipelineConfig struct {
-	APIVersion    string             `yaml:"apiVersion"`
-	Kind          string             `yaml:"kind"`
-	Metadata      map[string]string  `yaml:"metadata"`
-	Engine        v2EngineConfig     `yaml:"engine"`
-	Steps         map[string]v2Step  `yaml:"steps"`
-	Pipeline      []v2Stage          `yaml:"pipeline"`
-	Codecs        []v2CodecConfig    `yaml:"codecs"`
-	EdgeDefaults  v2EdgeAttrs        `yaml:"edgeDefaults"`
-	DLQ           *v2DLQConfig       `yaml:"dlq"`
-	Edges         []v2EdgeConfig     `yaml:"edges"`
-	HasDLQKey     bool               `yaml:"-"`
-	HasObsKey     bool               `yaml:"-"`
-	HasEngineKey  bool               `yaml:"-"`
-	Observability map[string]any     `yaml:"observability"`
+	APIVersion    string            `yaml:"apiVersion"`
+	Kind          string            `yaml:"kind"`
+	Metadata      map[string]string `yaml:"metadata"`
+	Engine        v2EngineConfig    `yaml:"engine"`
+	Steps         map[string]v2Step `yaml:"steps"`
+	Pipeline      []v2Stage         `yaml:"pipeline"`
+	Codecs        []v2CodecConfig   `yaml:"codecs"`
+	EdgeDefaults  v2EdgeAttrs       `yaml:"edgeDefaults"`
+	DLQ           *v2DLQConfig      `yaml:"dlq"`
+	Edges         []v2EdgeConfig    `yaml:"edges"`
+	HasDLQKey     bool              `yaml:"-"`
+	HasObsKey     bool              `yaml:"-"`
+	HasEngineKey  bool              `yaml:"-"`
+	Observability map[string]any    `yaml:"observability"`
 }
 
 type v2EngineConfig struct {
@@ -120,12 +120,12 @@ type v2TransformBlk struct {
 }
 
 type v2SinkBlock struct {
-	Type       string         `yaml:"type"`
-	Encoder    *v2CodecRef    `yaml:"encoder"`
-	Batch      *v2BatchConfig `yaml:"batch"`
-	Ordering   string         `yaml:"ordering"`
-	MaxInFlight int           `yaml:"max_in_flight"`
-	Config     map[string]any `yaml:"config"`
+	Type        string         `yaml:"type"`
+	Encoder     *v2CodecRef    `yaml:"encoder"`
+	Batch       *v2BatchConfig `yaml:"batch"`
+	Ordering    string         `yaml:"ordering"`
+	MaxInFlight int            `yaml:"max_in_flight"`
+	Config      map[string]any `yaml:"config"`
 }
 
 type v2DependsOnList []v2DependsOnEntry
@@ -182,11 +182,11 @@ func (d *v2DependsOnList) UnmarshalYAML(value *yaml.Node) error {
 }
 
 type v2EdgeAttrs struct {
-	Condition string             `yaml:"condition"`
-	Route     string             `yaml:"route"`
-	Buffer    *v2EdgeBuffer      `yaml:"buffer"`
-	Delivery  *v2DeliverySpec    `yaml:"delivery"`
-	Required  *bool              `yaml:"required"`
+	Condition string          `yaml:"condition"`
+	Route     string          `yaml:"route"`
+	Buffer    *v2EdgeBuffer   `yaml:"buffer"`
+	Delivery  *v2DeliverySpec `yaml:"delivery"`
+	Required  *bool           `yaml:"required"`
 }
 
 type v2EdgeConfig struct {
@@ -200,13 +200,13 @@ type v2EdgeConfig struct {
 }
 
 type v2EdgeBuffer struct {
-	Type            string   `yaml:"type"`
-	Size            int      `yaml:"size"`
-	Strategy        string   `yaml:"strategy"`
-	Key             []string `yaml:"key"`
-	DiskPath        string   `yaml:"disk_path"`
-	DiskMaxSize     int64    `yaml:"disk_max_size"`
-	DiskSyncInterval string  `yaml:"disk_sync_interval"`
+	Type             string   `yaml:"type"`
+	Size             int      `yaml:"size"`
+	Strategy         string   `yaml:"strategy"`
+	Key              []string `yaml:"key"`
+	DiskPath         string   `yaml:"disk_path"`
+	DiskMaxSize      int64    `yaml:"disk_max_size"`
+	DiskSyncInterval string   `yaml:"disk_sync_interval"`
 }
 
 type v2DeliverySpec struct {

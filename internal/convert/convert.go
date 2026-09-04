@@ -345,12 +345,12 @@ func dslOf(s *stage) string {
 
 // outEdge is the converted v3 edge-attribute form.
 type outEdge struct {
-	From         string
-	When         string
-	Route        string // v3 route sugar (sticky path only)
-	Delivery     map[string]any
+	From          string
+	When          string
+	Route         string // v3 route sugar (sticky path only)
+	Delivery      map[string]any
 	RequiredFalse bool
-	Buffer       map[string]any
+	Buffer        map[string]any
 }
 
 // outNode is one v3 node (before YAML emission).

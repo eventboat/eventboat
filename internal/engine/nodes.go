@@ -30,7 +30,7 @@ func (e *Engine) runTransform(node *ir.Node) {
 			e.Opts.Logf("[node %s] "+format, append([]any{node.Name}, args...)...)
 		}
 		invoker = node.Wasm.NewInvoker(node.Config.Wasm, nodeLogf, e.Opts.WasmSlowCallWarnMs)
-		defer invoker.Close()
+		defer func() { _ = invoker.Close() }()
 	}
 	ch := e.chans[node.Name]
 	for {

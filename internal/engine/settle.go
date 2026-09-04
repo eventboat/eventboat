@@ -180,17 +180,6 @@ func (t *settleTracker) snapshot() (outstanding int, settledThrough int64, arriv
 	return open, t.settledPtr - 1, t.arrivedMax
 }
 
-// srcFrontier returns the contiguous settled srcSeq of one source.
-func (t *settleTracker) srcFrontier(node string) int64 {
-	t.mu.Lock()
-	st := t.srcs[node]
-	t.mu.Unlock()
-	if st == nil {
-		return 0
-	}
-	return st.frontier()
-}
-
 // srcTracker tracks per-source settle frontiers for emissions of THIS run.
 // Replayed spool rows are not attributable to this run's source counter and
 // are ignored (redesign-v3-review.md: crash recovery replays from spool;

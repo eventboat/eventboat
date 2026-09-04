@@ -19,7 +19,7 @@ func openTestDB(t *testing.T, path string) *sql.DB {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { db.Close() })
+	t.Cleanup(func() { _ = db.Close() })
 	if _, err := db.Exec(`CREATE TABLE orders (
 		id INTEGER PRIMARY KEY, order_no TEXT, amount REAL, region TEXT, updated_at TEXT)`); err != nil {
 		t.Fatal(err)

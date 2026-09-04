@@ -103,14 +103,14 @@ func migrate(db *sql.DB) error {
 		var dflt any
 		var pk int
 		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
-			rows.Close()
+			_ = rows.Close()
 			return err
 		}
 		if name == "job_run_id" {
 			hasRunID = true
 		}
 	}
-	rows.Close()
+	_ = rows.Close()
 	if err := rows.Err(); err != nil {
 		return err
 	}
@@ -142,15 +142,15 @@ func OpenSQLite(path string) (*SQLite, error) {
 	// access is modest and serialized in practice.
 	db.SetMaxOpenConns(1)
 	if _, err := db.Exec(schema); err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, fmt.Errorf("store: migrate: %w", err)
 	}
 	if err := migrate(db); err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, err
 	}
 	if _, err := db.Exec(indexSchema); err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, fmt.Errorf("store: indexes: %w", err)
 	}
 	return &SQLite{db: db}, nil
@@ -209,7 +209,7 @@ func (s *SQLite) ReplayPage(pipeline string, afterSeq int64, limit int, fn func(
 			ingestStr string
 		)
 		if err := rows.Scan(&r.seq, &r.msg.ID, &r.msg.Codec, &r.msg.Raw, &meta, &r.msg.Cursor, &r.msg.SrcName, &r.msg.SrcSeq, &ingestStr); err != nil {
-			rows.Close()
+			_ = rows.Close()
 			return afterSeq, false, fmt.Errorf("store: replay scan: %w", err)
 		}
 		r.msg.Meta = unmarshalMeta([]byte(meta))
@@ -219,10 +219,10 @@ func (s *SQLite) ReplayPage(pipeline string, afterSeq int64, limit int, fn func(
 		collected = append(collected, r)
 	}
 	if err := rows.Err(); err != nil {
-		rows.Close()
+		_ = rows.Close()
 		return afterSeq, false, fmt.Errorf("store: replay: %w", err)
 	}
-	rows.Close()
+	_ = rows.Close()
 	last := afterSeq
 	for _, r := range collected {
 		if err := fn(r.seq, r.msg, r.ingest); err != nil {
@@ -308,7 +308,7 @@ func (s *SQLite) scanDeadLetters(query string, args ...any) ([]DeadLetter, error
 	if err != nil {
 		return nil, fmt.Errorf("store: list dead letters: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []DeadLetter
 	for rows.Next() {
 		var (
@@ -475,7 +475,7 @@ func (s *SQLite) GetJobRun(pipeline, runID string) (*JobRun, error) {
 	if err != nil {
 		return nil, fmt.Errorf("store: get job run: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	if !rows.Next() {
 		return nil, fmt.Errorf("store: job run %q not found", runID)
 	}
@@ -491,7 +491,7 @@ func (s *SQLite) JobRuns(pipeline string, limit int) ([]JobRun, error) {
 	if err != nil {
 		return nil, fmt.Errorf("store: list job runs: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []JobRun
 	for rows.Next() {
 		jr, err := scanJobRun(rows)
@@ -509,7 +509,7 @@ func (s *SQLite) RunnableJobRuns(pipeline string) ([]JobRun, error) {
 	if err != nil {
 		return nil, fmt.Errorf("store: runnable job runs: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []JobRun
 	for rows.Next() {
 		jr, err := scanJobRun(rows)

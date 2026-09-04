@@ -173,7 +173,7 @@ func cmdReplay(args []string, jsonOut bool) int {
 		}
 		st = sqlite
 	}
-	defer st.Close()
+	defer func() { _ = st.Close() }()
 
 	switch {
 	case *dlq || *jobRun != "":

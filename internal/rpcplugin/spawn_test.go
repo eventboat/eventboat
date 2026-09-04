@@ -44,7 +44,7 @@ func TestSpawnSourceDirect(t *testing.T) {
 	if err != nil {
 		t.Fatalf("spawn: %v", err)
 	}
-	defer src.Close()
+	defer func() { _ = src.Close() }()
 
 	if err := src.Init(nil); err != nil {
 		t.Fatalf("init: %v", err)

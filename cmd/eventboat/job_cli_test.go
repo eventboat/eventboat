@@ -25,7 +25,7 @@ func buildBinary(t *testing.T) string {
 			buildErr = err
 			return
 		}
-		exe.Close()
+		_ = exe.Close()
 		cmd := exec.Command("go", "build", "-o", exe.Name(), "../../cmd/eventboat")
 		cmd.Stderr = os.Stderr
 		if err := cmd.Run(); err != nil {
@@ -39,15 +39,6 @@ func buildBinary(t *testing.T) string {
 	}
 	t.Cleanup(func() {})
 	return binaryPath
-}
-
-func execCLI(t *testing.T, binary string, args ...string) string {
-	t.Helper()
-	out, err := exec.Command(binary, args...).CombinedOutput()
-	if err != nil {
-		t.Fatalf("eventboat %s: %v\n%s", strings.Join(args, " "), err, out)
-	}
-	return string(out)
 }
 
 // The job CLI acceptance: a backfill trigger with explicit parameters, then

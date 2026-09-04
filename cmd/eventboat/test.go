@@ -96,13 +96,13 @@ func cmdTest(args []string, jsonOut bool, out io.Writer) int {
 	}
 	if len(parseErrors) > 0 && !jsonOut {
 		for _, pe := range parseErrors {
-			fmt.Fprintf(out, "parse error: %s: %s\n", pe.File, pe.Error)
+			_, _ = fmt.Fprintf(out, "parse error: %s: %s\n", pe.File, pe.Error)
 		}
 	}
 	if len(files) == 0 {
 		if jsonOut {
 			b, _ := json.MarshalIndent(testCommandOutputJSON{Skipped: skipped, ParseErrors: parseErrors}, "", "  ")
-			fmt.Fprintln(out, string(b))
+			_, _ = fmt.Fprintln(out, string(b))
 		} else {
 			fmt.Fprintln(os.Stderr, "test: no test files found")
 		}
@@ -129,28 +129,28 @@ func cmdTest(args []string, jsonOut bool, out io.Writer) int {
 			outputs = append(outputs, outEntry)
 			continue
 		}
-		fmt.Fprintf(out, "suite %s (%s)\n", report.Suite, file)
+		_, _ = fmt.Fprintf(out, "suite %s (%s)\n", report.Suite, file)
 		for _, c := range report.Cases {
 			mark := "PASS"
 			if c.Status != "pass" {
 				mark = "FAIL"
 			}
-			fmt.Fprintf(out, "  %s  %s\n", mark, c.Name)
+			_, _ = fmt.Fprintf(out, "  %s  %s\n", mark, c.Name)
 			for _, f := range c.Failures {
-				fmt.Fprintf(out, "        %s\n", f)
+				_, _ = fmt.Fprintf(out, "        %s\n", f)
 			}
 		}
 		status := "ok"
 		if !report.OK() {
 			status = "FAILED"
 		}
-		fmt.Fprintf(out, "  suite %s\n", status)
+		_, _ = fmt.Fprintf(out, "  suite %s\n", status)
 	}
 	if jsonOut {
 		b, _ := json.MarshalIndent(testCommandOutputJSON{Skipped: skipped, ParseErrors: parseErrors, Suites: outputs}, "", "  ")
-		fmt.Fprintln(out, string(b))
+		_, _ = fmt.Fprintln(out, string(b))
 	} else if skipped > 0 {
-		fmt.Fprintf(out, "skipped %d non-suite yaml file(s)\n", skipped)
+		_, _ = fmt.Fprintf(out, "skipped %d non-suite yaml file(s)\n", skipped)
 	}
 	if !allOK || len(parseErrors) > 0 {
 		return 1

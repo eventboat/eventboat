@@ -1,0 +1,28 @@
+# golangci-lint v2 baseline (beta round, redesign-v3-review-beta.md R-B5).
+# Philosophy: the standard set (errcheck, govet, ineffassign, staticcheck,
+# unused) + misspell and gofmt — a hygiene floor, not a style machine.
+# Exclusions must be justified here; new linters join with a ruling.
+version: "2"
+
+linters:
+  default: standard
+  enable:
+    - misspell
+
+  exclusions:
+    # generated protocol stubs (protoc-gen-go)
+    # vendored official CESQL TCK (pinned to the sdk-go v2.16.2 tag)
+    paths:
+      - pkg/pluginv1
+      - internal/lang/cesqlhost/tck
+    # quickfix-class suggestions; not churning stable M4 code
+    rules:
+      - linters: [staticcheck]
+        text: "^QF1"
+
+formatters:
+  enable:
+    - gofmt
+
+run:
+  timeout: 5m

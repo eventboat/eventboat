@@ -130,7 +130,7 @@ sinks:
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer st2.Close()
+	defer func() { _ = st2.Close() }()
 	dls, err := st2.DeadLetters("replayme")
 	if err != nil || len(dls) != 1 || dls[0].MessageID != "skip-1" {
 		t.Fatalf("dead letters after --delete: %+v (%v)", dls, err)

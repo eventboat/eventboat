@@ -506,7 +506,8 @@ func checkDeclaredVersion(p *Pipeline, n *Node, registered int, file string, add
 // checkJobSemantics enforces the job-pipeline rules of §5.8 (M2 review):
 // pull-capability sources, cron syntax, parameter reference legality, hook
 // sink schemas and the continuous-pipeline rejections.
-func checkJobSemantics(p *Pipeline, reg *registry.Registry, parameters map[string]any, file string, add func(config.Diagnostic)) {	cfg := p.Config
+func checkJobSemantics(p *Pipeline, reg *registry.Registry, parameters map[string]any, file string, add func(config.Diagnostic)) {
+	cfg := p.Config
 	job := cfg.IsJob()
 
 	// Cron syntax.

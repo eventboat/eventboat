@@ -112,10 +112,10 @@ func RunFile(testFile string, reg *registry.Registry) (*Report, error) {
 		return nil, fmt.Errorf("%s: %w", testFile, err)
 	}
 	if spec.Pipeline == "" {
-		return nil, fmt.Errorf("%s: missing pipeline:", testFile)
+		return nil, fmt.Errorf("%s: missing pipeline", testFile)
 	}
 	if len(spec.Cases) == 0 {
-		return nil, fmt.Errorf("%s: no cases:", testFile)
+		return nil, fmt.Errorf("%s: no cases", testFile)
 	}
 
 	baseDir := filepath.Dir(testFile)

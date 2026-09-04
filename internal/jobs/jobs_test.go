@@ -635,7 +635,7 @@ func TestJobSkipIfSuccessful(t *testing.T) {
 // Source failure → run failed (distinct from partial); failure hook fires.
 func TestJobSourceFailureFailsRunAndFiresHook(t *testing.T) {
 	testkit.ResetFakePull()
-	var hookBody chan []byte = make(chan []byte, 1)
+	var hookBody = make(chan []byte, 1)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body := make([]byte, r.ContentLength)
 		_, _ = r.Body.Read(body)
@@ -703,7 +703,7 @@ sinks:
   out: { from: [t], memsink: { id: out } }
 `
 	path := filepath.Join(dir, "p.yaml")
-	writeFile(path, []byte(yamlText))
+	_ = writeFile(path, []byte(yamlText))
 	h := &jharness{t: t, reg: registry.New(), sinks: map[string]*recordingSink{}, yamlPath: path}
 	if err := builtin.RegisterAll(h.reg); err != nil {
 		t.Fatal(err)

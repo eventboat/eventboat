@@ -27,15 +27,15 @@ func buildExampleDescriptorSet() []byte {
 	msg := &descriptorpb.DescriptorProto{
 		Name: str("Metric"),
 		Field: []*descriptorpb.FieldDescriptorProto{
-			{Name: str("name"), Number: proto.Int32(1), Label: label(1), Type: ftype(9)},   // TYPE_STRING
-			{Name: str("value"), Number: proto.Int32(2), Label: label(1), Type: ftype(3)},  // TYPE_INT64
-			{Name: str("tags"), Number: proto.Int32(3), Label: label(3), Type: ftype(9)},   // repeated TYPE_STRING
+			{Name: str("name"), Number: proto.Int32(1), Label: label(1), Type: ftype(9)},  // TYPE_STRING
+			{Name: str("value"), Number: proto.Int32(2), Label: label(1), Type: ftype(3)}, // TYPE_INT64
+			{Name: str("tags"), Number: proto.Int32(3), Label: label(3), Type: ftype(9)},  // repeated TYPE_STRING
 		},
 	}
 	file := &descriptorpb.FileDescriptorProto{
-		Name:    str("example.proto"),
-		Package: str("eventboat.example"),
-		Syntax:  str("proto3"),
+		Name:        str("example.proto"),
+		Package:     str("eventboat.example"),
+		Syntax:      str("proto3"),
 		MessageType: []*descriptorpb.DescriptorProto{msg},
 	}
 	set := &descriptorpb.FileDescriptorSet{File: []*descriptorpb.FileDescriptorProto{file}}

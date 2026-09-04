@@ -82,7 +82,7 @@ func cmdTrigger(args []string, jsonOut bool) int {
 		}
 		st = sqlite
 	}
-	defer st.Close()
+	defer func() { _ = st.Close() }()
 
 	opts := jobs.Options{}
 	opts.EngineOptions = engine.DefaultOptions().WithLimits(lr.Pipeline.Limits)
@@ -201,7 +201,7 @@ func cmdJobs(args []string, jsonOut bool) int {
 		fmt.Fprintf(os.Stderr, "jobs: open store: %v\n", err)
 		return 2
 	}
-	defer st.Close()
+	defer func() { _ = st.Close() }()
 
 	switch sub {
 	case "list":

@@ -239,14 +239,14 @@ func (m *Manager) fireTick(ctx context.Context, tick time.Time, trigger string) 
 			return // this tick already succeeded (also makes catchup idempotent)
 		}
 	}
-	m.spawn(ctx, nil, trigger, tickID)
+	_, _, _ = m.spawn(ctx, nil, trigger, tickID)
 }
 
 // Trigger starts a manual run with caller-provided parameters (backfill).
 // It returns the run-id; wait=true blocks until the run reaches a terminal
 // state and additionally returns the final record.
 func (m *Manager) Trigger(ctx context.Context, params map[string]any, wait bool) (string, *store.JobRun, error) {
-	runID, jr, err := m.spawn(ctx, params, "manual", "")
+	runID, _, err := m.spawn(ctx, params, "manual", "")
 	if err != nil {
 		return "", nil, err
 	}
@@ -263,7 +263,7 @@ func (m *Manager) Trigger(ctx context.Context, params map[string]any, wait bool)
 	case <-ctx.Done():
 		return runID, nil, ctx.Err()
 	}
-	jr, err = m.st.GetJobRun(m.cfg.Name, runID)
+	jr, err := m.st.GetJobRun(m.cfg.Name, runID)
 	return runID, jr, err
 }
 
@@ -627,7 +627,7 @@ func (m *Manager) fireHook(ctx context.Context, which string, jr *store.JobRun) 
 	if err != nil {
 		return
 	}
-	defer sink.Close()
+	defer func() { _ = sink.Close() }()
 	summary, _ := json.Marshal(map[string]any{
 		"pipeline": jr.Pipeline, "run_id": jr.RunID, "status": jr.Status,
 		"trigger": jr.TriggerType, "scheduled_for": jr.ScheduledFor,

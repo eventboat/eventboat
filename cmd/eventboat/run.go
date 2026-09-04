@@ -191,7 +191,7 @@ func runJobPipeline(configPath string, pip *ir.Pipeline, reg *registry.Registry,
 		}
 		st = sqlite
 	}
-	defer st.Close()
+	defer func() { _ = st.Close() }()
 
 	opts := jobs.Options{}
 	opts.EngineOptions = engine.DefaultOptions().WithLimits(pip.Config.Limits)

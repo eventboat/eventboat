@@ -182,7 +182,7 @@ func TestWasmSlowCallWatchdog(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer compiled.Close(ctx)
+	defer func() { _ = compiled.Close(ctx) }()
 
 	var mu sync.Mutex
 	var logs []string
@@ -195,7 +195,7 @@ func TestWasmSlowCallWatchdog(t *testing.T) {
 	// Short-call phase: a 5s threshold leaves ample headroom even for a cold
 	// first invoke (instantiation + JSON) on a slow CI box under -race.
 	calm := compiled.NewInvoker(&config.WasmConfig{}, logf, 5000)
-	defer calm.Close()
+	defer func() { _ = calm.Close() }()
 	if _, err := calm.Invoke(ctx, []byte(`{"samples":[1,2,3]}`)); err != nil {
 		t.Fatal(err)
 	}
@@ -210,7 +210,7 @@ func TestWasmSlowCallWatchdog(t *testing.T) {
 	// call (10M float ops) must still complete — fast mode never kills — and
 	// the warning must fire exactly once (throttled per call).
 	hot := compiled.NewInvoker(&config.WasmConfig{}, logf, 1)
-	defer hot.Close()
+	defer func() { _ = hot.Close() }()
 	values := make([]float64, 200_000)
 	in, _ := json.Marshal(map[string]any{"samples": values, "passes": 50})
 	if _, err := hot.Invoke(ctx, in); err != nil {

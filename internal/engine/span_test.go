@@ -22,7 +22,7 @@ func spanRecorder() (*tracetest.InMemoryExporter, *sdktrace.TracerProvider) {
 func spanAttr(s tracetest.SpanStub, key string) (string, bool) {
 	for _, kv := range s.Attributes {
 		if string(kv.Key) == key {
-			return kv.Value.Emit(), true
+			return kv.Value.AsString(), true
 		}
 	}
 	return "", false

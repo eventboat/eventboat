@@ -65,7 +65,7 @@ func TestSupervisorRestartsCrashedPlugin(t *testing.T) {
 	if err != nil {
 		t.Fatalf("spawn: %v", err)
 	}
-	defer src.Close()
+	defer func() { _ = src.Close() }()
 	s := src.(*source)
 	if s.sup == nil {
 		t.Fatal("restart policy must install a supervisor")
@@ -125,7 +125,7 @@ func TestFastFailDefaultKeepsM3Semantics(t *testing.T) {
 	if err != nil {
 		t.Fatalf("spawn: %v", err)
 	}
-	defer src.Close()
+	defer func() { _ = src.Close() }()
 	s := src.(*source)
 	if s.sup != nil {
 		t.Fatal("default policy must stay fast-fail (no supervisor)")

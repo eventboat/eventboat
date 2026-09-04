@@ -12,7 +12,7 @@ import (
 
 func exerciseStore(t *testing.T, st Store) {
 	t.Helper()
-	defer st.Close()
+	defer func() { _ = st.Close() }()
 
 	msg := registry.Message{
 		ID:      "m-1",
@@ -110,7 +110,7 @@ func TestSQLiteStore(t *testing.T) {
 // dead letters, since-filters and windowed replay pagination.
 func exerciseJobStore(t *testing.T, st Store) {
 	t.Helper()
-	defer st.Close()
+	defer func() { _ = st.Close() }()
 
 	now := time.Date(2026, 9, 3, 12, 0, 0, 0, time.UTC)
 	// Spool 5 rows for pagination.
@@ -244,7 +244,7 @@ func TestSQLiteMigratesM1DeadLetterTable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	st.Close()
+	_ = st.Close()
 
 	// Simulate an M1 database: drop the column by recreating the table
 	// without it, as the M1 schema did.
@@ -255,7 +255,7 @@ func TestSQLiteMigratesM1DeadLetterTable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen with migration: %v", err)
 	}
-	defer st2.Close()
+	defer func() { _ = st2.Close() }()
 	if err := st2.WriteDeadLetter(DeadLetter{Pipeline: "p", MessageID: "m", RunID: "run-9", Node: "out", Reason: "x", Raw: []byte(`{}`)}); err != nil {
 		t.Fatal(err)
 	}
@@ -270,7 +270,7 @@ func rewriteM1DeadLetter(path string) error {
 	if err != nil {
 		return err
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	_, err = db.Exec(`
 		DROP TABLE dead_letter;
 		CREATE TABLE dead_letter (
@@ -315,7 +315,7 @@ func TestSQLitePersistsAcrossReopen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer st2.Close()
+	defer func() { _ = st2.Close() }()
 	if cp, _ := st2.Checkpoint("p"); cp != 1 {
 		t.Fatalf("checkpoint lost across reopen: %d", cp)
 	}

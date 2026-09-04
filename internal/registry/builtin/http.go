@@ -45,10 +45,9 @@ type httpServerSource struct {
 	path    string
 	maxBody int64
 
-	mu      sync.Mutex
-	seq     int64
-	server  *http.Server
-	started chan struct{}
+	mu     sync.Mutex
+	seq    int64
+	server *http.Server
 }
 
 func (s *httpServerSource) Init(state []byte) error { return nil }

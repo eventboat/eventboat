@@ -68,14 +68,14 @@ func Compile(ctx context.Context, path string, cfg *config.WasmConfig) (*Compile
 	wasi_snapshot_preview1.MustInstantiate(ctx, r)
 	compiled, err := r.CompileModule(ctx, wasmBytes)
 	if err != nil {
-		r.Close(ctx)
+		_ = r.Close(ctx)
 		return nil, fmt.Errorf("wasmhost: compile %s: %w", path, err)
 	}
 	// ABI check up front: a module missing the exports fails verify, not the
 	// first message (gate 1 catches it).
 	for _, name := range []string{"_initialize", "eb_alloc", "transform"} {
 		if compiled.ExportedFunctions()[name] == nil {
-			r.Close(ctx)
+			_ = r.Close(ctx)
 			return nil, fmt.Errorf("wasmhost: module %s does not export %q", path, name)
 		}
 	}

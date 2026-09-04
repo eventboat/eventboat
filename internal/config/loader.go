@@ -127,8 +127,8 @@ func LoadBytes(file string, data []byte) *Result {
 		"apiVersion": true, "kind": true, "metadata": true,
 		"edge_defaults": true, "constants": true, "limits": true,
 		"telemetry": true,
-		"run": true, "parameters": true, "hooks": true,
-		"codecs": true,
+		"run":       true, "parameters": true, "hooks": true,
+		"codecs":  true,
 		"sources": true, "transforms": true, "sinks": true,
 	}
 	for _, kv := range mappingPairs(root) {

@@ -9,8 +9,8 @@ import (
 // LSP protocol shape subset used for diagnostics.
 
 type publishDiagnosticsParams struct {
-	URI         string        `json:"uri"`
-	Diagnostics []lspDiag     `json:"diagnostics"`
+	URI         string    `json:"uri"`
+	Diagnostics []lspDiag `json:"diagnostics"`
 }
 
 type lspDiag struct {

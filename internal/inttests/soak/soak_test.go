@@ -41,7 +41,6 @@ func (s *recordingSink) Write(ctx context.Context, msgs []registry.Message) erro
 	return nil
 }
 func (s *recordingSink) Close() error { return nil }
-func (s *recordingSink) count() int64 { s.mu.Lock(); defer s.mu.Unlock(); return s.n }
 
 func registerTestPlugins(t *testing.T, reg *registry.Registry) {
 	t.Helper()
@@ -146,7 +145,7 @@ sinks:
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer st2raw.Close()
+	defer func() { _ = st2raw.Close() }()
 	st2 := &testkit.StoreWrapper{Inner: st2raw}
 	st2.DeadLetterHook = func(dl store.DeadLetter) error {
 		if rand.IntN(4) == 0 {

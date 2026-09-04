@@ -104,17 +104,17 @@ func BenchmarkHeavyTransform(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	defer fastCompiled.Close(ctx)
+	defer func() { _ = fastCompiled.Close(ctx) }()
 	fastInv := fastCompiled.NewInvoker(&config.WasmConfig{}, nil, 0)
-	defer fastInv.Close()
+	defer func() { _ = fastInv.Close() }()
 
 	protectedCompiled, err := Compile(ctx, path, &config.WasmConfig{TimeoutMs: 1000})
 	if err != nil {
 		b.Fatal(err)
 	}
-	defer protectedCompiled.Close(ctx)
+	defer func() { _ = protectedCompiled.Close(ctx) }()
 	protectedInv := protectedCompiled.NewInvoker(&config.WasmConfig{TimeoutMs: 1000}, nil, 0)
-	defer protectedInv.Close()
+	defer func() { _ = protectedInv.Close() }()
 
 	b.Run("wasm_heavy", func(b *testing.B) { // default: fast mode
 		b.ReportAllocs()

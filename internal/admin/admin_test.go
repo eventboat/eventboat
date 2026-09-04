@@ -63,7 +63,7 @@ func TestAdminRESTSurface(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer res.Body.Close()
+		defer func() { _ = res.Body.Close() }()
 		b, _ := io.ReadAll(res.Body)
 		if res.StatusCode != wantCode {
 			t.Fatalf("%s: status %d, want %d: %s", path, res.StatusCode, wantCode, b)
@@ -76,7 +76,7 @@ func TestAdminRESTSurface(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer res.Body.Close()
+		defer func() { _ = res.Body.Close() }()
 		b, _ := io.ReadAll(res.Body)
 		if res.StatusCode != wantCode {
 			t.Fatalf("GET %s: status %d, want %d: %s", path, res.StatusCode, wantCode, b)
@@ -116,7 +116,7 @@ func TestAdminRESTSurface(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer res.Body.Close()
+	defer func() { _ = res.Body.Close() }()
 	if ct := res.Header.Get("Content-Type"); ct != "text/event-stream" {
 		t.Fatalf("SSE content type = %q", ct)
 	}

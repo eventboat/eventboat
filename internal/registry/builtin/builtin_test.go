@@ -25,16 +25,6 @@ func newReg(t *testing.T) *registry.Registry {
 	return reg
 }
 
-func wantSchemaError(t *testing.T, err error) {
-	t.Helper()
-	if err == nil {
-		t.Fatal("expected schema validation error, got nil")
-	}
-	if !strings.Contains(err.Error(), "schema validation") {
-		t.Fatalf("error is not a schema validation failure: %v", err)
-	}
-}
-
 // --- codecs ---
 
 func TestCodecsRoundTrip(t *testing.T) {

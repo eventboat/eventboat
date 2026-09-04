@@ -63,7 +63,7 @@ func cmdConvert(args []string, jsonOut bool) int {
 			return 2
 		}
 	} else {
-		os.Stdout.Write(res.YAML)
+		_, _ = os.Stdout.Write(res.YAML)
 	}
 	if *reportPath != "" {
 		if err := os.WriteFile(*reportPath, []byte(res.Report.Markdown()), 0o644); err != nil {

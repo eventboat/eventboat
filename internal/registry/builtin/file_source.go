@@ -54,7 +54,6 @@ type fileSource struct {
 	committedOff int64
 	pending      map[int64]int64 // srcSeq -> emitted end offset
 	nextSeq      int64
-	sawEOF       bool
 }
 
 func (s *fileSource) Init(state []byte) error {
@@ -115,7 +114,7 @@ func (s *fileSource) pump(ctx context.Context, emit func(registry.Message)) {
 			return
 		}
 		if _, err := f.Seek(s.nextOffset, io.SeekStart); err != nil {
-			f.Close()
+			_ = f.Close()
 			return
 		}
 		s.f = f
@@ -136,7 +135,7 @@ func (s *fileSource) pump(ctx context.Context, emit func(registry.Message)) {
 		if err != nil {
 			if !errors.Is(err, io.EOF) {
 				// Read error (possibly file replaced): reopen on next poll.
-				s.f.Close()
+				_ = s.f.Close()
 				s.f = nil
 				s.reader = nil
 			}

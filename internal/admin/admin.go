@@ -144,7 +144,7 @@ func Handler(svc *ops.Service, metricsHandler http.Handler, mcpHandler http.Hand
 			return
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
-		fmt.Fprint(w, "event: hello\ndata: {}\n\n")
+		_, _ = fmt.Fprint(w, "event: hello\ndata: {}\n\n")
 		fl.Flush()
 		events, unsub := svc.Subscribe()
 		defer unsub()
@@ -156,11 +156,11 @@ func Handler(svc *ops.Service, metricsHandler http.Handler, mcpHandler http.Hand
 				return
 			case ev := <-events:
 				b, _ := json.Marshal(ev.Data)
-				fmt.Fprintf(w, "event: %s\ndata: %s\n\n", ev.Type, b)
+				_, _ = fmt.Fprintf(w, "event: %s\ndata: %s\n\n", ev.Type, b)
 				fl.Flush()
 			case <-ticker.C:
 				b, _ := json.Marshal(svc.Status())
-				fmt.Fprint(w, "event: status\ndata: "+string(b)+"\n\n")
+				_, _ = fmt.Fprint(w, "event: status\ndata: "+string(b)+"\n\n")
 				fl.Flush()
 			}
 		}
@@ -186,9 +186,7 @@ func Handler(svc *ops.Service, metricsHandler http.Handler, mcpHandler http.Hand
 }
 
 // Server runs the admin listener.
-type Server struct {
-	http *http.Server
-}
+type Server struct{}
 
 // Serve starts the HTTP server (blocks until ctx is done).
 func Serve(ctx context.Context, listen string, handler http.Handler) error {

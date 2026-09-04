@@ -166,7 +166,7 @@ func (s *sqlSource) Pull(ctx context.Context, emit func(registry.Message)) error
 	if err != nil {
 		return fmt.Errorf("sql source: open: %w", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	// Page statements are built with synthetic :__eb_* placeholders so the
 	// rewriter assigns driver numbering consistently with the user's :args
@@ -223,7 +223,7 @@ func (s *sqlSource) Pull(ctx context.Context, emit func(registry.Message)) error
 		for rows.Next() {
 			row, rerr := scanRow(rows)
 			if rerr != nil {
-				rows.Close()
+				_ = rows.Close()
 				return fmt.Errorf("sql source: scan: %w", rerr)
 			}
 			count++
@@ -238,10 +238,10 @@ func (s *sqlSource) Pull(ctx context.Context, emit func(registry.Message)) error
 			}
 		}
 		if err := rows.Err(); err != nil {
-			rows.Close()
+			_ = rows.Close()
 			return fmt.Errorf("sql source: rows: %w", err)
 		}
-		rows.Close()
+		_ = rows.Close()
 		if s.emit == "page" && count > 0 {
 			s.mu.Lock()
 			s.nextSeq++

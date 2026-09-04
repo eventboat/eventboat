@@ -90,8 +90,8 @@ func TestCSVCodecHeaderMode(t *testing.T) {
 
 func TestCSVCodecErrorPaths(t *testing.T) {
 	// Factory guards.
-	newCodecErr(t, "csv", map[string]any{}, "")
-	newCodecErr(t, "csv", map[string]any{"header": true, "columns": []any{map[string]any{"name": "x"}}}, "")
+	_ = newCodecErr(t, "csv", map[string]any{}, "")
+	_ = newCodecErr(t, "csv", map[string]any{"header": true, "columns": []any{map[string]any{"name": "x"}}}, "")
 	c := newCodec(t, "csv", map[string]any{"columns": []any{map[string]any{"name": "n", "type": "int"}}}, "")
 	if _, err := c.Decode([]byte("not-an-int")); err == nil {
 		t.Fatal("bad int accepted")
@@ -158,8 +158,8 @@ func TestAvroCodecRoundTrip(t *testing.T) {
 }
 
 func TestAvroCodecErrorPaths(t *testing.T) {
-	newCodecErr(t, "avro", map[string]any{"schema": "not json {"}, "")
-	newCodecErr(t, "avro", map[string]any{}, "")
+	_ = newCodecErr(t, "avro", map[string]any{"schema": "not json {"}, "")
+	_ = newCodecErr(t, "avro", map[string]any{}, "")
 	c := newCodec(t, "avro", map[string]any{"schema": avroTestSchema}, "")
 	if _, err := c.Decode([]byte{0x01, 0x02, 0x03}); err == nil {
 		t.Fatal("garbage bytes accepted")
@@ -210,8 +210,8 @@ func TestProtobufCodecErrorPaths(t *testing.T) {
 		t.Fatal(err)
 	}
 	setPath := filepath.Join(dir, "testdata", "example.descr")
-	newCodecErr(t, "protobuf", map[string]any{"descriptor_set": "missing.descr", "message": "x.Y"}, dir)
-	newCodecErr(t, "protobuf", map[string]any{"descriptor_set": setPath, "message": "no.Such"}, dir)
+	_ = newCodecErr(t, "protobuf", map[string]any{"descriptor_set": "missing.descr", "message": "x.Y"}, dir)
+	_ = newCodecErr(t, "protobuf", map[string]any{"descriptor_set": setPath, "message": "no.Such"}, dir)
 	c := newCodec(t, "protobuf", map[string]any{"descriptor_set": setPath, "message": "eventboat.example.Metric"}, dir)
 	if _, err := c.Decode([]byte{0xff, 0xff}); err == nil {
 		t.Fatal("garbage bytes accepted")

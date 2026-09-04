@@ -248,7 +248,7 @@ func seedOrdersDB(t *testing.T, path string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	mustExec(t, db, `CREATE TABLE orders (id INTEGER PRIMARY KEY, order_no TEXT, amount REAL, updated_at TEXT)`)
 	for i := 0; i < 6; i++ {
 		day := 1 + i/3

@@ -230,20 +230,20 @@ func New(p *ir.Pipeline, st store.Store, reg *registry.Registry, opts Options) (
 	}
 
 	e := &Engine{
-		IR:            p,
-		Store:         st,
-		Reg:           reg,
-		Opts:          opts,
-		chans:         map[string]chan *instance{},
-		sinks:         map[string]registry.Sink{},
-		codecs:        map[string]registry.Codec{},
-		sources:       map[string]registry.Source{},
-		acquired:      map[int64]bool{},
-		srcErr:        map[string]error{},
-		srcDone:       map[string]bool{},
-		acceptedAt:    map[int64]time.Time{},
-		srcPersisted:  map[string]int64{},
-		spans:         map[int64]trace.Span{},
+		IR:           p,
+		Store:        st,
+		Reg:          reg,
+		Opts:         opts,
+		chans:        map[string]chan *instance{},
+		sinks:        map[string]registry.Sink{},
+		codecs:       map[string]registry.Codec{},
+		sources:      map[string]registry.Source{},
+		acquired:     map[int64]bool{},
+		srcErr:       map[string]error{},
+		srcDone:      map[string]bool{},
+		acceptedAt:   map[int64]time.Time{},
+		srcPersisted: map[string]int64{},
+		spans:        map[int64]trace.Span{},
 	}
 
 	for _, name := range p.Order {
@@ -431,9 +431,6 @@ func (e *Engine) codec(name string, reg *registry.Registry) (registry.Codec, err
 	e.codecs[name] = c
 	return c, nil
 }
-
-// srcFrontier reports the contiguous settled srcSeq of one source (tests).
-func (e *Engine) srcFrontierOf(name string) int64 { return e.settle.srcFrontier(name) }
 
 // Run replays the spool beyond the checkpoint, starts sources and workers,
 // and blocks until ctx is done.

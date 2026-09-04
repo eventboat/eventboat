@@ -100,4 +100,3 @@ sinks:
 		t.Fatalf("delivered %d messages, want 3", len(delivered))
 	}
 }
-

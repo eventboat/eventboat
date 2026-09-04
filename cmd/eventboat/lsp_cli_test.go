@@ -46,8 +46,8 @@ func TestLSPCommandWiring(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("server did not stop")
 	}
-	inW.Close()
-	outW.Close()
+	_ = inW.Close()
+	_ = outW.Close()
 }
 
 // Usage errors.

@@ -14,13 +14,13 @@ func testContext() context.Context { return context.Background() }
 // harness drives the server over in-process pipes — the same byte protocol
 // a real editor speaks over stdio.
 type harness struct {
-	t       *testing.T
-	srv     *Server
-	w       io.Writer          // client → server
-	r       *bufio.Reader      // server → client
-	next    int
-	done    chan error
-	exited  bool // set when done was consumed by a waitExit call
+	t      *testing.T
+	srv    *Server
+	w      io.Writer     // client → server
+	r      *bufio.Reader // server → client
+	next   int
+	done   chan error
+	exited bool // set when done was consumed by a waitExit call
 }
 
 func newHarness(t *testing.T) *harness {
@@ -29,13 +29,13 @@ func newHarness(t *testing.T) *harness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	upR, upW := io.Pipe()    // client writes → server reads
+	upR, upW := io.Pipe()     // client writes → server reads
 	downR, downW := io.Pipe() // server writes → client reads
 	h := &harness{t: t, srv: srv, w: upW, r: bufio.NewReader(downR), done: make(chan error, 1)}
 	go func() { h.done <- srv.Serve(testContext(), upR, downW) }()
 	t.Cleanup(func() {
-		upW.Close()
-		downW.Close()
+		_ = upW.Close()
+		_ = downW.Close()
 		if h.exited {
 			return
 		}
@@ -220,7 +220,7 @@ func TestDiagnosticsRoundTrip(t *testing.T) {
 
 	// didChange to a valid pipeline → diagnostics clear.
 	h.notify("textDocument/didChange", map[string]any{
-		"textDocument": map[string]any{"uri": "file:///p.yaml", "version": 2},
+		"textDocument":   map[string]any{"uri": "file:///p.yaml", "version": 2},
 		"contentChanges": []map[string]any{{"text": fixedDoc}},
 	})
 	notif = h.awaitNotification("textDocument/publishDiagnostics")

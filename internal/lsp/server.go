@@ -19,9 +19,8 @@ type Server struct {
 	reg *registry.Registry
 	svc *ops.Service
 
-	mu       sync.Mutex
-	docs     map[string]string // uri -> current text
-	shutdown bool
+	mu   sync.Mutex
+	docs map[string]string // uri -> current text
 
 	outMu sync.Mutex
 	out   io.Writer // connection writer, set by Serve

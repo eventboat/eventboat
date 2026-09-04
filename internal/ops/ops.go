@@ -164,7 +164,7 @@ func (s *Service) Test(suiteContent, pipelineContent string) (*testrun.Report, e
 	if err != nil {
 		return nil, err
 	}
-	defer os.RemoveAll(dir)
+	defer func() { _ = os.RemoveAll(dir) }()
 	suitePath := filepath.Join(dir, "suite.yaml")
 	if pipelineContent != "" {
 		if err := os.WriteFile(filepath.Join(dir, "pipeline.yaml"), []byte(pipelineContent), 0o644); err != nil {

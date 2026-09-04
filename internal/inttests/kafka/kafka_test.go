@@ -92,7 +92,7 @@ func mustCreateTopic(t *testing.T, topic string, partitions int) {
 func produce(t *testing.T, topic string, n int, payload func(i int) []byte) {
 	t.Helper()
 	w := &kafka.Writer{Addr: kafka.TCP(broker), Topic: topic, Balancer: &kafka.RoundRobin{}}
-	defer w.Close()
+	defer func() { _ = w.Close() }()
 	var msgs []kafka.Message
 	for i := 0; i < n; i++ {
 		msgs = append(msgs, kafka.Message{Value: payload(i)})
@@ -230,7 +230,7 @@ sinks:
 		Brokers: []string{broker}, Topic: "int-out", GroupID: "int-verifier",
 		MaxWait: 500 * time.Millisecond,
 	})
-	defer r.Close()
+	defer func() { _ = r.Close() }()
 	seen := map[int]bool{}
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()

@@ -224,10 +224,10 @@ sinks:
 }
 
 func TestEnvSubstitutionForms(t *testing.T) {
-	os.Setenv("EB_TEST_BROKERS", "broker1:9092")
-	os.Setenv("EB_TEST_WORKERS", "4")
-	defer os.Unsetenv("EB_TEST_BROKERS")
-	defer os.Unsetenv("EB_TEST_WORKERS")
+	_ = os.Setenv("EB_TEST_BROKERS", "broker1:9092")
+	_ = os.Setenv("EB_TEST_WORKERS", "4")
+	defer func() { _ = os.Unsetenv("EB_TEST_BROKERS") }()
+	defer func() { _ = os.Unsetenv("EB_TEST_WORKERS") }()
 
 	res := LoadBytes("p.yaml", []byte(`
 apiVersion: eventboat/v3
@@ -384,8 +384,8 @@ sinks:
 // constants and plain env vars keep working; dotted references are not
 // mistaken for env vars.
 func TestScopedSubstitutionConstantsAndEnvStillWork(t *testing.T) {
-	os.Setenv("EB_TEST_OK_VAR", "prod")
-	defer os.Unsetenv("EB_TEST_OK_VAR")
+	_ = os.Setenv("EB_TEST_OK_VAR", "prod")
+	defer func() { _ = os.Unsetenv("EB_TEST_OK_VAR") }()
 	res := LoadBytes("p.yaml", []byte(`
 apiVersion: eventboat/v3
 kind: Pipeline

@@ -33,9 +33,9 @@ func TestInvokeRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer compiled.Close(ctx)
+	defer func() { _ = compiled.Close(ctx) }()
 	inv := compiled.NewInvoker(nil, nil, 0)
-	defer inv.Close()
+	defer func() { _ = inv.Close() }()
 
 	values := make([]float64, 100)
 	for i := range values {
@@ -73,9 +73,9 @@ func TestInvokeGuestError(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer compiled.Close(ctx)
+	defer func() { _ = compiled.Close(ctx) }()
 	inv := compiled.NewInvoker(&config.WasmConfig{}, nil, 0)
-	defer inv.Close()
+	defer func() { _ = inv.Close() }()
 
 	// Empty values: the guest reports a domain error via eb_last_error.
 	if _, err := inv.Invoke(ctx, []byte(`{"samples":[]}`)); err == nil || !strings.Contains(err.Error(), "samples must not be empty") {
@@ -97,9 +97,9 @@ func TestInvokeTimeoutKillsAndRecovers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer compiled.Close(ctx)
+	defer func() { _ = compiled.Close(ctx) }()
 	inv := compiled.NewInvoker(&config.WasmConfig{TimeoutMs: 200, MaxMemoryPages: 1024}, nil, 0)
-	defer inv.Close()
+	defer func() { _ = inv.Close() }()
 
 	// Huge input with many passes: the guest cannot finish in 200ms.
 	values := make([]float64, 200_000)

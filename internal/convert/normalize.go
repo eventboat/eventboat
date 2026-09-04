@@ -12,24 +12,24 @@ import (
 // knowledge of its route table (convert.go, redesign-v3-review-m4.md R3).
 
 type stage struct {
-	ID       string
-	Kind     string // "source" | "transform" | "sink"
-	Type     string
-	Decoder  *v2CodecRef
-	Encoder  *v2CodecRef
-	Workers  int
-	Batch    *v2BatchConfig
-	Ordering string
+	ID          string
+	Kind        string // "source" | "transform" | "sink"
+	Type        string
+	Decoder     *v2CodecRef
+	Encoder     *v2CodecRef
+	Workers     int
+	Batch       *v2BatchConfig
+	Ordering    string
 	MaxInFlight int
-	Config   map[string]any
+	Config      map[string]any
 	// Transform-only extras.
 	Predicate string // v2 transform.predicate (pre-edge condition, rare)
 	ErrorMode string
 }
 
 type edge struct {
-	From     string
-	To       string
+	From      string
+	To        string
 	Condition string // explicit condition (never route-baked)
 	Route     string // named route attr, resolved during route folding
 	Buffer    *v2EdgeBuffer
@@ -118,10 +118,7 @@ func normalize(cfg *v2PipelineConfig) ([]*stage, []edge, []string, error) {
 			index[edgeKey(edges[i].From, edges[i].To)] = i
 		}
 		for _, dep := range cfg.Edges {
-			e := edge{
-				From: dep.From, To: dep.To, Condition: dep.Condition, Route: dep.Route,
-				Buffer: dep.Buffer, Delivery: dep.Delivery, Required: dep.Required,
-			}
+			e := edge(dep)
 			key := edgeKey(e.From, e.To)
 			if idx, ok := index[key]; ok {
 				edges[idx] = e
