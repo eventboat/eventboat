@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -11,25 +12,82 @@ import (
 	"github.com/eventboat/eventboat/internal/obs"
 	"github.com/eventboat/eventboat/internal/registry"
 	"github.com/eventboat/eventboat/internal/store"
+	"github.com/eventboat/eventboat/internal/wasmhost"
 )
 
-// runTransform executes script and split transforms. Script failures retry
-// per the incoming edge's delivery policy, then dead letter with the
-// Starlark backtrace (review R6: incoming edge policy governs).
+// runTransform executes script, split and wasm transforms. Script and wasm
+// failures retry per the incoming edge's delivery policy, then dead letter
+// (review R6: incoming edge policy governs).
 func (e *Engine) runTransform(node *ir.Node) {
 	defer e.wg.Done()
+	// One wasm invoker per worker goroutine: wazero module instances are not
+	// goroutine-safe and die on traps (review-m3 R4).
+	var invoker *wasmhost.Invoker
+	if node.Wasm != nil {
+		invoker = node.Wasm.NewInvoker(node.Config.Wasm, e.Opts.Logf)
+		defer invoker.Close()
+	}
 	ch := e.chans[node.Name]
 	for {
 		select {
 		case <-e.ctx.Done():
 			return
 		case inst := <-ch:
-			e.processTransform(node, inst)
+			e.processTransform(node, inst, invoker)
 		}
 	}
 }
 
-func (e *Engine) processTransform(node *ir.Node, inst *instance) {
+func (e *Engine) processTransform(node *ir.Node, inst *instance, wasmInvoker *wasmhost.Invoker) {
+	if node.Wasm != nil && wasmInvoker != nil {
+		e.Metrics.TransformRuns.Add(1)
+		retries, backoff := e.deliveryOf(inst.via)
+		start := time.Now()
+
+		var werr error
+		for attempt := 0; attempt <= retries; attempt++ {
+			if attempt > 0 {
+				e.Metrics.Retries.Add(1)
+				if !e.sleepBackoff(backoff, attempt) {
+					// Shutting down mid-retry: leave unsettled for replay.
+					return
+				}
+			}
+			var in []byte
+			in, werr = json.Marshal(inst.msg.Decoded)
+			if werr != nil {
+				werr = fmt.Errorf("wasm: encode payload: %w", werr)
+				continue
+			}
+			var out []byte
+			out, werr = wasmInvoker.Invoke(e.ctx, in)
+			if werr != nil {
+				continue
+			}
+			if len(out) == 0 {
+				werr = fmt.Errorf("wasm: transform returned empty output (payload must be JSON)")
+				continue
+			}
+			var decoded any
+			if err := json.Unmarshal(out, &decoded); err != nil {
+				werr = fmt.Errorf("wasm: output is not valid JSON: %v", err)
+				continue
+			}
+			inst.msg.Decoded = decoded
+			werr = nil
+			break
+		}
+		if werr != nil {
+			timedOut := strings.Contains(werr.Error(), "exceeded")
+			e.Opts.Obs.RecordWasm(e.IR.Config.Name, node.Name, time.Since(start), timedOut)
+			e.deadLetter(inst, node.Name, "wasm: "+strings.TrimPrefix(werr.Error(), "wasm: "), "")
+			return
+		}
+		e.Opts.Obs.RecordWasm(e.IR.Config.Name, node.Name, time.Since(start), false)
+		e.fanOut(node, inst.seq, inst.msg)
+		return
+	}
+
 	if node.Script != nil {
 		e.Metrics.TransformRuns.Add(1)
 		retries, backoff := e.deliveryOf(inst.via)

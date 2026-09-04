@@ -53,6 +53,7 @@ type Obs struct {
 	SpoolFailures         metric.Int64Counter
 	BackpressureEvents    metric.Int64Counter
 	ScriptBudgetExhausted metric.Int64Counter
+	WasmTimeouts          metric.Int64Counter
 	JobsStarted           metric.Int64Counter
 	JobsOverlapSkipped    metric.Int64Counter
 	JobsCatchupSkipped    metric.Int64Counter
@@ -64,6 +65,7 @@ type Obs struct {
 	SinkWriteDuration metric.Float64Histogram
 	JobDuration       metric.Float64Histogram
 	SettleLatency     metric.Float64Histogram
+	WasmDuration      metric.Float64Histogram
 
 	InFlight       metric.Float64Gauge
 	SpoolDepth     metric.Float64Gauge
@@ -208,6 +210,7 @@ func (o *Obs) createInstruments() error {
 	o.SpoolFailures = newCounter("eventboat_spool_failures_total", "Spool append failures (message not delivered)")
 	o.BackpressureEvents = newCounter("eventboat_backpressure_events_total", "Source admissions blocked by the high watermark")
 	o.ScriptBudgetExhausted = newCounter("eventboat_script_step_budget_exhausted_total", "Starlark executions that hit the step budget")
+	o.WasmTimeouts = newCounter("eventboat_wasm_timeouts_total", "WASM transform invocations killed by the per-invoke wall-clock budget (review-m3 R1)")
 	o.JobsStarted = newCounter("eventboat_jobs_started_total", "Job runs started")
 	o.JobsOverlapSkipped = newCounter("eventboat_jobs_overlap_skipped_total", "Triggers rejected by overlap:skip")
 	o.JobsCatchupSkipped = newCounter("eventboat_jobs_catchup_skipped_total", "Missed schedule ticks outside the catchup window")
@@ -216,6 +219,7 @@ func (o *Obs) createInstruments() error {
 	o.JobRowsDelivered = newCounter("eventboat_job_rows_delivered_total", "Rows delivered by job runs")
 
 	o.ScriptDuration = newHist("eventboat_script_duration_seconds", "Starlark script execution duration")
+	o.WasmDuration = newHist("eventboat_wasm_transform_duration_seconds", "WASM transform invocation duration")
 	o.SinkWriteDuration = newHist("eventboat_sink_write_duration_seconds", "Sink batch write duration")
 	o.JobDuration = newHist("eventboat_job_duration_seconds", "Job run wall-clock duration")
 	o.SettleLatency = newHist("eventboat_settle_latency_seconds", "Accept-to-settle latency")
@@ -293,6 +297,22 @@ func (o *Obs) RecordSinkWrite(pipeline, node string, d time.Duration) {
 	}
 	o.SinkWriteDuration.Record(context.Background(), d.Seconds(), metric.WithAttributes(
 		attribute.String("pipeline", pipeline), attribute.String("node", node)))
+}
+
+// RecordWasm observes one WASM transform invocation; timedOut feeds the
+// per-invoke budget counter (review-m3 R1).
+func (o *Obs) RecordWasm(pipeline, node string, d time.Duration, timedOut bool) {
+	if o == nil {
+		return
+	}
+	ctx := context.Background()
+	attrs := metric.WithAttributes(attribute.String("pipeline", pipeline), attribute.String("node", node))
+	if o.WasmDuration != nil {
+		o.WasmDuration.Record(ctx, d.Seconds(), attrs)
+	}
+	if timedOut && o.WasmTimeouts != nil {
+		o.WasmTimeouts.Add(ctx, 1, attrs)
+	}
 }
 
 // RecordJobStart counts a run start by trigger.

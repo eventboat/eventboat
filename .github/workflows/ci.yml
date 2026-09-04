@@ -22,7 +22,19 @@ jobs:
       - name: Vet
         run: go vet ./...
 
-      # Includes the seven TestInvariant_* reliability tests and the
-      # examples verify/test acceptance gate (cmd/eventboat/examples_test.go).
+      # Rebuild the WASM guest from source and run the wasm tests against the
+      # fresh artifact (committed .wasm files exist so local `go test` works
+      # without a toolchain dance; CI proves the source matches reality).
+      - name: Build WASM guest
+        run: |
+          cd internal/wasmhost/testdata/guest
+          GOOS=wasip1 GOARCH=wasm go build -buildmode=c-shared -o ../aggregate.wasm .
+
+      # Includes the seven TestInvariant_* reliability tests, the examples
+      # verify/test acceptance gate (cmd/eventboat/examples_test.go), the
+      # third-party gRPC plugin acceptance (internal/rpcplugin), the CESQL
+      # TCK (internal/lang/cesqlhost) and the WASM tier tests.
       - name: Test (race)
         run: go test -race ./...
+        env:
+          EVENTBOAT_WASM_GUEST: ${{ github.workspace }}/internal/wasmhost/testdata/aggregate.wasm

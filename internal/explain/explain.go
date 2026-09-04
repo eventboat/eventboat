@@ -97,14 +97,19 @@ func walk(pip *ir.Pipeline, node *ir.Node, payload any, meta map[string]any, b *
 				meta = m
 			}
 		}
-	} else if node.IsSplit {
-		if arr, ok := payload.([]any); ok {
-			fmt.Fprintf(b, "%s: transform.split → %d messages (children share the parent's identity)\n", node.Name, len(arr))
-		} else {
-			fmt.Fprintf(b, "%s: transform.split ✗ payload is not an array → dead letter\n", node.Name)
-			return
+		} else if node.IsSplit {
+			if arr, ok := payload.([]any); ok {
+				fmt.Fprintf(b, "%s: transform.split → %d messages (children share the parent's identity)\n", node.Name, len(arr))
+			} else {
+				fmt.Fprintf(b, "%s: transform.split ✗ payload is not an array → dead letter\n", node.Name)
+				return
+			}
+		} else if node.Wasm != nil {
+			// The guest is not dry-run in explain: downstream conditions
+			// evaluate against the pre-transform payload (documented).
+			fmt.Fprintf(b, "%s: transform.wasm (module %s, entrypoint %s) — guest not dry-run; downstream sees the pre-transform payload\n",
+				node.Name, node.Config.Wasm.Module, wasmEntry(node))
 		}
-	}
 
 	matched := 0
 	for i := range node.Out {
@@ -178,6 +183,9 @@ func symbolic(pip *ir.Pipeline, b *strings.Builder) error {
 					name, countStatements(node.Script.Source()), pip.StarOptions.MaxSteps)
 			} else if node.IsSplit {
 				fmt.Fprintf(b, "%s: transform.split (array payload → one message per element)\n", name)
+			} else if node.Wasm != nil {
+				fmt.Fprintf(b, "%s: transform.wasm (module %s, entrypoint %s, budget %dms)\n",
+					name, node.Config.Wasm.Module, wasmEntry(node), wasmBudget(node))
 			}
 		case config.SectionSink:
 			describeSink(node, b)
@@ -201,6 +209,20 @@ func decoderOf(n *ir.Node) string {
 		return "json"
 	}
 	return n.Config.Decoder
+}
+
+func wasmEntry(n *ir.Node) string {
+	if n.Config.Wasm.Entrypoint != "" {
+		return n.Config.Wasm.Entrypoint
+	}
+	return "transform"
+}
+
+func wasmBudget(n *ir.Node) int {
+	if n.Config.Wasm.TimeoutMs > 0 {
+		return n.Config.Wasm.TimeoutMs
+	}
+	return 1000
 }
 
 func encoderOf(n *ir.Node) string {

@@ -116,6 +116,61 @@ sinks:
 	}
 }
 
+func TestWasmFieldParsing(t *testing.T) {
+	res := LoadBytes("p.yaml", []byte(`
+apiVersion: eventboat/v3
+kind: Pipeline
+metadata: { name: x }
+sources:
+  in: { file: { path: a } }
+transforms:
+  good:
+    from: [in]
+    wasm:
+      module: guests/heavy.wasm
+      entrypoint: transform
+      timeout_ms: 500
+      max_memory_pages: 256
+      allow: [log]
+  bad:
+    from: [in]
+    wasm:
+      module: guests/heavy.wasm
+      timeout_ms: 0
+      max_memory_pages: 99999
+      allow: [net]
+  both:
+    from: [in]
+    wasm: { module: guests/heavy.wasm }
+    script: |
+      payload.x = 1
+sinks:
+  out: { from: [good, bad, both], file: { path: b } }
+`))
+	var good *Node
+	codes := map[string]bool{}
+	for _, d := range res.Diagnostics {
+		codes[d.Code] = true
+	}
+	for _, code := range []string{"cfg_transform_main_field", "cfg_wasm_range", "cfg_wasm_allow"} {
+		if !codes[code] {
+			t.Errorf("missing %s in %+v", code, res.Diagnostics)
+		}
+	}
+	for name, n := range res.Pipeline.Transforms {
+		if name == "good" {
+			good = n
+		}
+	}
+	if good == nil || good.Wasm == nil {
+		t.Fatalf("good wasm node not parsed: %+v", good)
+	}
+	w := good.Wasm
+	if w.Module != "guests/heavy.wasm" || w.Entrypoint != "transform" || w.TimeoutMs != 500 || w.MaxMemoryPages != 256 || len(w.Allow) != 1 || w.Allow[0] != "log" {
+		t.Fatalf("wasm config parsed wrong: %+v", w)
+	}
+}
+
 func TestSourceWithFromRejected(t *testing.T) {
 	res := LoadBytes("p.yaml", []byte(`
 apiVersion: eventboat/v3

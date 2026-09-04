@@ -5,8 +5,10 @@
 package ir
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -17,6 +19,7 @@ import (
 	"github.com/eventboat/eventboat/internal/lang/celhost"
 	"github.com/eventboat/eventboat/internal/lang/starhost"
 	"github.com/eventboat/eventboat/internal/registry"
+	"github.com/eventboat/eventboat/internal/wasmhost"
 )
 
 func hasCap(caps []string, want string) bool {
@@ -53,6 +56,7 @@ type Node struct {
 
 	Script   *starhost.Program
 	IsSplit  bool
+	Wasm     *wasmhost.Compiled // set when the main field is wasm (tier 3)
 	OrderKey *celhost.Predicate // sinks
 }
 
@@ -252,6 +256,23 @@ func Build(cfg *config.Pipeline, reg *registry.Registry, starOpts starhost.Optio
 			}
 			if n.Config.Split != nil {
 				n.IsSplit = true
+			}
+			if n.Config.Wasm != nil {
+				// Compile the guest at verify time: existence and ABI export
+				// check are gate-1 findings, not first-message failures.
+				// Compilation does not execute guest code.
+				modPath := n.Config.Wasm.Module
+				if !filepath.IsAbs(modPath) && filepath.Dir(file) != "." {
+					modPath = filepath.Join(filepath.Dir(file), modPath)
+				}
+				compiled, err := wasmhost.Compile(context.Background(), modPath, n.Config.Wasm.MaxMemoryPages)
+				if err != nil {
+					add(config.Diagnostic{Severity: "error", Code: "expr_wasm_compile", File: file, Line: n.Config.Line,
+						Message: fmt.Sprintf("transform %q: %v", name, err),
+						Hint:    "the module must be a wasm32-wasip1 reactor exporting _initialize, eb_alloc and transform (docs/wasm.md)"})
+				} else {
+					n.Wasm = compiled
+				}
 			}
 		case config.SectionSource:
 			if n.Config.Grpc != nil {
