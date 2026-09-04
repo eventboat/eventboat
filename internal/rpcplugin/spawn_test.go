@@ -11,8 +11,8 @@ import (
 	"time"
 
 	"github.com/eventboat/eventboat/internal/config"
-	"github.com/eventboat/eventboat/internal/rpcplugin"
 	"github.com/eventboat/eventboat/internal/registry"
+	"github.com/eventboat/eventboat/internal/rpcplugin"
 )
 
 // TestSpawnSourceDirect drives the plugin process without the engine:

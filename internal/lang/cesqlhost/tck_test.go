@@ -61,12 +61,12 @@ type tckFile struct {
 }
 
 type tckTestCase struct {
-	Name       string            `json:"name"`
-	Expression string            `json:"expression"`
-	Result     json.RawMessage   `json:"result"`
-	Error      errorType         `json:"error"`
+	Name       string             `json:"name"`
+	Expression string             `json:"expression"`
+	Result     json.RawMessage    `json:"result"`
+	Error      errorType          `json:"error"`
 	Event      *cloudevents.Event `json:"event"`
-	Overrides  map[string]any    `json:"eventOverrides"`
+	Overrides  map[string]any     `json:"eventOverrides"`
 }
 
 // inputEvent reproduces the upstream base event (test.FullEvent) with the

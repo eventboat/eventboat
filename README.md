@@ -11,11 +11,12 @@ transforms are [Starlark](https://github.com/google/starlark-go) (a Python
 dialect): zero custom language to learn, maximal training corpus for the
 agents that write your pipelines.
 
-> **Status: v3 POC** (milestones M1 + M2 of [redesign-v3.md](redesign-v3.md)).
+> **Status: v3 POC** (milestones M1 + M2 + M3 of [redesign-v3.md](redesign-v3.md)).
 > The v2 implementation is archived under [legacy/](legacy/) and is not
 > compatible. Pre-implementation design reviews: [redesign-v3-review.md](redesign-v3-review.md)
-> (M1, verdict: pass, 13 findings) and [redesign-v3-review-m2.md](redesign-v3-review-m2.md)
-> (M2, verdict: pass, no blockers). License: Apache-2.0.
+> (M1, verdict: pass, 13 findings), [redesign-v3-review-m2.md](redesign-v3-review-m2.md)
+> (M2, verdict: pass, no blockers) and [redesign-v3-review-m3.md](redesign-v3-review-m3.md)
+> (M3, verdict: pass, no blockers). License: Apache-2.0.
 > 中文说明见 [README_ZH.md](README_ZH.md).
 
 ## How it works
@@ -86,6 +87,12 @@ eventboat mcp --stdio                       # MCP tools over stdio (agent hosts 
 eventboat mcp --http                        # MCP over HTTP + Admin REST + SSE + read-only UI
 eventboat run --config-dir pipelines/       # multi-pipeline daemon with admin on :7788
 
+# the extension ladder (M3, §4.5/§6.5): plugins, WASM, CESQL
+eventboat [--json] plugin catalog           # registered plugins with ABI versions
+# external gRPC source/sink in any language: docs/plugins.md (proto + handshake + manifest)
+# WASM transform tier (wazero, capability sandbox): docs/wasm.md
+# CESQL edge dialect: when: { lang: cesql, expr: "region = 'EU' AND data.amount > 100" }
+
 # the example's sqlite source database regenerates with:
 go run ./examples/job-sync/seed
 ```
@@ -145,13 +152,23 @@ cases:
 See [examples/](examples/) for the three shipped pipelines (linear,
 CEL branching, fan-in).
 
-## POC scope (M1 + M2) and recorded trims
+## POC scope (M1 + M2 + M3) and recorded trims
 
 Implemented: three-section config with strict whitelists and `${VAR}` /
 `${?VAR}` / `${constants.x}` / `${parameters.x}` substitution; CEL predicate
 host (zero custom functions, error = not-passed + counter); Starlark host
 (precompiled programs, lazy + COW payload/meta bindings, `json`/`math`
-whitelist, 100k step budget, backtraces into dead letters); engine with
+whitelist, 100k step budget, backtraces into dead letters); **the extension
+ladder (M3)**: out-of-process **gRPC source/sink plugins** (protocol
+`eventboat.plugin.v1`, stdout JSON handshake + static manifest so verify
+never spawns processes, per-node `version:` pins checked at verify and
+handshake, third-party example + acceptance in `examples/plugins/` and
+[docs/plugins.md](docs/plugins.md)), **WASM transforms** under wazero
+(capability sandbox, per-invoke wall-clock + memory budgets, `wasm:` main
+field, guests buildable with the standard Go toolchain,
+[docs/wasm.md](docs/wasm.md)) and the **CESQL edge dialect**
+(`when: {lang: cesql}` reusing the official CloudEvents parser, the official
+TCK vendored and 100% passing in CI, `data.*` payload extension); engine with
 spool/settle/checkpoint/backpressure/replay on SQLite (`modernc.org/sqlite`,
 pure Go — no hand-written WAL); dead letter store; **job pipelines**
 (`run`/`parameters`/`hooks`/`catchup_window`/`overlap` + sql source with
@@ -160,9 +177,9 @@ keyset pagination and watermarks + run history + `trigger`/`jobs` CLI);
 (dead letters / spool windows / job runs); **MCP server** (official Go SDK:
 stdio + Streamable HTTP, 14 tools), **Admin REST + SSE + embedded read-only
 UI**, Runtime deployment config; **OpenTelemetry** (Prometheus + OTLP dual
-export, 25 metrics, job-run spans); JSON-Schema-enforced plugin registry;
-CLI `verify`/`test`/`run`/`trigger`/`jobs`/`explain`/`replay`/`mcp` with
-`--json`.
+export, 27 metrics, job-run spans); JSON-Schema-enforced plugin registry with
+ABI versions; CLI `verify`/`test`/`run`/`trigger`/`jobs`/`explain`/`replay`/
+`plugin`/`mcp` with `--json`.
 
 Trimmed or decided beyond the spec (recorded per redesign-v3-review.md):
 
@@ -206,15 +223,21 @@ The four behavioral gap-decisions the pre-implementation review required
 
 Other recorded trims:
 
-- **Trimmed (still open):** `repl` / `plugin` CLI commands, the conformance
+- **Trimmed (still open):** `repl` CLI, the conformance
   corpus and the full benchmark suite of §7.4 M1 (minimal Go benchmarks
   exist: CEL predicate ≈ 290 ns/op, simple Starlark transform ≈ 1.4 µs/op
-  on the dev machine). From §5.10: `telemetry`/`dlq`/`codecs` pipeline
+  on the dev machine, plus the M3 Starlark-vs-WASM benchmark below). From
+  §5.10: `telemetry`/`dlq`/`codecs` pipeline
   sections remain unimplemented (telemetry endpoints live in the Runtime
   config; dead-letter retention and named codec reuse are P2). Per-message
   span sampling and tail masking rules are P2 (review R12/R16). A
   kafka-broker integration test (testcontainers) is a CI stretch, not on
-  the critical path.
+  the critical path. M3 trims: no automatic restart of crashed gRPC plugin
+  processes (fail fast; redeploy recovers), no external codec plugins
+  (decode/encode stays built-in), no TLS on the plugin loopback connection
+  (one-shot token instead), WASM guests see only the payload (no metadata
+  channel — chain a `script:` node to touch meta), and the CI benchmark
+  job is informational (`continue-on-error`), not a regression gate.
 - **`limits` section** (M2): `max_in_flight` maps to the engine's spool
   admission high watermark and `drain_timeout` bounds graceful shutdown
   (replacing a hardcoded 10s); a `workers` total quota is trimmed (P2).
@@ -393,27 +416,137 @@ Other recorded trims:
 - **Plugin names colliding with framework fields** are rejected at
   registration (review R5).
 
+### The extension ladder (M3, §4.5/§6.5) — rulings
+
+From [redesign-v3-review-m3.md](redesign-v3-review-m3.md) (all verified
+against live dependencies, several empirically) plus implementation-time
+discoveries:
+
+- **gRPC plugins (§6.5)**: protocol `eventboat.plugin.v1`
+  ([proto/eventboat/plugin/v1/plugin.proto](proto/eventboat/plugin/v1/plugin.proto)).
+  A plugin is any program that listens on 127.0.0.1, prints one JSON
+  handshake line to stdout and serves gRPC; the host dials with the
+  handshake's one-shot token as `eventboat-auth` metadata. Lifecycle,
+  backpressure (gRPC flow control carries the admission gate), batch
+  semantics and the pull/exhaustion convention are documented in
+  [docs/plugins.md](docs/plugins.md) — the acceptance test builds the
+  third-party-style example (`examples/plugins/ticker-source`, a separate Go
+  module importing only the generated protocol code) exactly the way an
+  outside implementer would and runs it through verify and a real engine run.
+- **Verify stays side-effect free**: external plugins ship a static
+  **manifest** (kind/name/version/capabilities/JSON schema); gate 1
+  validates the plugin block against the manifest file, never a spawned
+  process. At run time the handshake is cross-checked against the manifest
+  (name/version/kind/capabilities) — drift fails loudly. A `grpc:` block on
+  a compiled-in plugin name is a verify error.
+- **Config shape**: `grpc: { command, env, schema }` and the optional
+  `version:` pin are node-level framework fields (next to `decoder`/
+  `encoder`). A version mismatch with the registry (builtins), the manifest
+  (external) or the handshake (runtime) is an error — the §6.5 rule that
+  makes "documented but absent" impossible. `eventboat plugin catalog`
+  lists everything with versions.
+- **Generated protocol code lives in `pkg/pluginv1`, not `internal/`**:
+  Go's internal-package visibility would make it unimportable from the
+  separate-module third-party example — the exact audience the protocol
+  exists for.
+- **Plugin Init carries the config**: the engine only calls a source's
+  `Init` when persisted state exists (M1 semantics — discovered while
+  debugging the acceptance test), and `registry.Sink` has no Init at all;
+  the rpcplugin adapters therefore self-init (config delivery) before their
+  first stream/Write. Documented in docs/plugins.md.
+- **WASM tier (§4.5 tier 3)**: wazero v1.12.0, wasip1 **reactor** modules
+  (`_initialize`). The decisive toolchain finding: **the standard Go
+  toolchain builds guests** (`GOOS=wasip1 go build -buildmode=c-shared`) —
+  no TinyGo, no Rust, no extra CI toolchain; the guest source lives under
+  `testdata/` (ignored by the normal build), its compiled `.wasm` is
+  committed so `go test ./...` needs nothing extra, and CI rebuilds the
+  guest from source for the wasm tests. Guests may be written in any
+  wasip1 reactor language (ABI in [docs/wasm.md](docs/wasm.md)).
+- **WASM resource model**: wazero has no instruction metering, so the
+  budget is per-invoke wall-clock (`timeout_ms`, default 1000) + a memory
+  pages cap. Enforcing the deadline requires wazero's context-close
+  mechanism, **measured at ~5x throughput cost on loop-heavy guests** (a
+  manual watchdog-close was tested and deadlocks — there is no cheaper kill
+  path in wazero 1.x); `timeout_ms: 0` is the documented fast mode without
+  a kill switch. Traps/timeouts kill the instance, which is transparently
+  re-instantiated per worker.
+- **WASM wire format**: payload as JSON bytes in/out (what a Starlark
+  script would see/produce); metadata passes through untouched; guest
+  errors/traps/bad JSON follow the same delivery→dead-letter path as
+  script failures. `explain` does not dry-run guests (documented).
+- **CESQL (§4.7)**: `when: { lang: cesql, expr: ... }` reuses the official
+  `cloudevents/sdk-go/sql/v2` parser — zero self-written grammar. The
+  official TCK is vendored (275 cases, **100% passing in CI**) from the
+  SDK's own v2.16.2 tag; two files have drifted in the spec repo's main
+  branch since that release (not_operator, context_attributes_access), so
+  the acceptance rule is pinned to the vendored copy — upgrading the parser
+  means re-vendoring and re-reviewing.
+- **CESQL dialect constraints (honesty notes)**: CESQL identifiers are
+  alphanumeric only (CloudEvents attribute shape) — meta keys with
+  underscores (`kafka_offset`, `message_id`...) are unreachable in this
+  dialect; use CEL for those. The `data.*` payload extension is implemented
+  as a string-literal-aware rewrite to synthetic camelCase identifiers
+  (`data.amount` → `dataAmount`) because the CESQL lexer has no dot token
+  and no underscore — identifiers starting with "data" are reserved for it.
+  Extension mode is "CESQL subset + documented extension" per spec open
+  question #5, and never advertised as compatible.
+- **wazero maintenance** has slowed upstream (core maintainer moved on;
+  some downstreams migrating off it). Accepted for M3: pinned version, pure
+  Go, zero dependencies, and we only use the conservative surface (reactor
+  instantiation, memory imports, context close). Revisit before betting
+  further on the tier.
+- **M2-review-#6 debt cleared**: job pipelines with multiple pull sources
+  now warn at verify (`job_multiple_pull_sources`): the `cursor` parameter
+  binds the first pull source's watermark.
+
+### Performance (M3 benchmark: Starlark vs WASM)
+
+Reproduce: `go test ./internal/wasmhost/ -bench BenchmarkHeavyTransform -benchtime 2s`
+(same multi-pass aggregation over a 2000-element array per message, Starlark
+script vs the Go WASM guest; the CI `bench` job runs it on every push as an
+informational artifact, not a gate):
+
+| variant | per message | allocations |
+|---|---|---|
+| Starlark heavy script | 5.9 ms | 122,092 |
+| WASM, default (deadline armed) | 13.1 ms | 19 |
+| WASM, fast mode (`timeout_ms: 0`) | 2.5 ms | 4 |
+| Starlark light script | 22 µs | 2,023 |
+| WASM light | 103 µs | 15 |
+
+(Windows/amd64, i5-14600KF; Linux numbers via the CI job.) Reading: heavy
+per-message computation is where the WASM tier pays (2.3x and ~30,000x fewer
+allocations in fast mode); the kill switch is expensive; and for light
+mapping Starlark wins outright — the ladder's trigger standard (§4.6:
+performance or dependencies, never "complex logic") is quantified, not
+vibes.
+
 ## Repository layout
 
 ```
-cmd/eventboat/        CLI: verify / test / run / trigger / jobs / explain / replay / mcp
+cmd/eventboat/        CLI: verify / test / run / trigger / jobs / explain / replay / plugin / mcp
+proto/                 eventboat.plugin.v1 — the out-of-process plugin protocol (.proto source)
+pkg/pluginv1/          generated protocol stubs (importable by third-party plugins)
+docs/                  plugins.md (gRPC SDK), wasm.md (guest ABI and tier guide)
 internal/config/      typed config, strict loader, env+constants+parameters substitution
-internal/ir/          static IR: DAG, compiled CEL/Starlark, topology checks, job semantics, lint
-internal/lang/        celhost (predicates), starhost (Starlark sandbox host)
+internal/ir/          static IR: DAG, compiled CEL/Starlark/CESQL, topology checks, job semantics, lint
+internal/lang/        celhost (predicates), cesqlhost (CESQL dialect + official TCK), starhost (Starlark sandbox host)
+internal/wasmhost/    wazero host: capability sandbox, per-invoke budgets, guest under testdata/
+internal/rpcplugin/   gRPC plugin host: process spawn/handshake, source/sink adapters
 internal/engine/      spool admission, DAG execution, settle, delivery, DLQ, pull sources
 internal/jobs/        job runtime: scheduler, catchup, overlap, run lifecycle, hooks
 internal/store/       SQLite + in-memory spool/checkpoint/dead-letter/job-history stores
-internal/registry/    plugin registration with mandatory JSON Schemas
+internal/registry/    plugin registration with mandatory JSON Schemas + ABI versions
 internal/registry/builtin/  kafka/http_server/cron/file/sql sources, kafka/http/file/drop sinks, json/raw codecs
 internal/explain/     deterministic walkthroughs + topology rendering
 internal/ops/         the operations service behind MCP and Admin REST
 internal/mcpserver/   MCP tools (official Go SDK)
 internal/admin/       Admin REST + SSE + embedded read-only UI
 internal/runtimecfg/  kind: Runtime deployment configuration
-internal/obs/         OpenTelemetry: dual export, 25 metrics, spans
+internal/obs/         OpenTelemetry: dual export, 27 metrics, spans
 internal/testkit/     injection/capture/fault-injection primitives + fakepull test source
 internal/testrun/     §3.2 contract-test runner
-examples/             linear, branching (CEL), fan-in, job-sync (sql + run/parameters)
+examples/             linear, branching (CEL), fan-in, job-sync (sql), plugins/ (third-party-style gRPC source)
 legacy/               archived v2 implementation (not imported, not modified)
 ```
 

@@ -97,19 +97,19 @@ func walk(pip *ir.Pipeline, node *ir.Node, payload any, meta map[string]any, b *
 				meta = m
 			}
 		}
-		} else if node.IsSplit {
-			if arr, ok := payload.([]any); ok {
-				fmt.Fprintf(b, "%s: transform.split → %d messages (children share the parent's identity)\n", node.Name, len(arr))
-			} else {
-				fmt.Fprintf(b, "%s: transform.split ✗ payload is not an array → dead letter\n", node.Name)
-				return
-			}
-		} else if node.Wasm != nil {
-			// The guest is not dry-run in explain: downstream conditions
-			// evaluate against the pre-transform payload (documented).
-			fmt.Fprintf(b, "%s: transform.wasm (module %s, entrypoint %s) — guest not dry-run; downstream sees the pre-transform payload\n",
-				node.Name, node.Config.Wasm.Module, wasmEntry(node))
+	} else if node.IsSplit {
+		if arr, ok := payload.([]any); ok {
+			fmt.Fprintf(b, "%s: transform.split → %d messages (children share the parent's identity)\n", node.Name, len(arr))
+		} else {
+			fmt.Fprintf(b, "%s: transform.split ✗ payload is not an array → dead letter\n", node.Name)
+			return
 		}
+	} else if node.Wasm != nil {
+		// The guest is not dry-run in explain: downstream conditions
+		// evaluate against the pre-transform payload (documented).
+		fmt.Fprintf(b, "%s: transform.wasm (module %s, entrypoint %s) — guest not dry-run; downstream sees the pre-transform payload\n",
+			node.Name, node.Config.Wasm.Module, wasmEntry(node))
+	}
 
 	matched := 0
 	for i := range node.Out {
@@ -119,14 +119,14 @@ func walk(pip *ir.Pipeline, node *ir.Node, payload any, meta map[string]any, b *
 			mark = "always"
 			matched++
 		} else {
-		ok, evalErr := edge.When.Eval(payload, meta)
-		switch {
-		case evalErr != nil:
-			mark = fmt.Sprintf("✗ evaluation error (counts as not-passed): %s", evalErr.Error())
-		case ok:
-			mark = "✓ MATCH"
-			matched++
-		}
+			ok, evalErr := edge.When.Eval(payload, meta)
+			switch {
+			case evalErr != nil:
+				mark = fmt.Sprintf("✗ evaluation error (counts as not-passed): %s", evalErr.Error())
+			case ok:
+				mark = "✓ MATCH"
+				matched++
+			}
 		}
 		fmt.Fprintf(b, "  %s → %s", node.Name, edge.To)
 		if edge.WhenSource != "" {

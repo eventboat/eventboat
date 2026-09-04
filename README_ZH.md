@@ -9,9 +9,11 @@ DAG 流动（过滤、映射、路由），落到目的地——全程 at-least-
 语言），映射就是 [Starlark](https://github.com/google/starlark-go)（Python
 方言）：零自研语言，Agent 语料最大化。
 
-> **状态：v3 POC**（[redesign-v3.md](redesign-v3.md) 的 M1 里程碑）。
+> **状态：v3 POC**（[redesign-v3.md](redesign-v3.md) 的 M1 + M2 + M3 里程碑）。
 > v2 实现已整体归档至 [legacy/](legacy/)，互不兼容。实现前的独立设计审查见
-> [redesign-v3-review.md](redesign-v3-review.md)（结论：通过，13 项发现）。
+> [redesign-v3-review.md](redesign-v3-review.md)（M1，通过，13 项发现）、
+> [redesign-v3-review-m2.md](redesign-v3-review-m2.md)（M2，通过）与
+> [redesign-v3-review-m3.md](redesign-v3-review-m3.md)（M3，通过）。
 > License：Apache-2.0。English readme: [README.md](README.md)。
 
 ## 工作原理
@@ -58,6 +60,24 @@ eventboat test examples
 eventboat run --config examples/linear/pipeline.yaml
 eventboat run --config my.yaml --ephemeral
 ```
+
+## M3：扩展阶梯（WASM / gRPC 插件 / CESQL）
+
+- **gRPC 进程外插件**：任意语言实现 source/sink——stdout 单行 JSON 握手 +
+  静态 manifest（verify 永不 spawn 进程）+ 版本钉（不符 = verify 错误）。
+  协议与 SDK 文档见 [docs/plugins.md](docs/plugins.md)；第三方视角示例
+  `examples/plugins/ticker-source`（独立 Go module，只依赖协议生成代码）的
+  verify→run 全链路验收进 CI。`eventboat plugin catalog` 列出全部插件与 ABI 版本。
+- **WASM transform（wazero）**：`wasm:` 主字段（与 script/split 互斥）；
+  能力制沙箱（默认零宿主能力）；资源 = 每次调用 wall-clock + 内存页双上限，
+  `timeout_ms: 0` 为快速模式（击杀机制实测约 5× 开销，如实入档）；
+  guest 用**标准 Go 工具链**即可构建（wasip1 reactor），ABI 见
+  [docs/wasm.md](docs/wasm.md)。基准：重度脚本快速模式 ~2.3× 提速、分配数
+  ~30000× 减少；轻脚本 Starlark 胜出（阶梯触发标准的量化依据）。
+- **CESQL 可选方言**：`when: { lang: cesql, expr: ... }`，复用官方
+  CloudEvents 解析器；官方 TCK（275 例）vendored 入库，**CI 内 100% 通过**；
+  `data.*` 为文档化扩展（合成驼峰标识符），带下划线的 meta 键在本方言
+  不可达（用 CEL）——诚实入档。
 
 管道 = 三段式 + `from` 连边；插件名即键：
 

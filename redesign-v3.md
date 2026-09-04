@@ -1,7 +1,7 @@
 # v3 从零重设计提案 — Agent 原生事件路由器（零自研语言版）
 
 > **状态：POC 阶段**（提案定稿：定名 Eventboat、License Apache-2.0；v3 全新实现，**不向后兼容 v2**——无迁移义务）
-> **日期：2026-09-03**（修订 v1.1：零自研语言 CEL + Starlark + 性能评估；v1.2：吸收 dagu 作业模型（pipeline 级 `run`/`params`）；v1.3：拓扑结构改为**三段式 `sources`/`transforms`/`sinks` + `from` 连边 + 插件名即键**，命名体系定稿——含 DAG 描述模式调研结论，见 §5.1；v1.4：钩子段 `on`→`hooks`（GH Actions 撞形不同义），新增 consts/params 语义小节 §5.9；v1.5：**全称原则**——自造缩写全部展开：`params`→`parameters`、`consts`→`constants`、`dlq`→`dead_letter_queue`、`catchup`→`catchup_window`、`args`→`arguments`、`max_inflight`→`max_in_flight`，见 §5.1；v1.6：全称原则细化——**约定俗成的行业缩写保留**：`dlq`、`args`、`dsn` 维持缩写，回退 v1.5 对前两项的展开；v1.7：**定名 Eventboat**（§8，六轮核查 + 三选一裁决），全文占位符替换；v1.8：**License 定为 Apache-2.0**（仓库 LICENSE 落地，开放问题 #11 关闭）；v1.9：**明确 POC 阶段、不向后兼容 v2**——`convert` 降为按需工具，开放问题 #12 关闭；v1.10：按实现前审查（redesign-v3-review.md R1–R3）修正 §4.3 沙箱表：`while`/递归/顶层控制流的机制归属统一为 `syntax.FileOptions`，删除不存在的 `strings` 模块；v1.11：M2 落地对账——sql 源补 sqlite 方言（§3.5）、重注入=进入节点执行（§3.3）、§5.8 示例 `%.2f` 修正（go-starlark 的 `%` 不支持浮点格式动词，改 `math.floor`）、§6.6 span 措辞改批粒度近似、开放问题 #10 关闭（`kind: Runtime` + CLI 覆盖，见 redesign-v3-review-m2.md R13））
+> **日期：2026-09-03**（修订 v1.1：零自研语言 CEL + Starlark + 性能评估；v1.2：吸收 dagu 作业模型（pipeline 级 `run`/`params`）；v1.3：拓扑结构改为**三段式 `sources`/`transforms`/`sinks` + `from` 连边 + 插件名即键**，命名体系定稿——含 DAG 描述模式调研结论，见 §5.1；v1.4：钩子段 `on`→`hooks`（GH Actions 撞形不同义），新增 consts/params 语义小节 §5.9；v1.5：**全称原则**——自造缩写全部展开：`params`→`parameters`、`consts`→`constants`、`dlq`→`dead_letter_queue`、`catchup`→`catchup_window`、`args`→`arguments`、`max_inflight`→`max_in_flight`，见 §5.1；v1.6：全称原则细化——**约定俗成的行业缩写保留**：`dlq`、`args`、`dsn` 维持缩写，回退 v1.5 对前两项的展开；v1.7：**定名 Eventboat**（§8，六轮核查 + 三选一裁决），全文占位符替换；v1.8：**License 定为 Apache-2.0**（仓库 LICENSE 落地，开放问题 #11 关闭）；v1.9：**明确 POC 阶段、不向后兼容 v2**——`convert` 降为按需工具，开放问题 #12 关闭；v1.10：按实现前审查（redesign-v3-review.md R1–R3）修正 §4.3 沙箱表：`while`/递归/顶层控制流的机制归属统一为 `syntax.FileOptions`，删除不存在的 `strings` 模块；v1.11：M2 落地对账——sql 源补 sqlite 方言（§3.5）、重注入=进入节点执行（§3.3）、§5.8 示例 `%.2f` 修正（go-starlark 的 `%` 不支持浮点格式动词，改 `math.floor`）、§6.6 span 措辞改批粒度近似、开放问题 #10 关闭（`kind: Runtime` + CLI 覆盖，见 redesign-v3-review-m2.md R13）；v1.12：M3 落地对账——`when` 增对象形态 `{lang, expr}`（§4.7），CESQL 标识符为纯字母数字（CloudEvents 属性形状）：带下划线的 meta 键在本方言不可达、`data.*` 扩展经字面量感知重写为合成驼峰标识符（`data.amount`→`dataAmount`，`data` 前缀标识符保留给扩展）；§6.5 补 WASM 资源模型（wazero 无指令计量：每次调用 wall-clock + 内存页双上限；`timeout_ms: 0` = 快速模式无击杀开关——ctx 击杀机制实测约 5× 开销）、guest 形态 = wasip1 **reactor**（标准 Go 工具链 `go build -buildmode=c-shared` 即可构建，无需 TinyGo/Rust）；gRPC 插件协议定稿：stdout 单行 JSON 握手 + 静态 manifest 文件（verify 不 spawn 进程）+ 运行时握手交叉核对 + 节点级 `version:` 版本钉（不符 = verify 错误）；TCK 验收口径 = vendored 自 sdk-go v2.16.2 tag 的官方套件（275 例 100%，spec 仓库 main 已有两处后发漂移），见 redesign-v3-review-m3.md）
 >
 > 本文回答一个问题：**如果抛开 v2 现有实现，从零重新设计这个产品的方案、功能、配置方式和架构，应该长成什么样。**
 >
@@ -396,13 +396,13 @@ WASM / gRPC  重计算/任意语言/外部依赖（近原生，进程隔离）
 
 ### 4.7 CESQL 可选方言
 
-`when` 支持 opt-in 的 CESQL 方言（CloudEvents 生态互操作）：
+`when` 支持 opt-in 的 CESQL 方言（CloudEvents 生态互操作）。两种形态：字符串（CEL，默认）或对象：
 
 ```yaml
 - from: { enrich: { when: { lang: cesql, expr: "type = 'com.example.order' AND region = 'EU'" } } }
 ```
 
-语义映射：CESQL 上下文属性 → `meta`；`data.*` 扩展路径可触达 `payload`（文档明示为规范扩展）；纯模式（仅上下文属性）跑官方 [CESQL TCK](https://github.com/cloudevents/spec/blob/main/cesql/README.md) 进 CI。主语法保持 CEL；CESQL 是互操作出口，不是主方言。
+语义映射（v1.12 对账）：CESQL 上下文属性 → `meta`；`data.*` 扩展路径触达 `payload`（文档明示为规范扩展）；主语法保持 CEL；CESQL 是互操作出口，不是主方言。方言约束（诚实声明）：CESQL 标识符为纯字母数字（CloudEvents 属性形状），带下划线的 meta 键（`kafka_offset` 等）在本方言不可达（用 CEL）；`data.*` 经预解析重写为合成驼峰标识符（`data.amount`→`dataAmount`），`data` 前缀标识符保留给扩展；扩展模式 = "CESQL 子集 + 文档化扩展"，不宣称兼容（开放问题 #5）。纯模式跑官方 [CESQL TCK](https://github.com/cloudevents/spec/blob/main/cesql/README.md) 进 CI（口径：vendored 自 sdk-go v2.16.2 的官方套件，275 例 100%）。
 
 ### 4.8 eql1 → v3 迁移（比 v1.0 提案大幅变好）
 
@@ -815,10 +815,12 @@ spool 表设计要点：append-only 消息表 + checkpoint 表 + 死信表（索
 |----|------|----------|
 | 内置 Go 插件 | 编译时注册（继承 registry 模式）+ **强制 JSON Schema** | M1（sql 源 P1/M2） |
 | 表达式/脚本 | CEL（谓词）+ Starlark（映射）宿主（§4） | M1 |
-| transform: WASM（wazero） | 能力制沙箱；触发标准 = §4.6 性能/依赖需求 | M3 |
-| source/sink: gRPC 进程外插件 | 协议带版本协商、health、schema 声明；任意语言实现 | M3 |
+| transform: WASM（wazero） | 能力制沙箱；触发标准 = §4.6 性能/依赖需求 | M3 ✅ |
+| source/sink: gRPC 进程外插件 | 协议带版本协商、health、schema 声明；任意语言实现 | M3 ✅ |
 
-插件 ABI 版本化：`catalog` 输出带版本；配置引用的插件版本与运行时不符 = verify 错误（杜绝"文档说有、二进制没有"的 v2 WASM 式空壳问题——空壳不再可能，因为注册必须带 schema，schema 不存在 = verify 即失败）。
+M3 落地要点（v1.12）：WASM guest = wasip1 **reactor**（`_initialize`），标准 Go 工具链 `go build -buildmode=c-shared` 即可构建；资源模型 = 每次调用 wall-clock（默认 1000ms）+ 内存页上限（wazero 无指令计量），ctx 击杀机制实测约 5× 开销，`timeout_ms: 0` 为快速模式（无击杀开关）；消息 wire = payload JSON 字节进出、meta 透传、错误沿 script 同路 delivery→死信。gRPC 插件 = stdout 单行 JSON 握手（协议版本 + 名称 + 版本 + 能力 + 监听地址 + 一次性令牌）+ 静态 **manifest** 文件（verify 据此校验配置，**不 spawn 进程**）+ 运行时握手与 manifest 交叉核对；崩溃 = 快速失败（自动重启列为后续）。
+
+插件 ABI 版本化：`catalog` 输出带版本；配置引用的插件版本与运行时不符 = verify 错误（杜绝"文档说有、二进制没有"的 v2 WASM 式空壳问题——空壳不再可能，因为注册必须带 schema，schema 不存在 = verify 即失败）。M3 形态：节点级可选 `version:` 钉（内置对照 registry、外部对照 manifest 与握手）；外部插件 schema 由 manifest 声明、与内置同编译器同诊断。
 
 ### 6.6 可观测性
 
@@ -911,7 +913,7 @@ internal/
 |------|------|----------|
 | **M1 内核与语言** | engine（spool/settle/checkpoint/背压）+ **CEL 谓词宿主 + Starlark 映射宿主**（预编译、惰性绑定+COW、沙箱白名单、步数预算、safe_ 糖函数、lint）+ verify/test + 内置 P0 插件（kafka/http_server/cron/file 源；kafka/http/file/drop 汇；json/raw codec）+ CLI（run/verify/test/repl/plugin） | §6.2 七条不变量各有一条专属测试且通过；**§4.6 基准套件（三类脚本 × 速率）进 CI 回归门，数字写进文档**；conformance 语料（CEL/Starlark 行为 + lint 规则）进 CI；`_examples` 全部 verify+test 通过 |
 | **M2 作业管道与操作面** | **作业面（`run`/`parameters`/`hooks`/`catchup_window`/`overlap` + 作业历史 + `sql` 源 + `trigger`/`jobs` 命令）** + explain/replay + MCP server + Admin REST + SSE + 内嵌只读 UI + OTel 全量 | 一个 Agent 仅凭 MCP tools 完成"生成配置→verify→test→explain→deploy→观察→手动触发回补→修错→再部署"闭环（真实 Agent 会话录制验收）；作业中断续传（kill -9 后从水位续跑）有专项测试 |
-| **M3 扩展阶梯** | WASM transform（wazero）+ gRPC source/sink 协议 + 插件 SDK 文档 + CESQL 方言（TCK 进 CI） | 第三方按文档实现一个 gRPC source 插件并跑通全链路；TCK 纯模式 100% 通过；基准证明 WASM 档对重度脚本的收益 |
+| **M3 扩展阶梯** | WASM transform（wazero，标准 Go 工具链构建 wasip1 reactor guest）+ gRPC source/sink 协议 + 插件 SDK 文档 + CESQL 方言（TCK 进 CI） | 第三方按文档实现一个 gRPC source 插件并跑通全链路；TCK 纯模式 100% 通过；基准证明 WASM 档对重度脚本的收益（快速模式 ~2.3× + 分配数 ~30000×，默认击杀模式如实记录 ~5× 开销） |
 | **M4 生态** | Schema 发布（`plugin schema` 独立分发）、LSP、csv/avro/protobuf codec、性能 profile（Pebble 后端）、Operator（薄封装）、convert 工具完善 | IDE 内写管道有补全与诊断（v2 示例 convert 仅作为 convert 工具自身的按需验收） |
 
 排序理由：语言与可靠性内核是地基（M1）——零自研语言让 M1 的语言部分缩小为"宿主胶水"；M2 把"Agent 原生"与"作业管道"一起变成可验收的闭环（两者共享 trigger/parameters/history 机制）；M3 才谈扩展；M4 是生态放大器。
