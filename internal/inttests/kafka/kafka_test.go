@@ -7,8 +7,8 @@ package kafka_int
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -56,32 +56,43 @@ func run(m *testing.M) (int, error) {
 	}
 	broker = brokers[0]
 	fmt.Printf("kafka broker address: %s\n", broker)
-	dialCtx, dialCancel := context.WithTimeout(ctx, 10*time.Second)
-	defer dialCancel()
-	if d, derr := net.DialTimeout("tcp", broker, 10*time.Second); derr != nil {
-		return 1, fmt.Errorf("tcp dial %s: %w", broker, derr)
-	} else {
-		_ = d.Close()
-	}
-	_ = dialCtx
 	return m.Run(), nil
 }
 
 func mustCreateTopic(t *testing.T, topic string, partitions int) {
 	t.Helper()
-	// The KRaft controller may lag container-readiness by a few seconds;
-	// bounded dials with retries (an unbounded DialLeader hung Windows CI
-	// runs for minutes).
+	// Create the topic through the broker's admin path (kafka.Dial +
+	// CreateTopics sends the request to the dialed broker — the controller
+	// in single-node KRaft). kafka.DialLeader instead resolves the
+	// controller's ADVERTISED address from metadata and hangs when that
+	// listener is container-internal. Creation returns before the topic is
+	// visible in metadata, so poll ReadPartitions before proceeding.
 	deadline := time.Now().Add(60 * time.Second)
 	for {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		conn, err := kafka.DialLeader(ctx, "tcp", broker, topic, partitions)
+		conn, err := kafka.Dial("tcp", broker)
 		if err == nil {
+			conn.SetDeadline(time.Now().Add(10 * time.Second))
+			err = conn.CreateTopics(kafka.TopicConfig{
+				Topic:             topic,
+				NumPartitions:     partitions,
+				ReplicationFactor: 1,
+			})
+			if err == nil {
+				conn.SetDeadline(time.Time{}) // per-poll deadlines below
+				for time.Now().Before(deadline) {
+					conn.SetDeadline(time.Now().Add(5 * time.Second))
+					parts, perr := conn.ReadPartitions(topic)
+					if perr == nil && len(parts) >= partitions {
+						_ = conn.Close()
+						return
+					}
+					time.Sleep(250 * time.Millisecond)
+				}
+				_ = conn.Close()
+				t.Fatalf("topic %s never became visible", topic)
+			}
 			_ = conn.Close()
-			cancel()
-			return
 		}
-		cancel()
 		if time.Now().After(deadline) {
 			t.Fatalf("create topic %s: %v", topic, err)
 		}
@@ -97,9 +108,21 @@ func produce(t *testing.T, topic string, n int, payload func(i int) []byte) {
 	for i := 0; i < n; i++ {
 		msgs = append(msgs, kafka.Message{Value: payload(i)})
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	if err := w.WriteMessages(ctx, msgs...); err != nil {
+	// Fresh topics can outrun the brokers' metadata propagation: retry the
+	// whole batch while the broker still answers Unknown Topic Or Partition.
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		err := w.WriteMessages(ctx, msgs...)
+		cancel()
+		if err == nil {
+			return
+		}
+		var ke kafka.Error
+		if errors.As(err, &ke) && ke == kafka.UnknownTopicOrPartition && time.Now().Before(deadline) {
+			time.Sleep(250 * time.Millisecond)
+			continue
+		}
 		t.Fatalf("produce to %s: %v", topic, err)
 	}
 }
@@ -325,9 +348,11 @@ sinks:
 	// member joining; self-healing loop keeps the test robust).
 	const total = 40
 	produced := 0
+	producedIDs := map[string]bool{}
 	deadline := time.Now().Add(90 * time.Second)
 	for time.Now().Before(deadline) {
 		produce(t, "int-reb", 4, func(i int) []byte {
+			producedIDs[fmt.Sprintf("%d", produced+i)] = true
 			return []byte(fmt.Sprintf(`{"i":%d}`, produced+i))
 		})
 		produced += 4
@@ -353,13 +378,17 @@ sinks:
 	if len(a) == 0 || len(b) == 0 {
 		t.Fatalf("rebalance did not engage both consumers: A=%d B=%d", len(a), len(b))
 	}
-	// No message delivered to both engines (consumer-group semantics).
+	// Consumer-group at-least-once: every produced message lands in at
+	// least one engine. A rebalance may REDELIVER messages whose offsets
+	// were not yet committed (settle-gated commits) — duplicates across
+	// members are the contract, loss is not.
 	seen := map[string]bool{}
 	for _, m := range append(append([]map[string]any{}, a...), b...) {
-		key := fmt.Sprintf("%v", m["i"])
-		if seen[key] {
-			t.Fatalf("message %s delivered to both group members", key)
+		seen[fmt.Sprintf("%v", m["i"])] = true
+	}
+	for id := range producedIDs {
+		if !seen[id] {
+			t.Fatalf("message %s lost across the rebalance (seen %d of %d produced)", id, len(seen), len(producedIDs))
 		}
-		seen[key] = true
 	}
 }

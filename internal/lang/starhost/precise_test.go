@@ -1,6 +1,9 @@
 package starhost
 
-import "testing"
+import (
+	"reflect"
+	"testing"
+)
 
 // Precise dirty tracking (beta hardening): reading through containers must
 // not dirty the binding — the engine skips the whole-tree StarlarkToGo
@@ -31,8 +34,8 @@ for k in payload.user:
 	if ps.Dirty() {
 		t.Fatal("read-only container access must not dirty the state (precise dirty tracking)")
 	}
-	if got := ps.GoValue(); got != any(original) {
-		t.Fatalf("clean state must return the ORIGINAL decoded value, got %v", got)
+	if !reflect.DeepEqual(ps.GoValue(), original) {
+		t.Fatalf("clean state must return the ORIGINAL decoded value, got %v", ps.GoValue())
 	}
 }
 
