@@ -71,16 +71,16 @@ func mustCreateTopic(t *testing.T, topic string, partitions int) {
 	for {
 		conn, err := kafka.Dial("tcp", broker)
 		if err == nil {
-			conn.SetDeadline(time.Now().Add(10 * time.Second))
+			_ = conn.SetDeadline(time.Now().Add(10 * time.Second))
 			err = conn.CreateTopics(kafka.TopicConfig{
 				Topic:             topic,
 				NumPartitions:     partitions,
 				ReplicationFactor: 1,
 			})
 			if err == nil {
-				conn.SetDeadline(time.Time{}) // per-poll deadlines below
+				_ = conn.SetDeadline(time.Time{}) // per-poll deadlines below
 				for time.Now().Before(deadline) {
-					conn.SetDeadline(time.Now().Add(5 * time.Second))
+					_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
 					parts, perr := conn.ReadPartitions(topic)
 					if perr == nil && len(parts) >= partitions {
 						_ = conn.Close()
