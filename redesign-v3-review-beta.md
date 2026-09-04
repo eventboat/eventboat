@@ -290,4 +290,6 @@ goroutine 数回落到基线（stdlib runtime.NumGoroutine 对账，不引 golea
   100000——约 5-15× 本机基线，防数量级回退）
 - [x] -count=5 全量本地绿（2026-09-04，exit 0）；soak 本地 1 分钟验证绿
   （26k+7k 消息、125 spool 故障 + 287 DLQ 故障吸收、goroutine 11→3）
-- [ ] soak 首跑链接、kafka job 首绿链接（CI 落地后回填）
+- [x] kafka job 首绿：run 33881285987（2026-09-04，四 job 全绿
+  test/lint/bench/kafka-integration）
+- [x] soak 首跑：run 33881744074（workflow_dispatch 手动触发，默认 25m）
