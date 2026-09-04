@@ -29,13 +29,23 @@ func NewMsgState(kind string, v any) *MsgState {
 // Binding returns the Starlark value bound to the script global.
 func (s *MsgState) Binding() starlark.Value { return msgValue{s} }
 
-// Dirty reports whether the script wrote to this binding.
+// Dirty reports whether the script wrote to this binding. Map-tree writes
+// are tracked precisely (mutation interception on the converted dicts); a
+// tree that contains ANY list dirties conservatively — native Starlark list
+// mutators (append, index writes) cannot be intercepted (beta hardening).
 func (s *MsgState) Dirty() bool { return s.dirty }
 
+// markWritten is handed to the materialized tree so nested writes mark this
+// state precisely.
+func (s *MsgState) markWritten() { s.dirty = true }
+
 // GoValue returns the current value: the materialized tree converted back to
-// Go after writes, else the original decoded value.
+// Go after WRITES, else the original decoded value. A materialized-but-clean
+// state (container reads, no writes — precise dirty tracking) keeps the
+// original: the unmarked tree is provably unchanged for map-only trees, and
+// list-bearing trees are conservatively dirty anyway.
 func (s *MsgState) GoValue() any {
-	if s.star != nil {
+	if s.star != nil && s.dirty {
 		return StarlarkToGo(s.star)
 	}
 	return s.goVal
@@ -107,7 +117,10 @@ func (m msgValue) lazyRoot() (map[string]any, bool) {
 // immutable); container fields (maps/lists) materialize the whole tree
 // first, because Starlark reference semantics require nested writes
 // (`payload.nested.k = v`, `remove(payload.a, "b")`) to reach the state —
-// serving a fresh copy would silently lose them.
+// serving a fresh copy would silently lose them. Materializing for a READ
+// no longer dirties the state (precise dirty tracking, beta hardening):
+// map-tree mutations mark through the conversion marker, list-bearing trees
+// dirty conservatively at materialization.
 func (m msgValue) fieldGet(name string) (starlark.Value, bool) {
 	if m.s.star != nil {
 		if d, ok := m.s.star.(starlark.Mapping); ok {
@@ -169,6 +182,7 @@ func (m msgValue) SetKey(k, v starlark.Value) error {
 	if err := m.materialize(); err != nil {
 		return err
 	}
+	m.s.dirty = true
 	d, ok := m.s.star.(starlark.HasSetKey)
 	if !ok {
 		return fmt.Errorf("%s: value of type %s does not support item assignment", m.s.kind, m.s.star.Type())
@@ -181,6 +195,7 @@ func (m msgValue) SetField(name string, v starlark.Value) error {
 	if err := m.materialize(); err != nil {
 		return err
 	}
+	m.s.dirty = true
 	d, ok := m.s.star.(starlark.HasSetKey)
 	if !ok {
 		return fmt.Errorf("%s: field assignment requires a mapping, got %s", m.s.kind, m.s.star.Type())
@@ -327,13 +342,20 @@ func (m msgValue) method(thread *starlark.Thread, b *starlark.Builtin, args star
 }
 
 // materialize converts the whole value into a Starlark-native tree on first
-// write (copy-on-write).
+// write OR first container read (copy-on-write; reference semantics need the
+// shared tree). It does NOT itself dirty the state — reads stay clean:
+// map-tree mutations mark precisely through the marker threaded into the
+// conversion, and list-bearing trees dirty conservatively right here because
+// native list mutators cannot be intercepted.
 func (m msgValue) materialize() error {
 	if m.s.star != nil {
 		return nil
 	}
-	m.s.star = GoToStarlark(m.s.goVal)
-	m.s.dirty = true
+	star, hasLists := convertGo(m.s.goVal, m.s.markWritten)
+	m.s.star = star
+	if hasLists {
+		m.s.dirty = true
+	}
 	return nil
 }
 
@@ -382,7 +404,7 @@ func removeKey(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple
 		}
 		return starlark.None, nil
 	case *attrDict:
-		if _, _, err := d.Dict.Delete(key); err != nil {
+		if _, _, err := d.Delete(key); err != nil { // marks the owner when materialized
 			return nil, fmt.Errorf("remove: %w", err)
 		}
 		return starlark.None, nil

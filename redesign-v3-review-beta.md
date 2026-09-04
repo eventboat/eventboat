@@ -168,8 +168,25 @@ builtin 变异无法拦截，`payload.items.append(x)` 会绕过；实现时按 
 安全网）。read-only 脚本碰容器后：物化照付（引用语义要求），**写回与 dirty 不再发生**。
 
 **安全网与验收**：嵌套写七例零改动全绿；新增反向用例（容器只读不 dirty：
-`x = payload.nested; y = x.k` / `for` 遍历含容器）。基准：BenchmarkSimpleScript（既有）+
+`x = payload.nested.k` / `for` 遍历含容器）。基准：BenchmarkSimpleScript（既有）+
 新增 BenchmarkContainerReadOnly（只读碰容器的脚本），前后入档。
+
+> **实现期修正（2026-09-04，落地时发现）**：完整"变异拦截"对 **list 不可行**——
+> starlark 原生 `*List` 的 append/索引写是原生绑定方法，无法拦截；原生 dict 的
+> update/pop 等内置方法同理，但 dict 树内全是我们的 attrDict，可在 Attr 层包装
+> （update/pop/popitem/clear/setdefault）。落地方案（分两档）：
+>
+> 1. **map 树精确**：attrDict 携带 owner 的 mark 闭包；SetKey/SetField/Delete/
+>    变异类内置全部 mark；materialize 不再置 dirty；GoValue 对"已物化但干净"的
+>    状态返回**原解码值**（写回跳过下沉到 starhost 层，engine 门不变）。
+> 2. **含 list 的树保守**：转换时探测树内有无 list（convertGo 返回 hasLists），
+>    有则在 materialize 时保守置 dirty（= 今日行为，精确语义零回归）；边界由
+>    TestListTreeStaysConservativeDirty 锁死——将来若引入 list 包装类型，翻转
+>    该测试即可。
+>
+> 基准（i5-14600KF，2s×2）：ContainerReadOnly **1901 → 1458 ns/op（-23%，写回
+> 跳过）**；SimpleScript **1548 → 1568 ns/op（写路径持平）**。七例嵌套写回归 +
+> TestNoWriteMeansNoDirty + TestScalarReadsStayLazy 零改动全绿。
 
 **回滚方案**：单 commit revert；对外行为面（MsgState.Dirty/GoValue 接口）不变。
 
@@ -264,7 +281,8 @@ goroutine 数回落到基线（stdlib runtime.NumGoroutine 对账，不引 golea
 
 - [x] settle 前后基准：BenchmarkSettleThroughput mem **6556 → 6386 ns/op**、
   fsync_sim **539010 → 543726 ns/op**（i5-14600KF，3s×2；详见 R-B1 实现期修正）
-- [ ] starhost 前后基准：BenchmarkSimpleScript / BenchmarkContainerReadOnly before/after
+- [x] starhost 前后基准：ContainerReadOnly **1901 → 1458 ns/op（-23%）**、
+  SimpleScript **1548 → 1568 ns/op**（i5-14600KF；详见 R-B2 实现期修正）
 - [ ] lint 豁免清单（如有）
 - [ ] 阈值门基线数字与倍数
 - [ ] soak 首跑链接、kafka job 首绿链接
