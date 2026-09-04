@@ -1,0 +1,32 @@
+name: Soak
+
+# Long-run stability gate (redesign-v3-review-beta.md R-B8): mixed pipelines
+# under load with random fault injection; asserts at-least-once, full
+# checkpoint advance and no goroutine leaks. Nightly plus manual dispatch;
+# the beta exit criterion requires one manual green run.
+
+on:
+  workflow_dispatch:
+    inputs:
+      duration:
+        description: "Soak duration (Go duration, min 1m)"
+        required: false
+        default: "25m"
+  schedule:
+    - cron: "30 2 * * *" # nightly
+
+jobs:
+  soak:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+          cache: true
+      - name: Soak (mixed load + fault injection)
+        run: go test ./internal/inttests/soak/ -v -timeout 35m
+        env:
+          EVENTBOAT_SOAK_TEST: "1"
+          EVENTBOAT_SOAK_DURATION: ${{ github.event.inputs.duration || '25m' }}

@@ -35,18 +35,54 @@ jobs:
       # Includes the seven TestInvariant_* reliability tests, the examples
       # verify/test acceptance gate (cmd/eventboat/examples_test.go), the
       # third-party gRPC plugin acceptance (internal/rpcplugin), the CESQL
-      # TCK (internal/lang/cesqlhost) and the WASM tier tests.
+      # TCK (internal/lang/cesqlhost) and the WASM tier tests. The
+      # env-gated integration packages (kafka, soak) skip without their env.
       - name: Test (race)
         run: go test -race ./...
         env:
           EVENTBOAT_WASM_GUEST: ${{ github.workspace }}/internal/wasmhost/testdata/aggregate.wasm
 
-  # Optional benchmark job (M3 §4.6 discipline: reproducible numbers, not a
-  # regression gate — absolute numbers are machine-dependent). Results appear
-  # in the job log; the README records a reference machine's numbers.
+  # Lint baseline (beta round): golangci-lint v2 with the repo config.
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+          cache: true
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v8
+        with:
+          version: v2.13.2
+
+  # Real-broker integration (redesign-v3-review-beta.md R-B6): produce /
+  # consume roundtrip through the engine, dead-letter path, consumer-group
+  # rebalance — via testcontainers (KRaft, confluent-local). Env-gated; the
+  # plain test job above runs this package as a skip.
+  kafka-integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+          cache: true
+      - name: Kafka integration (real broker)
+        run: go test ./internal/inttests/kafka/ -v -timeout 8m
+        env:
+          EVENTBOAT_KAFKA_TEST: "1"
+
+  # Benchmark job (M3 §4.6 discipline: reproducible numbers). The three
+  # gate-relevant benchmarks carry LOOSE thresholds (an order-of-magnitude
+  # guard against algorithmic regressions, not a noise gate — runner
+  # variance is high). Baselines are the reference dev machine
+  # (i5-14600KF, redesign-v3-review-beta.md appendix); limits are ~5-15x
+  # those numbers to accommodate shared runners. The WASM comparison stays
+  # informational (wazero variance across runners is high).
   bench:
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -56,8 +92,10 @@ jobs:
       - name: Build WASM guest
         run: |
           cd internal/wasmhost/testdata/guest
-          GOOS=wasip1 GOARCH=wasm go build -buildmode=c-shared -o ../aggregate.wasm .
-      - name: Benchmarks (CEL predicate, Starlark scripts, Starlark vs WASM)
-        run: go test -bench . -benchtime 1s -run XXX ./internal/lang/... ./internal/wasmhost/...
+          GOOS=wasip1 GOARCH=wasm go build -buildmode=c-shared -o ../aggregate.wasm
+      - name: Threshold gate (CEL predicate, starhost scripts, settle throughput)
+        run: bash scripts/bench-gate.sh
+      - name: Benchmarks (informational: Starlark vs WASM)
+        run: go test -bench BenchmarkHeavyTransform -benchtime 1s -run XXX ./internal/wasmhost/...
         env:
           EVENTBOAT_WASM_GUEST: ${{ github.workspace }}/internal/wasmhost/testdata/aggregate.wasm
