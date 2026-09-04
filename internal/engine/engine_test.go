@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -375,6 +376,69 @@ sinks:
 type errString string
 
 func (e errString) Error() string { return string(e) }
+
+// Replay reinjection (§3.3): re-injected messages keep their original
+// message_id (idempotent sinks deduplicate) and are stamped is_replay=true.
+func TestEngineInjectReplayPreservesIdentity(t *testing.T) {
+	h := newHarness(t)
+	pip := h.build(`
+apiVersion: eventboat/v3
+kind: Pipeline
+metadata: { name: replayid }
+sources:
+  in:
+    decoder: json
+    manual: { id: in }
+transforms:
+  t:
+    from: [in]
+    script: |
+      payload.rerun = True
+sinks:
+  out:
+    from: [t]
+    mem: { id: out }
+`)
+	eng, _ := runEngine(t, pip, store.NewMemory("replayid"), h.reg, fastOptions())
+
+	// Re-inject "at the transform" — exactly what replay --dlq does after a
+	// script bug is fixed.
+	if _, err := eng.InjectReplay("t", []byte(`{"i":1}`), map[string]any{"job_run_id": "r1"}, "original-id-7"); err != nil {
+		t.Fatal(err)
+	}
+	waitSettled(t, eng)
+
+	delivered, _, _ := h.sink("out").snapshot()
+	if len(delivered) != 1 {
+		t.Fatalf("delivered %d, want 1", len(delivered))
+	}
+	msg := delivered[0]
+	if msg.ID != "original-id-7" {
+		t.Errorf("message_id = %q, want the preserved original", msg.ID)
+	}
+	if v, ok := msg.Meta["is_replay"].(bool); !ok || !v {
+		t.Errorf("is_replay meta missing: %+v", msg.Meta)
+	}
+	if msg.Meta["job_run_id"] != "r1" {
+		t.Errorf("original meta lost: %+v", msg.Meta)
+	}
+	var payload map[string]any
+	_ = json.Unmarshal(msg.Out, &payload)
+	if payload["rerun"] != true {
+		t.Errorf("transform did not run on reinjection: %s", msg.Out)
+	}
+
+	// Source-node reinjection goes through the full accept path and also
+	// keeps the id.
+	if _, err := eng.InjectReplay("in", []byte(`{"i":2}`), nil, "original-id-8"); err != nil {
+		t.Fatal(err)
+	}
+	waitSettled(t, eng)
+	delivered, _, _ = h.sink("out").snapshot()
+	if len(delivered) != 2 || delivered[1].ID != "original-id-8" {
+		t.Fatalf("source-node replay lost identity: %+v", delivered)
+	}
+}
 
 // Options.WithLimits maps the limits section onto engine options; nil limits
 // preserve the defaults. drain() itself uses DrainTimeout instead of the old

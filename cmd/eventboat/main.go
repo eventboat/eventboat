@@ -16,6 +16,8 @@ Usage:
   eventboat [--json] trigger --config <job.yaml> [--parameters '{"from":"..."}']
   eventboat [--json] jobs list --config <job.yaml> [--limit N]
   eventboat [--json] jobs show <run-id> --config <job.yaml>
+  eventboat [--json] explain --config <pipeline.yaml> [--message f.json] [--topology]
+  eventboat [--json] replay --config <pipeline.yaml> (--dlq | --spool --from N | --job <run-id>) [--dry-run]
 
 Commands:
   verify    statically validate a pipeline: schema, topology, CEL+Starlark
@@ -26,6 +28,10 @@ Commands:
   trigger   manually fire a job pipeline once, optionally with parameters
             (backfill); prints the run summary
   jobs      job run history: list or show (counts, parameters, dead letters)
+  explain   deterministic walkthrough: symbolic, or message-level with real
+            CEL evaluation and Starlark dry-run; --topology renders the DAG
+  replay    re-inject dead letters (--dlq), a spool window (--spool) or one
+            job run's dead letters (--job) into a live pipeline (§3.3)
 
 Global flags:
   --json    machine-readable output for agents and CI
@@ -60,6 +66,10 @@ func run(args []string) int {
 		return cmdTrigger(rest[1:], jsonOut)
 	case "jobs":
 		return cmdJobs(rest[1:], jsonOut)
+	case "explain":
+		return cmdExplain(rest[1:], jsonOut)
+	case "replay":
+		return cmdReplay(rest[1:], jsonOut)
 	case "help", "--help", "-h":
 		fmt.Print(usageText)
 		return 0

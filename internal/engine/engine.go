@@ -648,8 +648,28 @@ func (e *Engine) deliver(edge *ir.Edge, seq int64, msg registry.Message) {
 
 // InjectAt feeds a message into a node: at a source it goes through the full
 // accept path (spool + stamps); at an internal node it is spooled and enters
-// the DAG at that node (testkit / future replay).
+// the DAG at that node (testkit / replay).
 func (e *Engine) InjectAt(node string, raw []byte, meta map[string]any) (int64, error) {
+	return e.injectAt(node, raw, meta, "")
+}
+
+// InjectReplay re-injects one previously dead-lettered (or spooled) message
+// (§3.3): it enters at the given node, keeps its ORIGINAL message_id (so
+// idempotent sinks deduplicate re-deliveries) and is stamped
+// meta.is_replay=true for sinks to recognize.
+func (e *Engine) InjectReplay(node string, raw []byte, meta map[string]any, originalID string) (int64, error) {
+	if meta == nil {
+		meta = map[string]any{}
+	}
+	meta = cloneMeta(meta)
+	meta["is_replay"] = true
+	if originalID != "" {
+		meta["original_message_id"] = originalID
+	}
+	return e.injectAt(node, raw, meta, originalID)
+}
+
+func (e *Engine) injectAt(node string, raw []byte, meta map[string]any, keepID string) (int64, error) {
 	n, ok := e.IR.Nodes[node]
 	if !ok {
 		return 0, fmt.Errorf("engine: unknown node %q", node)
@@ -658,12 +678,20 @@ func (e *Engine) InjectAt(node string, raw []byte, meta map[string]any) (int64, 
 		return 0, fmt.Errorf("engine: not started; call Run first")
 	}
 	if n.Section == config.SectionSource {
-		return 0, e.accept(registry.Message{Raw: raw, Meta: meta, SrcSeq: 0}, node)
+		// accept() preserves a non-empty message_id, so replays keep their
+		// original identity through the full spool path.
+		if err := e.accept(registry.Message{Raw: raw, Meta: meta, SrcSeq: 0, ID: keepID}, node); err != nil {
+			return 0, err
+		}
+		return 0, nil
 	}
 	// Internal injection: spool with the entry node as dispatch origin; the
 	// message enters the DAG at that node, skipping its upstream.
 	msg := registry.Message{Raw: raw, Meta: meta, SrcSeq: 0}
 	msg.ID = e.Opts.NewID()
+	if keepID != "" {
+		msg.ID = keepID
+	}
 	ingest := e.Opts.Clock()
 	m := cloneMeta(msg.Meta)
 	m["message_id"] = msg.ID
@@ -704,15 +732,11 @@ func (e *Engine) InjectAt(node string, raw []byte, meta map[string]any) (int64, 
 		return seq, nil
 	}
 	msg.Decoded = v
-	// Sinks have no out-edges: deliver straight into the sink's batcher and
-	// settle via its delivery policy (M2 review R4: replay can target any
-	// node, sinks included). The single outstanding branch registered by
-	// arrived is exactly this one delivery.
-	if n.Section == config.SectionSink {
-		e.deliver(&ir.Edge{From: node, To: node}, seq, msg)
-		return seq, nil
-	}
-	e.fanOut(n, seq, msg)
+	// Injection enters INTO the node: transforms run their script (a replay
+	// after a script fix re-executes it), sinks batch and write under their
+	// delivery policy (M2 review R4: replay can target any node). The single
+	// outstanding branch registered by arrived is exactly this one delivery.
+	e.deliver(&ir.Edge{From: node, To: node}, seq, msg)
 	return seq, nil
 }
 

@@ -72,6 +72,15 @@ eventboat trigger --config examples/job-sync/pipeline.yaml \
 eventboat jobs list --config examples/job-sync/pipeline.yaml        # history
 eventboat jobs show <run-id> --config examples/job-sync/pipeline.yaml
 
+# gate 3: explain (deterministic walkthrough) and replay (§3.3)
+eventboat explain --config examples/branching/pipeline.yaml                       # symbolic
+eventboat explain --config examples/branching/pipeline.yaml --message sample.json # message-level
+eventboat explain --config examples/branching/pipeline.yaml --topology            # mermaid + ASCII
+eventboat replay --config p.yaml --dlq --since 2h --dry-run                       # preview paths
+eventboat replay --config p.yaml --dlq --where 'payload.region == "eu"' --delete  # reinject + prune
+eventboat replay --config p.yaml --spool --from 42                                # spool window
+eventboat replay --config job.yaml --job <run-id>                                 # "restart failed"
+
 # the example's sqlite source database regenerates with:
 go run ./examples/job-sync/seed
 ```
@@ -181,6 +190,29 @@ Other recorded trims:
   as unused.
 - **Deployment-level config** (open question #10) is CLI flags for now:
   `--data-dir`, `--ephemeral`.
+
+### explain / replay (M2, §3.3) — rulings
+
+- **Scripts dry-run in message-level explain** (review R10): the Starlark
+  sandbox is deterministic and side-effect free, so with `--message` the
+  walkthrough executes scripts on the sample and evaluates each outgoing
+  CEL edge against the TRANSFORMED payload — the same answer production
+  would give. A failing script renders its backtrace and the dead-letter
+  consequence; without `--message` nothing executes (symbolic summary:
+  statement counts, budgets, condition texts).
+- **Injection enters INTO the target node**: replaying at a transform
+  re-runs its script (the "fix the script, replay the dead letter" flow);
+  at a sink it writes under the sink's delivery policy; at a source it
+  goes through the full spool path.
+- **Replayed messages keep their original `message_id`** (idempotent sinks
+  can deduplicate re-deliveries) and are stamped `meta.is_replay=true`
+  (plus `original_message_id`).
+- **`replay --spool --from N`** walks the spool window PAGEWISE
+  (`ReplayPage`, review R7 — the engine's crash recovery uses the same
+  path); **`--job <run-id>`** replays that run's dead letters
+  (`replay --job` is the dagu "restart failed" equivalent); `--dry-run`
+  explains each selected message instead of delivering; `--delete` prunes
+  replayed dead letters after successful reinjection.
 
 ### Job pipelines (M2, §5.8) — implemented semantics and decisions
 
