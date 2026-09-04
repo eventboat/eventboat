@@ -25,17 +25,12 @@ jobs:
       # Rebuild the WASM guest from source and run the wasm tests against the
       # fresh artifact (committed .wasm files exist so local `go test` works
       # without a toolchain dance; CI proves the source matches reality).
-      # Same discipline for the protobuf codec's committed descriptor set.
+      # The protobuf codec's descriptor set needs no step here: it is built
+      # by a Go generator and pinned by test (descr_test.go) — zero protoc.
       - name: Build WASM guest
         run: |
           cd internal/wasmhost/testdata/guest
           GOOS=wasip1 GOARCH=wasm go build -buildmode=c-shared -o ../aggregate.wasm .
-
-      - name: Rebuild protobuf descriptor set
-        run: |
-          cd internal/registry/builtin/testdata
-          protoc --descriptor_set_out=example.descr example.proto
-          git diff --exit-code -- example.descr || (echo "example.descr drifted from example.proto" && exit 1)
 
       # Includes the seven TestInvariant_* reliability tests, the examples
       # verify/test acceptance gate (cmd/eventboat/examples_test.go), the

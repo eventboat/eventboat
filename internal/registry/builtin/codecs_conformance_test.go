@@ -171,14 +171,11 @@ func TestAvroCodecErrorPaths(t *testing.T) {
 
 // --- protobuf ---
 
-// The descriptor set for these tests is a compiled FileDescriptorSet of:
+// The descriptor set for these tests is built by the Go generator in
+// descr_test.go (byte-deterministic; CI needs no protoc). The schema:
 //
-//	syntax = "proto3";
-//	package eventboat.example;
+//	syntax = "proto3"; package eventboat.example;
 //	message Metric { string name = 1; int64 value = 2; repeated string tags = 3; }
-//
-// Committed at testdata/example.descr (protoc --descriptor_set_out), rebuilt
-// by CI the same way the wasm guest is (source of truth next to it).
 func TestProtobufCodecRoundTrip(t *testing.T) {
 	dir, err := os.Getwd()
 	if err != nil {
