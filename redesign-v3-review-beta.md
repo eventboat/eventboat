@@ -87,7 +87,34 @@ starhost 精确 dirty）均有"语义不变"安全网：七不变量测试零改
 
 ## 三、技术预研（两个高风险改造的方案 + 两个基建项的选型）
 
-### R-B1 🟡 settle 锁外持久化：异步合并持久化 + 可见性屏障（flush barrier）
+### R-B1 🟡 settle 锁外持久化：回调移出 tracker 锁 + 单调守卫 + 尝试指针屏障
+
+> **实现期修正（2026-09-04，落地时发现）**：预研的"单 worker 异步合并持久化"方案被
+> **不变量 7 测试的零改动约束**否决——inv7 在楔住写中途**不经 waitSettled 直读**
+> `st.SourceState`，其确定性依赖"settle 的持久化与 settle 同 goroutine 完成、先于该
+> worker 的下一次写"这一旧序（settle.go 旧注释的另一半语义）。完全异步会让该读读到
+> 空水位。落地方案（语义严格不变、同样达成"tracker 锁下零 SQLite IO"）：
+>
+> 1. **记账与回调分离**：`advanceLocked()` 在 `t.mu` 内只做前缀扫描与前沿计算；
+>    `invoke()` 在**释放 t.mu 后**于**结算 goroutine 本身**回调 onSettled/onAdvance
+>    ——同 goroutine 序保持（inv7 依赖），锁不再横跨 fsync。
+> 2. **单调守卫替代全序**：并发 advance 可能乱序 flush，`persistCheckpoint` 以
+>    persistMu + 三个单调量（checkpoint 写守卫、per-source 已写 frontier、
+>    flushAttempted 尝试指针）保证 checkpoint/水位/指标永不回退；乱序的旧 advance
+>    直接跳过。
+> 3. **可见性屏障 = 尝试指针**：`durableThrough()`（flushAttempted）进入
+>    `WaitSettled` 与 `Quiesced` 的判定——观察者见 settled ⇒ 持久化**已尝试**（成功
+>    或失败）。失败也消费尝试指针：持久化永远失败时 WaitSettled 不再楔死（旧行为
+>    如此，保持），持久化本身由下一次 advance 重试（不变量 3 兜底）。
+> 4. 顺带收益：per-source `Settled` 回调与 `SetSourceState` 由"每次 advance 都写"变
+>    为"frontier 前进才写"（幂等语义，写放大下降）。
+>
+> 基准（BenchmarkSettleThroughput，本机 i5-14600KF，前后各 3s×2）：
+> mem **6556 → 6386 ns/op**、fsync_sim(100µs 模拟) **539010 → 543726 ns/op**
+> ——吞吐持平（该合成基准的瓶颈是 persistMu 串行化的模拟 fsync 本身，前后皆然）；
+> 本改造的收益是结构性的：**tracker 锁的最坏持锁时长从 fsync 级降到 ns 级**
+> （snapshot/arrived/add 不再排在 fsync 队列后），语义确定性由同 goroutine 序
+> 保持。记档：若未来需要真正的吞吐提升，方向是合并写（batch flush），不是锁。
 
 **现状（实现级走查）**：`settleTracker.maybeAdvanceLocked`（settle.go:96-144）持 `t.mu` 调用
 两组回调：`onSettled`（指标原子计数 + admission 释放，微秒级）与
@@ -235,7 +262,8 @@ goroutine 数回落到基线（stdlib runtime.NumGoroutine 对账，不引 golea
 
 ## 附记（发版时回填）
 
-- [ ] settle 前后基准：BenchmarkSettleThroughput（mem/sqlite）before/after
+- [x] settle 前后基准：BenchmarkSettleThroughput mem **6556 → 6386 ns/op**、
+  fsync_sim **539010 → 543726 ns/op**（i5-14600KF，3s×2；详见 R-B1 实现期修正）
 - [ ] starhost 前后基准：BenchmarkSimpleScript / BenchmarkContainerReadOnly before/after
 - [ ] lint 豁免清单（如有）
 - [ ] 阈值门基线数字与倍数

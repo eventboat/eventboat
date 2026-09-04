@@ -527,8 +527,7 @@ func (m *Manager) runOnce(ctx context.Context, jr *store.JobRun, triggerParams, 
 }
 
 func (m *Manager) quiesced(eng *engine.Engine) bool {
-	outstanding, _, _ := eng.SettleSnapshot()
-	return eng.SourcesDone() && outstanding == 0
+	return eng.Quiesced()
 }
 
 // sourceWatermarks reads each source's persisted {watermark} state.

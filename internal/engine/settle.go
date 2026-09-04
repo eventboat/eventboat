@@ -67,12 +67,14 @@ func (t *settleTracker) arrived(seq int64, node string, srcSeq int64) {
 // late done() from a racing worker must not resurrect it.
 func (t *settleTracker) add(seq int64, delta int) {
 	t.mu.Lock()
-	defer t.mu.Unlock()
 	if _, open := t.outstanding[seq]; !open {
+		t.mu.Unlock()
 		return
 	}
 	t.outstanding[seq] += delta
-	t.maybeAdvanceLocked()
+	justSettled, advanced, through, frontiers := t.advanceLocked()
+	t.mu.Unlock()
+	t.invoke(justSettled, advanced, through, frontiers)
 }
 
 // forceTerminal removes a message from the outstanding set without a terminal
@@ -81,26 +83,23 @@ func (t *settleTracker) add(seq int64, delta int) {
 // The checkpoint prefix may then advance past it.
 func (t *settleTracker) forceTerminal(seq int64) bool {
 	t.mu.Lock()
-	defer t.mu.Unlock()
 	if _, open := t.outstanding[seq]; !open {
+		t.mu.Unlock()
 		return false
 	}
 	delete(t.outstanding, seq)
-	t.maybeAdvanceLocked()
+	justSettled, advanced, through, frontiers := t.advanceLocked()
+	t.mu.Unlock()
+	t.invoke(justSettled, advanced, through, frontiers)
 	return true
 }
 
 // done marks one branch terminal.
 func (t *settleTracker) done(seq int64) { t.add(seq, -1) }
 
-// maybeAdvanceLocked runs with t.mu held and keeps it through the callbacks:
-// settle completion must imply that its persistence (checkpoint, source
-// states) is visible — observers polling snapshot() only see zero after the
-// durable writes finished. The callbacks are leaf operations (store writes,
-// admission release) and never re-enter the tracker.
-func (t *settleTracker) maybeAdvanceLocked() {
-	advanced := false
-	var justSettled []int64
+// advanceLocked runs the contiguous-prefix scan under t.mu and returns the
+// callback payload; it must not itself invoke the callbacks.
+func (t *settleTracker) advanceLocked() (justSettled []int64, advanced bool, through int64, frontiers map[string]int64) {
 	for t.settledPtr <= t.arrivedMax {
 		if n, open := t.outstanding[t.settledPtr]; !open || n <= 0 {
 			if open {
@@ -116,7 +115,7 @@ func (t *settleTracker) maybeAdvanceLocked() {
 	if len(justSettled) == 0 && !advanced {
 		return
 	}
-	through := t.settledPtr - 1
+	through = t.settledPtr - 1
 	settled := map[string][]int64{}
 	for seq := range t.srcRefs {
 		if seq <= through {
@@ -130,9 +129,25 @@ func (t *settleTracker) maybeAdvanceLocked() {
 			st.settled(seqs)
 		}
 	}
-	frontiers := make(map[string]int64, len(t.srcs))
+	frontiers = make(map[string]int64, len(t.srcs))
 	for node, st := range t.srcs {
 		frontiers[node] = st.frontier()
+	}
+	return
+}
+
+// invoke runs the settle callbacks WITHOUT holding t.mu (beta hardening:
+// the callbacks do store IO — checkpoint, source states — and the tracker
+// lock must not convoy on fsync). Correctness is preserved engine-side:
+// persistCheckpoint's monotonic guards (persistMu) make out-of-order flushes
+// safe, and the observers that used to imply "settled ⇒ persisted" by
+// polling snapshot() — WaitSettled, Quiesced — now wait on an explicit flush
+// barrier (durableThrough). The callbacks still run on the goroutine that
+// settled the message, so same-goroutine observers (a sink worker's next
+// write, a test polling the durable store) keep the old ordering.
+func (t *settleTracker) invoke(justSettled []int64, advanced bool, through int64, frontiers map[string]int64) {
+	if len(justSettled) == 0 && !advanced {
+		return
 	}
 	if t.onSettled != nil {
 		for _, seq := range justSettled {

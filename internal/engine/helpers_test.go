@@ -64,7 +64,7 @@ func (s *memSink) snapshot() (delivered []registry.Message, writes int, failures
 // harness wires test plugins (manual sources, mem sinks) into a fresh
 // registry and builds pipelines from YAML.
 type harness struct {
-	t       *testing.T
+	t       testing.TB
 	reg     *registry.Registry
 	mu      sync.Mutex
 	sources map[string]*testkit.ManualSource
@@ -74,7 +74,7 @@ type harness struct {
 const manualSchema = `{"type":"object","properties":{"id":{"type":"string"}},"additionalProperties":false}`
 const memSchema = manualSchema
 
-func newHarness(t *testing.T) *harness {
+func newHarness(t testing.TB) *harness {
 	t.Helper()
 	h := &harness{
 		t:       t,
@@ -152,9 +152,9 @@ func fastOptions() Options {
 }
 
 // runEngine starts an engine and registers cleanup. The returned stop
-// function cancels and waits for shutdown; stop old engines before starting
-// a new one on the same harness (test plugin instances are shared).
-func runEngine(t *testing.T, pip *ir.Pipeline, st store.Store, reg *registry.Registry, opts Options) (*Engine, func()) {
+// function cancels and waits for shutdown; stop old engines before starting a
+// new one on the same harness (test plugin instances are shared).
+func runEngine(t testing.TB, pip *ir.Pipeline, st store.Store, reg *registry.Registry, opts Options) (*Engine, func()) {
 	t.Helper()
 	if opts.SinkWrapper == nil && opts.HighWatermark == 0 {
 		opts = fastOptions()
@@ -188,7 +188,7 @@ func runEngine(t *testing.T, pip *ir.Pipeline, st store.Store, reg *registry.Reg
 	return eng, stop
 }
 
-func waitReady(t *testing.T, eng *Engine) {
+func waitReady(t testing.TB, eng *Engine) {
 	t.Helper()
 	for i := 0; i < 500; i++ {
 		if eng.Ready() {

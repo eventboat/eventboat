@@ -147,7 +147,9 @@ type Engine struct {
 	acceptedAt map[int64]time.Time // spool seq → accept time (settle latency)
 
 	persistMu        sync.Mutex
-	persistedThrough int64
+	persistedThrough int64 // highest checkpoint successfully written
+	flushAttempted   int64 // highest advance whose persistence was attempted
+	srcPersisted     map[string]int64
 
 	srcWG    sync.WaitGroup // live source goroutines (exhaustion tracking)
 	srcErrMu sync.Mutex
@@ -202,18 +204,19 @@ func New(p *ir.Pipeline, st store.Store, reg *registry.Registry, opts Options) (
 	}
 
 	e := &Engine{
-		IR:         p,
-		Store:      st,
-		Reg:        reg,
-		Opts:       opts,
-		chans:      map[string]chan *instance{},
-		sinks:      map[string]registry.Sink{},
-		codecs:     map[string]registry.Codec{},
-		sources:    map[string]registry.Source{},
-		acquired:   map[int64]bool{},
-		srcErr:     map[string]error{},
-		srcDone:    map[string]bool{},
-		acceptedAt: map[int64]time.Time{},
+		IR:            p,
+		Store:         st,
+		Reg:           reg,
+		Opts:          opts,
+		chans:         map[string]chan *instance{},
+		sinks:         map[string]registry.Sink{},
+		codecs:        map[string]registry.Codec{},
+		sources:       map[string]registry.Source{},
+		acquired:      map[int64]bool{},
+		srcErr:        map[string]error{},
+		srcDone:       map[string]bool{},
+		acceptedAt:    map[int64]time.Time{},
+		srcPersisted:  map[string]int64{},
 	}
 
 	for _, name := range p.Order {
@@ -313,32 +316,52 @@ func (e *Engine) onSettled(seq int64) {
 }
 
 // persistCheckpoint advances the durable checkpoint (invariant 2) and pushes
-// settle notifications into sources, persisting their returned state.
-// frontiers are precomputed by the tracker under its lock; a mutex plus a
-// monotonic guard keep interleaved advances from regressing the checkpoint.
+// settle notifications into sources, persisting their returned state. It runs
+// OUTSIDE the settle tracker's lock, on the goroutine that settled the prefix;
+// concurrent advances can therefore flush out of order, so monotonic guards
+// (persistMu) keep the checkpoint, per-source frontiers and the attempt
+// pointer from ever regressing. A failed checkpoint write only widens the
+// replay window on crash; the next advance retries. Never a loss (invariant 3).
 func (e *Engine) persistCheckpoint(settledThrough int64, frontiers map[string]int64) {
 	e.persistMu.Lock()
 	defer e.persistMu.Unlock()
 	if settledThrough > e.persistedThrough {
 		if err := e.Store.SetCheckpoint(e.IR.Config.Name, settledThrough); err != nil {
-			// A failed checkpoint persist only widens the replay window on
-			// crash; the next advance retries. Never a loss (invariant 3).
+			// Consume the flush position anyway: observers waiting on the
+			// visibility barrier must not block on a store that keeps
+			// failing — durability is retried by the next advance.
+			e.flushAttempted = settledThrough
 			return
 		}
 		e.persistedThrough = settledThrough
+		e.Metrics.CheckpointPtr.Store(settledThrough)
 	}
-	e.Metrics.CheckpointPtr.Store(settledThrough)
+	if settledThrough > e.flushAttempted {
+		e.flushAttempted = settledThrough
+	}
 	for name, src := range e.sources {
 		frontier := frontiers[name]
-		if frontier <= 0 {
+		if frontier <= 0 || frontier <= e.srcPersisted[name] {
 			continue
 		}
 		state, err := src.Settled(e.ctx, frontier)
 		if err != nil || state == nil {
 			continue
 		}
-		_ = e.Store.SetSourceState(e.IR.Config.Name, name, state, frontier)
+		if err := e.Store.SetSourceState(e.IR.Config.Name, name, state, frontier); err == nil {
+			e.srcPersisted[name] = frontier
+		}
 	}
+}
+
+// durableThrough reports the highest settle advance whose persistence has
+// been ATTEMPTED (successfully or not). It is the visibility barrier: snapshot
+// accounting (settledThrough) may lead it only while an inline flush is in
+// flight — never after the settling goroutine has moved on.
+func (e *Engine) durableThrough() int64 {
+	e.persistMu.Lock()
+	defer e.persistMu.Unlock()
+	return e.flushAttempted
 }
 
 // releaseAdmission frees the backpressure slot acquired when the message was
@@ -537,14 +560,14 @@ func (e *Engine) SourceErrors() map[string]error {
 }
 
 // Quiesced reports whether the pipeline has no outstanding execution work:
-// all sources stopped and nothing unsettled. Job runners poll this to move a
-// run into its terminal state.
+// all sources stopped, nothing unsettled, and every settle advance flushed
+// (attempted) — job runners poll this to move a run into its terminal state.
 func (e *Engine) Quiesced() bool {
 	if !e.SourcesDone() {
 		return false
 	}
-	outstanding, _, _ := e.settle.snapshot()
-	return outstanding == 0
+	outstanding, settledThrough, _ := e.settle.snapshot()
+	return outstanding == 0 && e.durableThrough() >= settledThrough
 }
 
 // Abandon terminal-settles every outstanding message by dead-lettering it
@@ -810,19 +833,22 @@ func (e *Engine) injectAt(node string, raw []byte, meta map[string]any, keepID s
 	return seq, nil
 }
 
-// WaitSettled blocks until no outstanding branches remain (test helper).
+// WaitSettled blocks until no outstanding branches remain and every settle
+// advance has been flushed (attempted) — settle completion must still imply
+// persistence visibility now that the flush runs outside the tracker lock
+// (test helper; the durability barrier keeps that implication explicit).
 func (e *Engine) WaitSettled(ctx context.Context) error {
 	tick := time.NewTicker(2 * time.Millisecond)
 	defer tick.Stop()
 	for {
-		outstanding, _, _ := e.settle.snapshot()
-		if outstanding == 0 && e.replayDone.Load() && e.admitting.Load() == 0 {
+		outstanding, settledThrough, _ := e.settle.snapshot()
+		if outstanding == 0 && e.durableThrough() >= settledThrough && e.replayDone.Load() && e.admitting.Load() == 0 {
 			return nil
 		}
 		select {
 		case <-ctx.Done():
 			outstanding, settled, arrived := e.settle.snapshot()
-			return fmt.Errorf("wait settled: ctx done with %d outstanding (settledThrough=%d arrivedMax=%d)", outstanding, settled, arrived)
+			return fmt.Errorf("wait settled: ctx done with %d outstanding (settledThrough=%d arrivedMax=%d durableThrough=%d)", outstanding, settled, arrived, e.durableThrough())
 		case <-tick.C:
 		}
 	}
