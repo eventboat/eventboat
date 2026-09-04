@@ -34,8 +34,10 @@ func cmdTrigger(args []string, jsonOut bool) int {
 		fmt.Fprintln(os.Stderr, "trigger: --config is required")
 		return 2
 	}
-	pipeline := fs.Arg(0)
-	_ = pipeline
+	if fs.NArg() > 0 {
+		fmt.Fprintf(os.Stderr, "trigger: unexpected argument %q (the pipeline comes from --config; unknown is an error)\n", fs.Arg(0))
+		return 2
+	}
 
 	var params map[string]any
 	if *parameters != "" {

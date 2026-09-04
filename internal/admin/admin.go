@@ -56,7 +56,7 @@ func Handler(svc *ops.Service, metricsHandler http.Handler, mcpHandler http.Hand
 		n, _ := strconv.Atoi(r.URL.Query().Get("n"))
 		writeJSON(w, http.StatusOK, svc.Tail(r.PathValue("node"), n))
 	})
-	mux.HandleFunc("GET /admin/dead_letters/{pipeline}", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /admin/dlq/{pipeline}", func(w http.ResponseWriter, r *http.Request) {
 		dls, err := svc.DeadLetterQuery(r.PathValue("pipeline"), r.URL.Query().Get("since"), r.URL.Query().Get("where"), 0)
 		if err != nil {
 			fail(w, http.StatusNotFound, err)

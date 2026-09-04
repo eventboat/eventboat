@@ -138,3 +138,22 @@ func TestJobTriggerAndHistoryCLI(t *testing.T) {
 		t.Fatalf("jobs show lost the backfill parameters: %s", detail)
 	}
 }
+
+// trigger takes no positional arguments: the pipeline comes from --config,
+// and stray arguments are an error ("unknown is an error" discipline).
+func TestTriggerRejectsStrayPositional(t *testing.T) {
+	bin := buildBinary(t)
+	root := repoRoot(t)
+	cmd := exec.Command(bin, "trigger", "--config", "examples/job-sync/pipeline.yaml", "stray-pipeline-name")
+	cmd.Dir = root
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("trigger accepted a stray positional argument:\n%s", out)
+	}
+	if cmd.ProcessState.ExitCode() != 2 {
+		t.Fatalf("exit code = %d, want 2:\n%s", cmd.ProcessState.ExitCode(), out)
+	}
+	if !strings.Contains(string(out), "unexpected argument") {
+		t.Fatalf("error message does not name the stray argument:\n%s", out)
+	}
+}

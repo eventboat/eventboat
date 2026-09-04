@@ -166,22 +166,39 @@ CLI `verify`/`test`/`run`/`trigger`/`jobs`/`explain`/`replay`/`mcp` with
 
 Trimmed or decided beyond the spec (recorded per redesign-v3-review.md):
 
-### Decision ledger (M1)
+### Decision ledger — M1 review round-2 fixes (D1–D4)
+
+The four rulings from the M1 fix round 2 (commit 879adfc):
+
+- **D1 — single-pass substitution**: values injected for environment
+  variables are never re-scanned for `${...}` (no injection-style second
+  expansion). Nested expansion, if ever wanted, is a new feature requiring
+  its own ruling.
+- **D2 — diagnostics quote the offending reference verbatim**, including
+  the optional marker `?`, so the exact occurrence is locatable.
+- **D3 — test directory mode treats unreadable/unparseable YAML as a hard
+  error**: a suite file that cannot even be probed must not silently
+  vanish behind the skipped count.
+- **D4 — `test` exit codes**: a mixed directory containing broken files
+  exits 1 (the valid suites still run); a directory with no valid suites
+  but broken files exits 2.
+
+### POC design decisions (review R6–R9)
 
 The four behavioral gap-decisions the pre-implementation review required
-(redesign-v3-review.md R6–R9), numbering used in commits:
+(redesign-v3-review.md R6–R9):
 
-- **D1 — transform failure retries on the incoming edge** (`when` delivery
+- **transform failure retries on the incoming edge** (`when` delivery
   policy of the edge that delivered the message to the failing node; fan-in
   takes the strictest policy), then dead letters with the Starlark backtrace
   (review R6).
-- **D2 — fan-out with zero matching edges settles as filtered**: it is a
+- **fan-out with zero matching edges settles as filtered**: it is a
   normal outcome of conditional routing, counted in
   `eventboat_fanout_no_match_total`; it never dead letters silently (review R7).
-- **D3 — `split` turns a JSON array payload into one message per element**;
+- **`split` turns a JSON array payload into one message per element**;
   children share the parent's spool identity and `message_id`, and the parent
   settles only when all children settle (review R8).
-- **D4 — the spool stores raw bytes + codec marker**, not the decoded form:
+- **the spool stores raw bytes + codec marker**, not the decoded form:
   replay stays compatible with codec upgrades (review R9; spec open question
   #6). Sources resume from their settled watermark after a crash; the
   unsettled tail may be re-emitted on top of the spool replay — duplicate
@@ -220,11 +237,14 @@ Other recorded trims:
   `--json` CLI outputs share the same Go structs and JSON shapes. OpenAPI
   single-source generation is deferred to M4 (allowed); shape consistency is
   enforced by the shared structs.
-- **Tool naming**: the task's `dead_letter_query`/`dead_letter_replay`
-  replace the spec's `dlq_query`/`dlq_replay` (clearer for agents; the CLI
-  keeps `replay --dlq`). All §3.4 tools are implemented: catalog, verify,
-  test, explain, deploy, status, jobs, trigger, tail,
-  dead_letter_query, dead_letter_replay, drain, pause, resume.
+- **Tool naming**: the MCP tools are `dlq_query`/`dlq_replay` per spec §3.4
+  (the `dlq` abbreviation is retained industry-wide per spec v1.6, matching
+  `replay --dlq` and the `dlq` config section). Formerly named
+  `dead_letter_query`/`dead_letter_replay` in the first M2 cut (renamed
+  after audit — kept here for old-reference retrieval). The Admin REST
+  endpoint is `GET /admin/dlq/{pipeline}`. All §3.4 tools are implemented:
+  catalog, verify, test, explain, deploy, status, jobs, trigger, tail,
+  dlq_query, dlq_replay, drain, pause, resume.
 - **verify reports, deploy enforces**: the `verify` tool returns structured
   diagnostics with an `ok` verdict (a successful tool call — agents iterate
   on diagnostics); `deploy` FAILS the tool call when verification fails.

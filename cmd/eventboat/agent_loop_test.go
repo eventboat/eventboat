@@ -187,6 +187,12 @@ cases:
 		t.Fatalf("jobs history lost the backfill parameters:\n%.800s", jobsOut)
 	}
 
+	// 9b. dlq_query exists under its spec §3.4 name (empty after clean runs).
+	dlq := mustCall(t, "dlq_query", map[string]any{"pipeline": "agent-loop-sync"})
+	if !strings.Contains(dlq, "null") && !strings.Contains(dlq, "[]") {
+		t.Fatalf("dlq_query not empty on a clean pipeline:\n%s", dlq)
+	}
+
 	// 10. fix-an-error loop: a broken script is rejected by deploy (verify),
 	// the fixed version deploys.
 	brokenScript := pipelineYAML("      payload.x = nosuch_binding")

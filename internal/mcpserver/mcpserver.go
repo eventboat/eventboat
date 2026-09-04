@@ -1,8 +1,8 @@
 // Package mcpserver exposes the ops service as MCP tools via the official
 // Go SDK (github.com/modelcontextprotocol/go-sdk, v1.x stable — M2 review
-// §一). Tool names follow the CLI concept names; the spec's dlq_query/
-// dlq_replay are dead_letter_query/dead_letter_replay (M2 task naming,
-// recorded in README).
+// §一). Tool names follow the CLI concept names; dlq_query/dlq_replay keep
+// the spec §3.4 names (the dlq abbreviation is retained industry-wide per
+// spec v1.6; they were briefly dead_letter_* in the first M2 cut).
 package mcpserver
 
 import (
@@ -98,7 +98,7 @@ func NewServer(svc *ops.Service, name, version string) *mcp.Server {
 			return textResult(svc.Tail(in.Node, in.N)), any(nil), nil
 		})
 
-	mcp.AddTool(server, &mcp.Tool{Name: "dead_letter_query",
+	mcp.AddTool(server, &mcp.Tool{Name: "dlq_query",
 		Description: "Query the dead letter queue of a deployed pipeline: since duration, CEL where-filter over {payload, meta}, limit."},
 		func(ctx context.Context, req *mcp.CallToolRequest, in struct {
 			Pipeline string `json:"pipeline"`
@@ -141,7 +141,7 @@ func NewServer(svc *ops.Service, name, version string) *mcp.Server {
 			return textResult(jr), any(nil), nil
 		})
 
-	mcp.AddTool(server, &mcp.Tool{Name: "dead_letter_replay",
+	mcp.AddTool(server, &mcp.Tool{Name: "dlq_replay",
 		Description: "Re-inject selected dead letters of a deployed continuous pipeline at a node (default: each letter's origin node). Replays keep their original message_id and are stamped is_replay=true."},
 		func(ctx context.Context, req *mcp.CallToolRequest, in struct {
 			Pipeline string  `json:"pipeline"`
