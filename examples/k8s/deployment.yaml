@@ -1,0 +1,56 @@
+# Eventboat on Kubernetes — the spec's primary deployment shape (§6.7):
+# one Deployment + probes + ConfigMap-mounted pipeline directory. An
+# Operator is explicitly out of scope (P2; M4 review R14): the binary's
+# own verify-first reload surface replaces the operator's reconciliation.
+#
+#   kubectl apply -f deployment.yaml
+#
+# Reload: POST /admin/deploy with the new config (verify-first), or
+# `kubectl rollout restart deployment/eventboat` (pods restart, sources
+# resume from their committed watermarks — at-least-once holds).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: eventboat
+  labels: {app: eventboat}
+spec:
+  replicas: 1            # single-active per pipeline group: spool is local-disk state
+  strategy: {type: Recreate}   # never two actives over one spool volume
+  selector:
+    matchLabels: {app: eventboat}
+  template:
+    metadata:
+      labels: {app: eventboat}
+    spec:
+      containers:
+        - name: eventboat
+          image: eventboat:latest   # build from this repo: go build ./cmd/eventboat
+          args: ["run", "--config-dir", "/pipelines"]
+          ports:
+            - {name: admin, containerPort: 7788}
+          env:
+            - {name: KAFKA_BROKERS, value: "kafka:9092"}   # ${VAR} substitution targets
+          volumeMounts:
+            - {name: pipelines, mountPath: /pipelines, readOnly: true}
+            - {name: data, mountPath: /data}
+          livenessProbe:
+            httpGet: {path: /live, port: admin}
+            initialDelaySeconds: 5
+          readinessProbe:
+            httpGet: {path: /ready, port: admin}   # spool health + pipeline readiness
+            initialDelaySeconds: 5
+          resources:
+            requests: {cpu: 100m, memory: 128Mi}
+            limits: {memory: 512Mi}
+      volumes:
+        - name: pipelines
+          configMap:
+            name: eventboat-pipelines   # create with: kubectl create configmap eventboat-pipelines --from-file=pipelines/
+        - name: data
+          emptyDir: {}                  # swap for a PersistentVolumeClaim to survive rescheduling
+---
+# The admin surface (REST + SSE + read-only UI) is bound to 127.0.0.1 by
+# default. To use the probes and deploy API from the cluster network, set
+# an explicit listener in a kind: Runtime config mounted alongside, and
+# keep it behind your own auth boundary — POC builds ship without one
+# (recorded in README).

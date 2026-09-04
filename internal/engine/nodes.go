@@ -21,10 +21,15 @@ import (
 func (e *Engine) runTransform(node *ir.Node) {
 	defer e.wg.Done()
 	// One wasm invoker per worker goroutine: wazero module instances are not
-	// goroutine-safe and die on traps (review-m3 R4).
+	// goroutine-safe and die on traps (review-m3 R4). The logger is wrapped
+	// so the slow-call watchdog names the node — "which pipeline node is
+	// wedged" is the actionable fact (M3-audit B follow-up).
 	var invoker *wasmhost.Invoker
 	if node.Wasm != nil {
-		invoker = node.Wasm.NewInvoker(node.Config.Wasm, e.Opts.Logf, e.Opts.WasmSlowCallWarnMs)
+		nodeLogf := func(format string, args ...any) {
+			e.Opts.Logf("[node %s] "+format, append([]any{node.Name}, args...)...)
+		}
+		invoker = node.Wasm.NewInvoker(node.Config.Wasm, nodeLogf, e.Opts.WasmSlowCallWarnMs)
 		defer invoker.Close()
 	}
 	ch := e.chans[node.Name]
