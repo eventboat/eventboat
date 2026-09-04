@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -298,7 +299,11 @@ func TestJobKill9ResumeFromWatermark(t *testing.T) {
 	}
 
 	// Wait until the crash point: two messages settled (checkpoint = 2).
-	waitFor(t, 5*time.Second, func() bool {
+	// Budgets carry 3x headroom and scale with EVENTBOAT_TEST_TIMEOUT_FACTOR:
+	// this test keeps two live managers plus a wedged writer schedulable, and
+	// under -count=N machine saturation fixed 5s/10s budgets flaked (the M4
+	// observation item this hardening closes).
+	waitFor(t, loadScaled(15*time.Second), func() bool {
 		cp, err := st1.Checkpoint("nightly")
 		return err == nil && cp == 2
 	})
@@ -319,7 +324,7 @@ func TestJobKill9ResumeFromWatermark(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	waitFor(t, 10*time.Second, func() bool {
+	waitFor(t, loadScaled(30*time.Second), func() bool {
 		runs, _ := st2.JobRuns("nightly", 5)
 		for _, jr := range runs {
 			if jr.Status == store.JobSuccess {
@@ -352,7 +357,7 @@ func TestJobKill9ResumeFromWatermark(t *testing.T) {
 	// The durable watermark (what a NEXT restart would resume from) reached
 	// the last row. Asserting the shared in-memory test double instead would
 	// race with manager 1's cleanup-released goroutines, which also write it.
-	waitFor(t, 10*time.Second, func() bool {
+	waitFor(t, loadScaled(30*time.Second), func() bool {
 		state, _, err := st2.SourceState("nightly", "pull")
 		return err == nil && strings.Contains(string(state), `"watermark":"c05"`)
 	})
@@ -761,6 +766,20 @@ func waitFor(t *testing.T, timeout time.Duration, cond func() bool) {
 		time.Sleep(5 * time.Millisecond)
 	}
 	t.Fatal("condition not met before timeout")
+}
+
+// loadScaled stretches a wait budget on loaded machines (CI runners under
+// -count=N package saturation): EVENTBOAT_TEST_TIMEOUT_FACTOR (float, default
+// 1) multiplies the base budget. Conditions still poll at 5ms — only the
+// failure budget moves.
+func loadScaled(base time.Duration) time.Duration {
+	f := 1.0
+	if v := os.Getenv("EVENTBOAT_TEST_TIMEOUT_FACTOR"); v != "" {
+		if parsed, err := strconv.ParseFloat(v, 64); err == nil && parsed > 0 && parsed < 1000 {
+			f = parsed
+		}
+	}
+	return time.Duration(float64(base) * f)
 }
 
 func writeFile(path string, data []byte) error {
