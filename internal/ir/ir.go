@@ -5,6 +5,7 @@
 package ir
 
 import (
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"strings"
@@ -17,6 +18,15 @@ import (
 	"github.com/eventboat/eventboat/internal/lang/starhost"
 	"github.com/eventboat/eventboat/internal/registry"
 )
+
+func hasCap(caps []string, want string) bool {
+	for _, c := range caps {
+		if c == want {
+			return true
+		}
+	}
+	return false
+}
 
 // Edge is one resolved DAG edge with its compiled condition.
 type Edge struct {
@@ -244,12 +254,18 @@ func Build(cfg *config.Pipeline, reg *registry.Registry, starOpts starhost.Optio
 				n.IsSplit = true
 			}
 		case config.SectionSource:
-			if _, ok := reg.LookupSource(n.Config.Plugin); !ok {
+			if n.Config.Grpc != nil {
+				validateExternal(p, n, reg, "source", file, add)
+			} else if _, ok := reg.LookupSource(n.Config.Plugin); !ok {
 				add(config.Diagnostic{Severity: "error", Code: "plugin_unknown", File: file, Line: n.Config.Line,
 					Message: fmt.Sprintf("unknown source plugin %q", n.Config.Plugin),
 					Hint:    "run `eventboat verify` against a binary that registers this plugin; see plugin catalog"})
-			} else if _, err := reg.NewSource(n.Config.Plugin, n.Config.PluginConfig); err != nil {
-				addSchemaDiags(file, n, err, add)
+			} else {
+				meta, _ := reg.LookupSource(n.Config.Plugin)
+				checkDeclaredVersion(p, n, meta.Version, file, add)
+				if _, err := reg.NewSource(n.Config.Plugin, n.Config.PluginConfig); err != nil {
+					addSchemaDiags(file, n, err, add)
+				}
 			}
 			codec := n.Config.Decoder
 			if codec == "" {
@@ -260,11 +276,17 @@ func Build(cfg *config.Pipeline, reg *registry.Registry, starOpts starhost.Optio
 					Message: fmt.Sprintf("unknown decoder %q on source %q", codec, name)})
 			}
 		case config.SectionSink:
-			if _, ok := reg.LookupSink(n.Config.Plugin); !ok {
+			if n.Config.Grpc != nil {
+				validateExternal(p, n, reg, "sink", file, add)
+			} else if _, ok := reg.LookupSink(n.Config.Plugin); !ok {
 				add(config.Diagnostic{Severity: "error", Code: "plugin_unknown", File: file, Line: n.Config.Line,
 					Message: fmt.Sprintf("unknown sink plugin %q", n.Config.Plugin)})
-			} else if _, err := reg.NewSink(n.Config.Plugin, n.Config.PluginConfig); err != nil {
-				addSchemaDiags(file, n, err, add)
+			} else {
+				meta, _ := reg.LookupSink(n.Config.Plugin)
+				checkDeclaredVersion(p, n, meta.Version, file, add)
+				if _, err := reg.NewSink(n.Config.Plugin, n.Config.PluginConfig); err != nil {
+					addSchemaDiags(file, n, err, add)
+				}
 			}
 			codec := n.Config.Encoder
 			if codec == "" {
@@ -333,6 +355,63 @@ func bindingParameterNames(text string) []string {
 	return out
 }
 
+// validateExternal runs the static checks for one out-of-process plugin node:
+// no name collision with compiled-in plugins, schema validation against the
+// manifest, and the declared-version check (review-m3 R5/R6/R9). No process
+// is spawned here — verify stays side-effect free.
+func validateExternal(p *Pipeline, n *Node, reg *registry.Registry, kind string, file string, add func(config.Diagnostic)) {
+	if kind == "source" {
+		if _, ok := reg.LookupSource(n.Config.Plugin); ok {
+			add(config.Diagnostic{Severity: "error", Code: "grpc_builtin_conflict", File: file, Line: n.Config.Line,
+				Message: fmt.Sprintf("plugin %q is compiled into this binary; a grpc block is only for external plugins", n.Config.Plugin),
+				Hint:    "remove the grpc block to use the compiled-in plugin, or rename the external plugin"})
+			return
+		}
+	} else if _, ok := reg.LookupSink(n.Config.Plugin); ok {
+		add(config.Diagnostic{Severity: "error", Code: "grpc_builtin_conflict", File: file, Line: n.Config.Line,
+			Message: fmt.Sprintf("plugin %q is compiled into this binary; a grpc block is only for external plugins", n.Config.Plugin),
+			Hint:    "remove the grpc block to use the compiled-in plugin, or rename the external plugin"})
+		return
+	}
+	m := n.Config.Manifest
+	if m == nil {
+		return // manifest read/shape errors were diagnosed at load time
+	}
+	if m.Name != n.Config.Plugin {
+		add(config.Diagnostic{Severity: "error", Code: "grpc_manifest_name", File: file, Line: n.Config.Line,
+			Message: fmt.Sprintf("manifest of plugin declares name %q but the plugin block key is %q", m.Name, n.Config.Plugin),
+			Hint:    "the plugin block key must equal the manifest (and handshake) name"})
+		return
+	}
+	checkDeclaredVersion(p, n, m.Version, file, add)
+	schemaJSON, err := json.Marshal(m.ConfigSchema)
+	if err != nil {
+		add(config.Diagnostic{Severity: "error", Code: "grpc_manifest_schema", File: file, Line: n.Config.Line,
+			Message: fmt.Sprintf("manifest schema of plugin %q: %v", n.Config.Plugin, err)})
+		return
+	}
+	if err := registry.ValidateSchema(n.Config.Plugin, string(schemaJSON), n.Config.PluginConfig); err != nil {
+		addSchemaDiags(file, n, err, add)
+	}
+}
+
+// checkDeclaredVersion enforces the optional plugin version pin: a config
+// referencing a version other than the registered one is a verify error
+// (redesign-v3.md §6.5).
+func checkDeclaredVersion(p *Pipeline, n *Node, registered int, file string, add func(config.Diagnostic)) {
+	if n.Config.Version == 0 || n.Config.Version == registered {
+		return
+	}
+	add(config.Diagnostic{Severity: "error", Code: "plugin_version_mismatch", File: file, Line: n.Config.Line,
+		Message: fmt.Sprintf("node %q declares plugin %q version %d but version %d is %s", n.Name, n.Config.Plugin, n.Config.Version, registered, func() string {
+			if n.Config.Grpc != nil {
+				return "declared in its manifest"
+			}
+			return "registered in this binary"
+		}()),
+		Hint: "update the version pin or the plugin; the mismatch is fatal before any message flows"})
+}
+
 // checkJobSemantics enforces the job-pipeline rules of §5.8 (M2 review):
 // pull-capability sources, cron syntax, parameter reference legality, hook
 // sink schemas and the continuous-pipeline rejections.
@@ -348,27 +427,63 @@ func checkJobSemantics(p *Pipeline, reg *registry.Registry, parameters map[strin
 		}
 	}
 
-	// Source capability + sql-in-continuous lint.
+	// Source capability + sql-in-continuous lint + multi-pull warning (M2
+	// review #6, M3 R12): more than one pull source in a job pipeline makes
+	// the `cursor` parameter binding ambiguous (it binds the first).
+	warnMultiPull := func(line int) {
+		add(config.Diagnostic{Severity: "warning", Code: "job_multiple_pull_sources", File: file,
+			Line:    line,
+			Message: "job pipeline has multiple pull sources; the cursor parameter binds the watermark of the first (declaration order)",
+			Hint:    "reference per-source cursors explicitly or split into one pipeline per source"})
+	}
+	pullCount := 0
 	for _, name := range p.Order {
 		n := p.Nodes[name]
 		if n.Section != config.SectionSource {
+			continue
+		}
+		// External plugins declare capabilities in their manifest.
+		if n.Config.Grpc != nil {
+			if n.Config.Manifest == nil {
+				continue // manifest errors were diagnosed at load time
+			}
+			if !hasCap(n.Config.Manifest.Capabilities, "pull") {
+				if job {
+					add(config.Diagnostic{Severity: "error", Code: "job_source_not_pull", File: file,
+						Line:    n.Config.Line,
+						Message: fmt.Sprintf("job pipeline source %q uses external plugin %q which has no pull capability", name, n.Config.Plugin),
+						Hint:    "job pipelines need sources that page through data and signal exhaustion (capabilities: [pull])"})
+				}
+				continue
+			}
+			pullCount++
+			if job && pullCount > 1 {
+				warnMultiPull(n.Config.Line)
+			}
+			if !job {
+				add(config.Diagnostic{Severity: "warning", Code: "lint_sql_continuous", File: file,
+					Line:    n.Config.Line,
+					Message: fmt.Sprintf("source %q is a pull source in a continuous pipeline: it pulls once at startup, then idles", name),
+					Hint:    "job pipelines (run.mode: job) are the intended home for pull sources"})
+			}
 			continue
 		}
 		meta, ok := reg.LookupSource(n.Config.Plugin)
 		if !ok {
 			continue // unknown plugin already diagnosed
 		}
-		pull := false
-		for _, c := range meta.Capabilities {
-			if c == "pull" {
-				pull = true
-			}
+		pull := hasCap(meta.Capabilities, "pull")
+		if pull {
+			pullCount++
 		}
 		if job && !pull {
 			add(config.Diagnostic{Severity: "error", Code: "job_source_not_pull", File: file,
 				Line:    n.Config.Line,
 				Message: fmt.Sprintf("job pipeline source %q uses plugin %q which has no pull capability", name, n.Config.Plugin),
 				Hint:    "job pipelines need sources that page through data and signal exhaustion (capabilities: [pull])"})
+		}
+		if job && pull && pullCount > 1 {
+			warnMultiPull(n.Config.Line)
 		}
 		if !job && n.Config.Plugin == "sql" {
 			add(config.Diagnostic{Severity: "warning", Code: "lint_sql_continuous", File: file,

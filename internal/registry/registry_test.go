@@ -17,10 +17,10 @@ func TestRegisterReservedNameRejected(t *testing.T) {
 	// registration, not discovered at verify time.
 	for _, name := range []string{"from", "when", "batch", "script", "delivery"} {
 		r := New()
-		if err := r.RegisterSource(name, okSchema, nil, func(map[string]any) (Source, error) { return nil, nil }); err == nil {
+		if err := r.RegisterSource(name, 1, okSchema, nil, func(map[string]any) (Source, error) { return nil, nil }); err == nil {
 			t.Errorf("source %q: reserved name accepted", name)
 		}
-		if err := r.RegisterSink(name, okSchema, func(map[string]any) (Sink, error) { return nil, nil }); err == nil {
+		if err := r.RegisterSink(name, 1, okSchema, func(map[string]any) (Sink, error) { return nil, nil }); err == nil {
 			t.Errorf("sink %q: reserved name accepted", name)
 		}
 		if err := r.RegisterCodec(name, func(map[string]any) (Codec, error) { return nil, nil }); err == nil {
@@ -32,41 +32,64 @@ func TestRegisterReservedNameRejected(t *testing.T) {
 func TestRegisterDuplicateRejected(t *testing.T) {
 	r := New()
 	factory := func(map[string]any) (Source, error) { return nil, nil }
-	if err := r.RegisterSource("dup", okSchema, nil, factory); err != nil {
+	if err := r.RegisterSource("dup", 1, okSchema, nil, factory); err != nil {
 		t.Fatal(err)
 	}
-	if err := r.RegisterSource("dup", okSchema, nil, factory); err == nil {
+	if err := r.RegisterSource("dup", 1, okSchema, nil, factory); err == nil {
 		t.Error("duplicate source registration accepted")
 	}
 	// Sections are separate namespaces: the "file" plugin legitimately
 	// exists as both a source and a sink.
 	noopSnk := func(map[string]any) (Sink, error) { return nil, nil }
-	if err := r.RegisterSink("dup", okSchema, noopSnk); err != nil {
+	if err := r.RegisterSink("dup", 1, okSchema, noopSnk); err != nil {
 		t.Errorf("sink name sharing a source name rejected: %v", err)
 	}
-	if err := r.RegisterSink("dup", okSchema, noopSnk); err == nil {
+	if err := r.RegisterSink("dup", 1, okSchema, noopSnk); err == nil {
 		t.Error("duplicate sink registration accepted")
 	}
 }
 
 func TestRegisterNilFactoryRejected(t *testing.T) {
 	r := New()
-	if err := r.RegisterSource("x", okSchema, nil, nil); err == nil {
+	if err := r.RegisterSource("x", 1, okSchema, nil, nil); err == nil {
 		t.Error("nil source factory accepted")
 	}
-	if err := r.RegisterSink("x", okSchema, nil); err == nil {
+	if err := r.RegisterSink("x", 1, okSchema, nil); err == nil {
 		t.Error("nil sink factory accepted")
+	}
+}
+
+func TestRegisterVersionValidated(t *testing.T) {
+	r := New()
+	// ABI versions start at 1 (redesign-v3.md §6.5: catalog carries versions;
+	// a config-referenced version mismatch is a verify error).
+	noopSrc := func(map[string]any) (Source, error) { return nil, nil }
+	noopSnk := func(map[string]any) (Sink, error) { return nil, nil }
+	if err := r.RegisterSource("v", 0, okSchema, nil, noopSrc); err == nil {
+		t.Error("version 0 source accepted")
+	}
+	if err := r.RegisterSink("v", -1, okSchema, noopSnk); err == nil {
+		t.Error("negative sink version accepted")
+	}
+	if err := r.RegisterSource("v2", 2, okSchema, nil, noopSrc); err != nil {
+		t.Fatal(err)
+	}
+	if meta, ok := r.LookupSource("v2"); !ok || meta.Version != 2 {
+		t.Errorf("LookupSource version = %v, %v; want 2, true", meta, ok)
+	}
+	if c := r.Catalog(); len(c.Sources) == 0 || c.Sources[0].Version != 2 {
+		t.Errorf("catalog does not carry source version: %+v", c.Sources)
 	}
 }
 
 func TestRegisterInvalidSchemaRejected(t *testing.T) {
 	r := New()
-	if err := r.RegisterSource("bad", `{not json`, nil, func(map[string]any) (Source, error) { return nil, nil }); err == nil {
+	if err := r.RegisterSource("bad", 1, `{not json`, nil, func(map[string]any) (Source, error) { return nil, nil }); err == nil {
 		t.Error("invalid schema JSON accepted")
 	}
 	// A schema that does not compile (unknown $ref) is also rejected.
 	badRef := `{ "$ref": "https://eventboat.dev/nope.json" }`
-	if err := r.RegisterSource("badref", badRef, nil, func(map[string]any) (Source, error) { return nil, nil }); err == nil {
+	if err := r.RegisterSource("badref", 1, badRef, nil, func(map[string]any) (Source, error) { return nil, nil }); err == nil {
 		t.Error("unresolvable $ref accepted")
 	}
 }
@@ -83,7 +106,7 @@ func TestNewSourceUnknownAndSchemaValidation(t *testing.T) {
 		t.Error("unknown codec accepted")
 	}
 
-	if err := r.RegisterSource("s", okSchema, []string{"pull"}, func(map[string]any) (Source, error) { return nil, nil }); err != nil {
+	if err := r.RegisterSource("s", 1, okSchema, []string{"pull"}, func(map[string]any) (Source, error) { return nil, nil }); err != nil {
 		t.Fatal(err)
 	}
 	// Missing required field fails validation before the factory runs.
@@ -117,11 +140,11 @@ func TestCatalogListsSorted(t *testing.T) {
 	noopSrc := func(map[string]any) (Source, error) { return nil, nil }
 	noopSnk := func(map[string]any) (Sink, error) { return nil, nil }
 	for _, n := range []string{"kafka", "cron", "file"} {
-		if err := r.RegisterSource(n, okSchema, nil, noopSrc); err != nil {
+		if err := r.RegisterSource(n, 1, okSchema, nil, noopSrc); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := r.RegisterSink("drop", okSchema, noopSnk); err != nil {
+	if err := r.RegisterSink("drop", 1, okSchema, noopSnk); err != nil {
 		t.Fatal(err)
 	}
 	if err := r.RegisterCodec("json", func(map[string]any) (Codec, error) { return nil, nil }); err != nil {
@@ -142,10 +165,10 @@ func TestCatalogListsSorted(t *testing.T) {
 func TestLookupSourceCapabilities(t *testing.T) {
 	r := New()
 	noopSrc := func(map[string]any) (Source, error) { return nil, nil }
-	if err := r.RegisterSource("sql", okSchema, []string{"pull"}, noopSrc); err != nil {
+	if err := r.RegisterSource("sql", 1, okSchema, []string{"pull"}, noopSrc); err != nil {
 		t.Fatal(err)
 	}
-	if err := r.RegisterSource("cron", okSchema, nil, noopSrc); err != nil {
+	if err := r.RegisterSource("cron", 1, okSchema, nil, noopSrc); err != nil {
 		t.Fatal(err)
 	}
 	m, ok := r.LookupSource("sql")

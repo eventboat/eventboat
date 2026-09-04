@@ -1,8 +1,10 @@
 package config
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -228,7 +230,90 @@ func LoadBytes(file string, data []byte) *Result {
 	parseSection(file, raw, "transforms", SectionTransform, p, lines, res)
 	parseSection(file, raw, "sinks", SectionSink, p, lines, res)
 
+	loadManifests(file, p, res)
+
 	return res
+}
+
+// loadManifests reads the plugin manifest of every external (grpc) node.
+// Manifests keep verify static: the schema check runs against the file, not a
+// spawned process (redesign-v3-review-m3.md R5).
+func loadManifests(file string, p *Pipeline, res *Result) {
+	dir := "."
+	if i := strings.LastIndexByte(file, '/'); i >= 0 {
+		dir = file[:i]
+	}
+	if i := strings.LastIndexByte(file, '\\'); i >= 0 && i > len(dir)-1 {
+		dir = file[:i]
+	}
+	for _, node := range p.Order {
+		var n *Node
+		if v, ok := p.Sources[node]; ok {
+			n = v
+		} else if v, ok := p.Transforms[node]; ok {
+			n = v
+		} else {
+			n = p.Sinks[node]
+		}
+		if n == nil || n.Grpc == nil {
+			continue
+		}
+		path := n.Grpc.Schema
+		if strings.Contains(path, "${parameters.") {
+			res.Diagnostics = append(res.Diagnostics, Diagnostic{
+				Severity: "error", Code: "grpc_manifest_read", File: file, Line: n.Line,
+				Message: fmt.Sprintf("grpc.schema of plugin %q must not reference job parameters: the manifest is read at load time, before parameters resolve", n.Plugin),
+				Hint:    "use a static path; parameterize grpc.command instead",
+			})
+			continue
+		}
+		if !filepath.IsAbs(path) && dir != "" && dir != "." {
+			path = dir + "/" + n.Grpc.Schema
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			res.Diagnostics = append(res.Diagnostics, Diagnostic{
+				Severity: "error", Code: "grpc_manifest_read", File: file, Line: n.Line,
+				Message: fmt.Sprintf("manifest for plugin %q: %v", n.Plugin, err),
+				Hint:    "grpc.schema is resolved relative to the pipeline file",
+			})
+			continue
+		}
+		var m PluginManifest
+		if err := json.Unmarshal(data, &m); err != nil {
+			res.Diagnostics = append(res.Diagnostics, Diagnostic{
+				Severity: "error", Code: "grpc_manifest_parse", File: file, Line: n.Line,
+				Message: fmt.Sprintf("manifest for plugin %q is not valid JSON: %v", n.Plugin, err), Hint: "",
+			})
+			continue
+		}
+		kind := "source"
+		if n.Section == SectionSink {
+			kind = "sink"
+		}
+		// The name-vs-block-key and builtin-conflict checks live in ir (they
+		// need the registry); here we only validate the manifest's shape.
+		switch {
+		case m.Kind != kind:
+			res.Diagnostics = append(res.Diagnostics, Diagnostic{
+				Severity: "error", Code: "grpc_manifest_kind", File: file, Line: n.Line,
+				Message: fmt.Sprintf("manifest of plugin %q declares kind %q; node %q is in %s", n.Plugin, m.Kind, n.Name, n.Section),
+				Hint:    "source plugins serve in sources:, sink plugins in sinks:",
+			})
+		case m.Version < 1:
+			res.Diagnostics = append(res.Diagnostics, Diagnostic{
+				Severity: "error", Code: "grpc_manifest_version", File: file, Line: n.Line,
+				Message: fmt.Sprintf("manifest of plugin %q must declare version >= 1", n.Plugin), Hint: "",
+			})
+		case m.ConfigSchema == nil:
+			res.Diagnostics = append(res.Diagnostics, Diagnostic{
+				Severity: "error", Code: "grpc_manifest_schema", File: file, Line: n.Line,
+				Message: fmt.Sprintf("manifest of plugin %q has no config_schema", n.Plugin), Hint: "",
+			})
+		default:
+			n.Manifest = &m
+		}
+	}
 }
 
 // parseRun validates the run block (redesign-v3.md §5.8). Cron syntax is
@@ -723,6 +808,15 @@ func SubstituteParameters(p *Pipeline, global map[string]any, valuesFor func(sou
 		node.OrderKey, _ = sub(node.OrderKey, values).(string)
 		node.Decoder, _ = sub(node.Decoder, values).(string)
 		node.Encoder, _ = sub(node.Encoder, values).(string)
+		if node.Grpc != nil {
+			for i := range node.Grpc.Command {
+				node.Grpc.Command[i], _ = sub(node.Grpc.Command[i], values).(string)
+			}
+			for k, v := range node.Grpc.Env {
+				node.Grpc.Env[k], _ = sub(v, values).(string)
+			}
+			node.Grpc.Schema, _ = sub(node.Grpc.Schema, values).(string)
+		}
 		for i := range node.From {
 			node.From[i].When, _ = sub(node.From[i].When, values).(string)
 			node.From[i].Route, _ = sub(node.From[i].Route, values).(string)

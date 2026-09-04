@@ -92,6 +92,7 @@ var reservedNames = map[string]bool{
 
 type sourceEntry struct {
 	name         string
+	version      int
 	schema       string
 	compiled     *jsonschema.Schema
 	capabilities []string
@@ -100,6 +101,7 @@ type sourceEntry struct {
 
 type sinkEntry struct {
 	name     string
+	version  int
 	schema   string
 	compiled *jsonschema.Schema
 	factory  func(cfg map[string]any) (Sink, error)
@@ -149,12 +151,16 @@ func compileSchema(name, schema string) (*jsonschema.Schema, error) {
 	return sch, nil
 }
 
-// RegisterSource registers a source plugin with its JSON Schema (draft 2020-12
-// recommended, additionalProperties:false expected) and optional capabilities
-// such as "pull".
-func (r *Registry) RegisterSource(name, schema string, capabilities []string, factory func(cfg map[string]any) (Source, error)) error {
+// RegisterSource registers a source plugin with its ABI version (v1 builtins
+// are version 1), its JSON Schema (draft 2020-12 recommended,
+// additionalProperties:false expected) and optional capabilities such as
+// "pull".
+func (r *Registry) RegisterSource(name string, version int, schema string, capabilities []string, factory func(cfg map[string]any) (Source, error)) error {
 	if reservedNames[name] {
 		return fmt.Errorf("plugin name %q is reserved by the framework field whitelist", name)
+	}
+	if version < 1 {
+		return fmt.Errorf("plugin %q: version must be >= 1", name)
 	}
 	if factory == nil {
 		return fmt.Errorf("plugin %q: nil factory", name)
@@ -168,14 +174,17 @@ func (r *Registry) RegisterSource(name, schema string, capabilities []string, fa
 	if _, dup := r.sources[name]; dup {
 		return fmt.Errorf("source plugin %q already registered", name)
 	}
-	r.sources[name] = &sourceEntry{name: name, schema: schema, compiled: compiled, capabilities: capabilities, factory: factory}
+	r.sources[name] = &sourceEntry{name: name, version: version, schema: schema, compiled: compiled, capabilities: capabilities, factory: factory}
 	return nil
 }
 
-// RegisterSink registers a sink plugin with its JSON Schema.
-func (r *Registry) RegisterSink(name, schema string, factory func(cfg map[string]any) (Sink, error)) error {
+// RegisterSink registers a sink plugin with its ABI version and JSON Schema.
+func (r *Registry) RegisterSink(name string, version int, schema string, factory func(cfg map[string]any) (Sink, error)) error {
 	if reservedNames[name] {
 		return fmt.Errorf("plugin name %q is reserved by the framework field whitelist", name)
+	}
+	if version < 1 {
+		return fmt.Errorf("plugin %q: version must be >= 1", name)
 	}
 	if factory == nil {
 		return fmt.Errorf("plugin %q: nil factory", name)
@@ -189,7 +198,7 @@ func (r *Registry) RegisterSink(name, schema string, factory func(cfg map[string
 	if _, dup := r.sinks[name]; dup {
 		return fmt.Errorf("sink plugin %q already registered", name)
 	}
-	r.sinks[name] = &sinkEntry{name: name, schema: schema, compiled: compiled, factory: factory}
+	r.sinks[name] = &sinkEntry{name: name, version: version, schema: schema, compiled: compiled, factory: factory}
 	return nil
 }
 
@@ -215,7 +224,7 @@ func (r *Registry) LookupSource(name string) (*SourceMeta, bool) {
 	if !ok {
 		return nil, false
 	}
-	return &SourceMeta{Name: e.name, Schema: e.schema, Capabilities: e.capabilities}, true
+	return &SourceMeta{Name: e.name, Version: e.version, Schema: e.schema, Capabilities: e.capabilities}, true
 }
 
 // NewSource instantiates a source plugin after validating cfg against its schema.
@@ -240,7 +249,7 @@ func (r *Registry) LookupSink(name string) (*SinkMeta, bool) {
 	if !ok {
 		return nil, false
 	}
-	return &SinkMeta{Name: e.name, Schema: e.schema}, true
+	return &SinkMeta{Name: e.name, Version: e.version, Schema: e.schema}, true
 }
 
 // NewSink instantiates a sink plugin after validating cfg against its schema.
@@ -271,14 +280,16 @@ func (r *Registry) NewCodec(name string, cfg map[string]any) (Codec, error) {
 // SourceMeta describes a registered source (for catalog output).
 type SourceMeta struct {
 	Name         string   `json:"name"`
+	Version      int      `json:"version"`
 	Schema       string   `json:"schema"`
 	Capabilities []string `json:"capabilities,omitempty"`
 }
 
 // SinkMeta describes a registered sink (for catalog output).
 type SinkMeta struct {
-	Name   string `json:"name"`
-	Schema string `json:"schema"`
+	Name    string `json:"name"`
+	Version int    `json:"version"`
+	Schema  string `json:"schema"`
 }
 
 // Catalog lists registered plugins grouped by section, sorted by name.
@@ -293,10 +304,10 @@ func (r *Registry) Catalog() Catalog {
 	defer r.mu.RUnlock()
 	c := Catalog{}
 	for _, e := range r.sources {
-		c.Sources = append(c.Sources, SourceMeta{Name: e.name, Schema: e.schema, Capabilities: e.capabilities})
+		c.Sources = append(c.Sources, SourceMeta{Name: e.name, Version: e.version, Schema: e.schema, Capabilities: e.capabilities})
 	}
 	for _, e := range r.sinks {
-		c.Sinks = append(c.Sinks, SinkMeta{Name: e.name, Schema: e.schema})
+		c.Sinks = append(c.Sinks, SinkMeta{Name: e.name, Version: e.version, Schema: e.schema})
 	}
 	for name := range r.codecs {
 		c.Codecs = append(c.Codecs, name)
@@ -305,6 +316,19 @@ func (r *Registry) Catalog() Catalog {
 	sort.Slice(c.Sinks, func(i, j int) bool { return c.Sinks[i].Name < c.Sinks[j].Name })
 	sort.Strings(c.Codecs)
 	return c
+}
+
+// ValidateSchema checks cfg against a JSON Schema document (draft 2020-12)
+// using the same compiler and diagnostics as compiled-in plugins. External
+// gRPC plugins declare their schema in a manifest file; verify validates
+// their config blocks through this helper so error output is identical
+// (redesign-v3-review-m3.md R5).
+func ValidateSchema(plugin, schema string, cfg map[string]any) error {
+	compiled, err := compileSchema("external/"+plugin, schema)
+	if err != nil {
+		return err
+	}
+	return validate(compiled, plugin, cfg)
 }
 
 // SchemaError reports a plugin configuration that fails its JSON Schema. Path

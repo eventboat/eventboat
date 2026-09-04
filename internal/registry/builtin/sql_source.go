@@ -38,7 +38,7 @@ const sqlSourceSchema = `{
 }`
 
 func registerSQLSource(reg *registry.Registry) error {
-	return reg.RegisterSource("sql", sqlSourceSchema, []string{"pull"}, func(cfg map[string]any) (registry.Source, error) {
+	return reg.RegisterSource("sql", 1, sqlSourceSchema, []string{"pull"}, func(cfg map[string]any) (registry.Source, error) {
 		driver, _ := cfg["driver"].(string)
 		switch driver {
 		case "mysql", "postgres", "sqlite":

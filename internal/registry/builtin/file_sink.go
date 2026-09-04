@@ -22,7 +22,7 @@ const fileSinkSchema = `{
 }`
 
 func registerFileSink(reg *registry.Registry) error {
-	return reg.RegisterSink("file", fileSinkSchema, func(cfg map[string]any) (registry.Sink, error) {
+	return reg.RegisterSink("file", 1, fileSinkSchema, func(cfg map[string]any) (registry.Sink, error) {
 		path, _ := cfg["path"].(string)
 		return &fileSink{path: path}, nil
 	})
@@ -85,7 +85,7 @@ const dropSinkSchema = `{
 }`
 
 func registerDropSink(reg *registry.Registry) error {
-	return reg.RegisterSink("drop", dropSinkSchema, func(cfg map[string]any) (registry.Sink, error) {
+	return reg.RegisterSink("drop", 1, dropSinkSchema, func(cfg map[string]any) (registry.Sink, error) {
 		return &dropSink{}, nil
 	})
 }

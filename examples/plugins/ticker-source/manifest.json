@@ -1,0 +1,17 @@
+{
+  "kind": "source",
+  "name": "ticker",
+  "version": 1,
+  "capabilities": ["pull"],
+  "config_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "required": ["symbol"],
+    "properties": {
+      "symbol": { "type": "string", "description": "instrument symbol to emit" },
+      "events": { "type": "integer", "minimum": 1, "default": 10, "description": "events per pull run" },
+      "interval_ms": { "type": "integer", "minimum": 1, "default": 100, "description": "milliseconds between events" }
+    },
+    "additionalProperties": false
+  }
+}

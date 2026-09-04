@@ -132,7 +132,7 @@ func newJobHarness(t *testing.T, schedule, overlap, catchup string, skip bool, h
 	if err := testkit.RegisterFakePull(h.reg); err != nil {
 		t.Fatal(err)
 	}
-	if err := h.reg.RegisterSink("memsink", memSinkSchema, func(cfg map[string]any) (registry.Sink, error) {
+	if err := h.reg.RegisterSink("memsink", 1, memSinkSchema, func(cfg map[string]any) (registry.Sink, error) {
 		id, _ := cfg["id"].(string)
 		h.sinkMu.Lock()
 		defer h.sinkMu.Unlock()
@@ -497,7 +497,7 @@ sinks:
 	if err := testkit.RegisterFakePull(h.reg); err != nil {
 		t.Fatal(err)
 	}
-	if err := h.reg.RegisterSink("memsink", memSinkSchema, func(cfg map[string]any) (registry.Sink, error) {
+	if err := h.reg.RegisterSink("memsink", 1, memSinkSchema, func(cfg map[string]any) (registry.Sink, error) {
 		id, _ := cfg["id"].(string)
 		h.sinkMu.Lock()
 		defer h.sinkMu.Unlock()
@@ -706,7 +706,7 @@ sinks:
 	if err := testkit.RegisterFakePull(h.reg); err != nil {
 		t.Fatal(err)
 	}
-	if err := h.reg.RegisterSink("memsink", memSinkSchema, func(cfg map[string]any) (registry.Sink, error) {
+	if err := h.reg.RegisterSink("memsink", 1, memSinkSchema, func(cfg map[string]any) (registry.Sink, error) {
 		id, _ := cfg["id"].(string)
 		h.sinkMu.Lock()
 		defer h.sinkMu.Unlock()

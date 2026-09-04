@@ -23,7 +23,7 @@ const cronSourceSchema = `{
 }`
 
 func registerCronSource(reg *registry.Registry) error {
-	return reg.RegisterSource("cron", cronSourceSchema, nil, func(cfg map[string]any) (registry.Source, error) {
+	return reg.RegisterSource("cron", 1, cronSourceSchema, nil, func(cfg map[string]any) (registry.Source, error) {
 		expr, _ := cfg["expression"].(string)
 		if _, err := cron.ParseStandard(expr); err != nil {
 			return nil, fmt.Errorf("cron source: invalid expression: %w", err)

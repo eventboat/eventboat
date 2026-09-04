@@ -85,7 +85,7 @@ func newHarness(t *testing.T) *harness {
 	if err := builtin.RegisterAll(h.reg); err != nil {
 		t.Fatal(err)
 	}
-	if err := h.reg.RegisterSource("manual", manualSchema, nil, func(cfg map[string]any) (registry.Source, error) {
+	if err := h.reg.RegisterSource("manual", 1, manualSchema, nil, func(cfg map[string]any) (registry.Source, error) {
 		id, _ := cfg["id"].(string)
 		h.mu.Lock()
 		defer h.mu.Unlock()
@@ -99,7 +99,7 @@ func newHarness(t *testing.T) *harness {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := h.reg.RegisterSink("mem", memSchema, func(cfg map[string]any) (registry.Sink, error) {
+	if err := h.reg.RegisterSink("mem", 1, memSchema, func(cfg map[string]any) (registry.Sink, error) {
 		id, _ := cfg["id"].(string)
 		h.mu.Lock()
 		defer h.mu.Unlock()

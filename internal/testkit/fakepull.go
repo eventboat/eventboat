@@ -181,7 +181,7 @@ func ResetFakePull() {
 // RegisterFakePull registers the "fakepull" source plugin (capabilities:
 // [pull]) into reg. Instances resolve by their id config field.
 func RegisterFakePull(reg *registry.Registry) error {
-	return reg.RegisterSource("fakepull", `{
+	return reg.RegisterSource("fakepull", 1, `{
 		"type": "object",
 		"required": ["id"],
 		"properties": { "id": { "type": "string", "minLength": 1 } },

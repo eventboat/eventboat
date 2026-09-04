@@ -24,7 +24,7 @@ const kafkaSourceSchema = `{
 }`
 
 func registerKafkaSource(reg *registry.Registry) error {
-	return reg.RegisterSource("kafka", kafkaSourceSchema, nil, func(cfg map[string]any) (registry.Source, error) {
+	return reg.RegisterSource("kafka", 1, kafkaSourceSchema, nil, func(cfg map[string]any) (registry.Source, error) {
 		brokers := stringSlice(cfg["brokers"])
 		topics := stringSlice(cfg["topics"])
 		if len(brokers) == 0 || len(topics) == 0 {
@@ -127,7 +127,7 @@ const kafkaSinkSchema = `{
 }`
 
 func registerKafkaSink(reg *registry.Registry) error {
-	return reg.RegisterSink("kafka", kafkaSinkSchema, func(cfg map[string]any) (registry.Sink, error) {
+	return reg.RegisterSink("kafka", 1, kafkaSinkSchema, func(cfg map[string]any) (registry.Sink, error) {
 		brokers := stringSlice(cfg["brokers"])
 		topic, _ := cfg["topic"].(string)
 		if len(brokers) == 0 || topic == "" {

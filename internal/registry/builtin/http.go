@@ -25,7 +25,7 @@ const httpServerSourceSchema = `{
 }`
 
 func registerHTTPServerSource(reg *registry.Registry) error {
-	return reg.RegisterSource("http_server", httpServerSourceSchema, nil, func(cfg map[string]any) (registry.Source, error) {
+	return reg.RegisterSource("http_server", 1, httpServerSourceSchema, nil, func(cfg map[string]any) (registry.Source, error) {
 		listen, _ := cfg["listen"].(string)
 		path, _ := cfg["path"].(string)
 		if path == "" {
@@ -107,7 +107,7 @@ const httpSinkSchema = `{
 }`
 
 func registerHTTPSink(reg *registry.Registry) error {
-	return reg.RegisterSink("http", httpSinkSchema, func(cfg map[string]any) (registry.Sink, error) {
+	return reg.RegisterSink("http", 1, httpSinkSchema, func(cfg map[string]any) (registry.Sink, error) {
 		url, _ := cfg["url"].(string)
 		if !strings.Contains(url, "://") {
 			return nil, fmt.Errorf("http sink: url must be absolute")

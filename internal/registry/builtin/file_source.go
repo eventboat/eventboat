@@ -28,7 +28,7 @@ const fileSourceSchema = `{
 }`
 
 func registerFileSource(reg *registry.Registry) error {
-	return reg.RegisterSource("file", fileSourceSchema, nil, func(cfg map[string]any) (registry.Source, error) {
+	return reg.RegisterSource("file", 1, fileSourceSchema, nil, func(cfg map[string]any) (registry.Source, error) {
 		path, _ := cfg["path"].(string)
 		poll := intMs(cfg["poll_every_ms"], 250)
 		startAt, _ := cfg["start_at"].(string)

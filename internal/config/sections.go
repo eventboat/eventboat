@@ -9,9 +9,9 @@ import (
 // Everything else at node level must be exactly one plugin key (sources and
 // sinks); plugin fields live only inside the plugin block (redesign-v3.md §5.6).
 var nodeWhitelist = map[Section]map[string]bool{
-	SectionSource:    {"decoder": true},
+	SectionSource:    {"decoder": true, "grpc": true, "version": true},
 	SectionTransform: {"from": true, "workers": true, "script": true, "split": true},
-	SectionSink:      {"from": true, "encoder": true, "workers": true, "order_key": true, "batch": true},
+	SectionSink:      {"from": true, "encoder": true, "workers": true, "order_key": true, "batch": true, "grpc": true, "version": true},
 }
 
 func parseSection(file string, raw map[string]any, sectionKey string, section Section, p *Pipeline, lines *lineIndex, res *Result) {
@@ -177,6 +177,81 @@ func parseNode(file, name string, section Section, nodeRaw any, line, pluginLine
 	}
 
 	// Framework fields.
+	if v, ok := m["grpc"]; ok && (section == SectionSource || section == SectionSink) {
+		gm, ok := v.(map[string]any)
+		if !ok {
+			res.Diagnostics = append(res.Diagnostics, Diagnostic{
+				Severity: "error", Code: "cfg_grpc_type", File: file, Line: line,
+				Message: fmt.Sprintf("grpc of node %q must be a mapping", name),
+				Hint:    `grpc: { command: ["./my-plugin"], schema: "my-plugin/manifest.json" }`,
+			})
+		} else {
+			for k := range gm {
+				if k != "command" && k != "env" && k != "schema" {
+					res.Diagnostics = append(res.Diagnostics, Diagnostic{
+						Severity: "error", Code: "cfg_unknown_field", File: file, Line: line,
+						Message: fmt.Sprintf("unknown grpc field %q", k), Hint: "allowed: command, env, schema",
+					})
+				}
+			}
+			g := &GrpcConfig{}
+			cmd, ok := gm["command"].([]any)
+			if !ok || len(cmd) == 0 {
+				res.Diagnostics = append(res.Diagnostics, Diagnostic{
+					Severity: "error", Code: "cfg_grpc_command", File: file, Line: line,
+					Message: fmt.Sprintf("grpc.command of node %q must be a non-empty argv array", name),
+					Hint:    `command: ["go", "run", "./plugin"] or ["./bin/plugin"]`,
+				})
+			} else {
+				for i, c := range cmd {
+					s, ok := c.(string)
+					if !ok || strings.TrimSpace(s) == "" {
+						res.Diagnostics = append(res.Diagnostics, Diagnostic{
+							Severity: "error", Code: "cfg_grpc_command", File: file, Line: line,
+							Message: fmt.Sprintf("grpc.command of node %q contains a non-string entry at index %d", name, i), Hint: "",
+						})
+						break
+					}
+					g.Command = append(g.Command, s)
+				}
+			}
+			if em, ok := gm["env"].(map[string]any); ok {
+				g.Env = map[string]string{}
+				for k, ev := range em {
+					if s, ok := ev.(string); ok {
+						g.Env[k] = s
+					} else {
+						res.Diagnostics = append(res.Diagnostics, Diagnostic{
+							Severity: "error", Code: "cfg_grpc_env", File: file, Line: line,
+							Message: fmt.Sprintf("grpc.env of node %q: value for %q must be a string", name, k), Hint: "",
+						})
+					}
+				}
+			}
+			s, ok := gm["schema"].(string)
+			if !ok || strings.TrimSpace(s) == "" {
+				res.Diagnostics = append(res.Diagnostics, Diagnostic{
+					Severity: "error", Code: "cfg_grpc_schema", File: file, Line: line,
+					Message: fmt.Sprintf("grpc.schema of node %q must be the plugin manifest path", name),
+					Hint:    "verify validates the plugin block against this manifest without spawning the process",
+				})
+			} else {
+				g.Schema = s
+			}
+			n.Grpc = g
+		}
+	}
+	if v, ok := m["version"]; ok && (section == SectionSource || section == SectionSink) {
+		ver := asInt(v, 0)
+		if ver < 1 {
+			res.Diagnostics = append(res.Diagnostics, Diagnostic{
+				Severity: "error", Code: "cfg_version_range", File: file, Line: line,
+				Message: fmt.Sprintf("version of node %q must be >= 1", name), Hint: "",
+			})
+		} else {
+			n.Version = ver
+		}
+	}
 	if v, ok := m["decoder"]; ok && section == SectionSource {
 		s, ok := v.(string)
 		if !ok || strings.TrimSpace(s) == "" {

@@ -1,0 +1,89 @@
+// Eventboat out-of-process plugin protocol v1 (redesign-v3.md §6.5).
+//
+// A plugin is a subprocess the Eventboat host launches per the node's
+// `grpc.command`. Startup handshake: the plugin listens on 127.0.0.1, prints
+// one JSON line to stdout, and serves gRPC. Full contract: docs/plugins.md.
+syntax = "proto3";
+
+package eventboat.plugin.v1;
+
+option go_package = "github.com/eventboat/eventboat/pkg/pluginv1";
+
+// MetaValue is one metadata entry. Scalars only; rich values travel as
+// JSON-encoded strings. Keeping this a plain oneof (instead of
+// google.protobuf.Value) makes the protocol trivial to implement in any
+// language.
+message MetaValue {
+  oneof kind {
+    string string_value = 1;
+    int64 int_value = 2;
+    bool bool_value = 3;
+    double double_value = 4;
+  }
+}
+
+// Event is one message crossing the process boundary. Payload is raw bytes
+// exactly as the engine holds it (decoded form is the plugin's business).
+message Event {
+  bytes payload = 1;
+  map<string, MetaValue> meta = 2;
+  string codec = 3;   // codec name the payload arrived with
+  string cursor = 4;  // pull sources: cursor column value ("" if none)
+  int64 src_seq = 5;  // per-source monotonic sequence
+  string src_name = 6;
+}
+
+message InitRequest {
+  bytes state = 1;         // persisted source state (empty on first run)
+  string config_json = 2;  // the node's plugin block as JSON
+}
+message InitResponse {
+  string error = 1; // "" = ok
+}
+
+message RunRequest {}
+
+message SettledRequest {
+  int64 through_src_seq = 1; // settle frontier advanced through this seq
+}
+message SettledResponse {
+  bytes state = 1;   // new state to persist (nil = unchanged)
+  string error = 2;
+}
+
+message CloseRequest {}
+message CloseResponse {
+  string error = 1;
+}
+
+message WriteRequest {
+  repeated Event batch = 1; // batching is engine-owned; plugins just write
+}
+message WriteResponse {
+  string error = 1;
+}
+
+// Source is served by source plugins. Lifecycle mirrors the in-process
+// registry.Source: Init(state) once before Run/Pull; Settled whenever the
+// contiguous settled frontier advances (plugins commit offsets there);
+// Close on shutdown. Run and Pull are server streams: the host paces reads
+// (admission gate) and gRPC flow control carries backpressure — plugins must
+// honor send blocking. Pull ends the stream with OK status when exhausted;
+// ending it with an error status fails the run (a pull-source failure, not
+// per-message dead letters).
+service Source {
+  rpc Init(InitRequest) returns (InitResponse);
+  rpc Run(RunRequest) returns (stream Event);
+  rpc Pull(RunRequest) returns (stream Event);
+  rpc Settled(SettledRequest) returns (SettledResponse);
+  rpc Close(CloseRequest) returns (CloseResponse);
+}
+
+// Sink is served by sink plugins. Batching is owned by the engine: Write
+// receives one batch and reports success or failure for the whole batch;
+// the engine applies the delivery policy (retries, dead letters).
+service Sink {
+  rpc Init(InitRequest) returns (InitResponse);
+  rpc Write(WriteRequest) returns (WriteResponse);
+  rpc Close(CloseRequest) returns (CloseResponse);
+}

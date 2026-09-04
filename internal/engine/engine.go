@@ -19,6 +19,7 @@ import (
 	"github.com/eventboat/eventboat/internal/lang/starhost"
 	"github.com/eventboat/eventboat/internal/obs"
 	"github.com/eventboat/eventboat/internal/registry"
+	"github.com/eventboat/eventboat/internal/rpcplugin"
 	"github.com/eventboat/eventboat/internal/store"
 )
 
@@ -53,6 +54,10 @@ type Options struct {
 
 	// SinkWrapper lets testkits capture or fault-inject around real sinks.
 	SinkWrapper func(node string, s registry.Sink) registry.Sink
+
+	// Logf surfaces plugin-process output and out-of-process source stream
+	// errors (nil = discard).
+	Logf func(format string, args ...any)
 }
 
 // DefaultOptions returns production defaults.
@@ -202,7 +207,13 @@ func New(p *ir.Pipeline, st store.Store, reg *registry.Registry, opts Options) (
 		n := p.Nodes[name]
 		switch n.Section {
 		case config.SectionSource:
-			src, err := reg.NewSource(n.Config.Plugin, n.Config.PluginConfig)
+			var src registry.Source
+			var err error
+			if n.Config.Grpc != nil {
+				src, err = rpcplugin.SpawnSource(context.Background(), n.Config.Grpc, n.Config.Manifest, n.Config.PluginConfig, opts.Logf)
+			} else {
+				src, err = reg.NewSource(n.Config.Plugin, n.Config.PluginConfig)
+			}
 			if err != nil {
 				return nil, fmt.Errorf("source %q: %w", name, err)
 			}
@@ -215,7 +226,13 @@ func New(p *ir.Pipeline, st store.Store, reg *registry.Registry, opts Options) (
 				return nil, fmt.Errorf("source %q: %w", name, err)
 			}
 		case config.SectionSink:
-			sink, err := reg.NewSink(n.Config.Plugin, n.Config.PluginConfig)
+			var sink registry.Sink
+			var err error
+			if n.Config.Grpc != nil {
+				sink, err = rpcplugin.SpawnSink(context.Background(), n.Config.Grpc, n.Config.Manifest, n.Config.PluginConfig, opts.Logf)
+			} else {
+				sink, err = reg.NewSink(n.Config.Plugin, n.Config.PluginConfig)
+			}
 			if err != nil {
 				return nil, fmt.Errorf("sink %q: %w", name, err)
 			}

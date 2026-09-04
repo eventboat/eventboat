@@ -137,10 +137,39 @@ type Node struct {
 	Batch    *Batch // sinks
 	Script   string // transforms (Starlark)
 	Split    *SplitConfig
+	Wasm     *WasmConfig // transforms (M3 ladder tier 3)
 
 	Plugin       string
 	PluginConfig map[string]any
 	PluginLine   int
+
+	// Grpc marks the node as an out-of-process plugin (redesign-v3.md §6.5,
+	// M3): the plugin block key is the external plugin name, validated
+	// against Manifest at verify time and launched at run time.
+	Grpc *GrpcConfig
+	// Manifest is the loaded plugin manifest (nil unless Grpc != nil).
+	Manifest *PluginManifest
+	// Version optionally declares the plugin ABI version this config targets;
+	// 0 = unset (no check). A mismatch with the registered (builtin) or
+	// declared (manifest/handshake) version is a verify error.
+	Version int
+}
+
+// GrpcConfig declares how to launch an out-of-process plugin.
+type GrpcConfig struct {
+	Command []string          // argv; Command[0] is the binary
+	Env     map[string]string // extra environment for the plugin process
+	Schema  string            // manifest path, relative to the pipeline file
+}
+
+// PluginManifest is the static declaration file of an external plugin:
+// everything verify needs without spawning the process (review-m3 R5).
+type PluginManifest struct {
+	Kind         string         `json:"kind"`         // "source" | "sink"
+	Name         string         `json:"name"`         // must equal the plugin block key
+	Version      int            `json:"version"`      // ABI version, >= 1
+	Capabilities []string       `json:"capabilities"` // e.g. ["pull"]
+	ConfigSchema map[string]any `json:"config_schema"`
 }
 
 // Edge is one incoming edge declared via `from`.
@@ -177,6 +206,16 @@ type Batch struct {
 // SplitConfig marks a transform as a splitter. POC semantics: the payload must
 // be a JSON array; each element becomes one message (redesign-v3-review R8).
 type SplitConfig struct{}
+
+// WasmConfig declares a WASM transform (ladder tier 3, redesign-v3.md §4.5;
+// wire format and sandbox per redesign-v3-review-m3 R3/R4/R7).
+type WasmConfig struct {
+	Module          string   // module path, relative to the pipeline file
+	Entrypoint      string   // exported function name; "" means "transform"
+	TimeoutMs       int      // per-invoke wall-clock bound; 0 = 1000
+	MaxMemoryPages  int      // wazero memory pages cap; 0 = 512 (32 MiB)
+	Allow           []string // capability allowlist; default none; known: log
+}
 
 // BufferConfig is the in-memory per-edge buffer sizing (surge absorption
 // only; reliability comes from the spool, not from buffers).
