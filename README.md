@@ -145,17 +145,24 @@ cases:
 See [examples/](examples/) for the three shipped pipelines (linear,
 CEL branching, fan-in).
 
-## POC scope (M1) and recorded trims
+## POC scope (M1 + M2) and recorded trims
 
 Implemented: three-section config with strict whitelists and `${VAR}` /
-`${?VAR}` substitution; CEL predicate host (zero custom functions, error =
-not-passed + counter); Starlark host (precompiled programs, lazy + COW
-payload/meta bindings, `json`/`math` whitelist, 100k step budget, backtraces
-into dead letters); engine with spool/settle/checkpoint/backpressure/replay
-on SQLite (`modernc.org/sqlite`, pure Go — no hand-written WAL); dead letter
-store; JSON-Schema-enforced plugin registry (sources: kafka, http_server,
-cron, file; sinks: kafka, http, file, drop; codecs: json, raw); CLI
-`verify` / `test` / `run` with `--json`.
+`${?VAR}` / `${constants.x}` / `${parameters.x}` substitution; CEL predicate
+host (zero custom functions, error = not-passed + counter); Starlark host
+(precompiled programs, lazy + COW payload/meta bindings, `json`/`math`
+whitelist, 100k step budget, backtraces into dead letters); engine with
+spool/settle/checkpoint/backpressure/replay on SQLite (`modernc.org/sqlite`,
+pure Go — no hand-written WAL); dead letter store; **job pipelines**
+(`run`/`parameters`/`hooks`/`catchup_window`/`overlap` + sql source with
+keyset pagination and watermarks + run history + `trigger`/`jobs` CLI);
+**explain** (symbolic + message-level with script dry-run) and **replay**
+(dead letters / spool windows / job runs); **MCP server** (official Go SDK:
+stdio + Streamable HTTP, 14 tools), **Admin REST + SSE + embedded read-only
+UI**, Runtime deployment config; **OpenTelemetry** (Prometheus + OTLP dual
+export, 25 metrics, job-run spans); JSON-Schema-enforced plugin registry;
+CLI `verify`/`test`/`run`/`trigger`/`jobs`/`explain`/`replay`/`mcp` with
+`--json`.
 
 Trimmed or decided beyond the spec (recorded per redesign-v3-review.md):
 
@@ -182,19 +189,25 @@ The four behavioral gap-decisions the pre-implementation review required
 
 Other recorded trims:
 
-- **Trimmed:** `repl` / `plugin` CLI commands, the conformance corpus and the
-  full benchmark suite of §7.4 M1 (minimal Go benchmarks exist:
-  CEL predicate ≈ 290 ns/op, simple Starlark transform ≈ 1.4 µs/op on the
-  dev machine). MCP server, explain/replay and the observability stack are
-  the remaining M2 steps (redesign-v3.md §7.4) — see the M2 review.
+- **Trimmed (still open):** `repl` / `plugin` CLI commands, the conformance
+  corpus and the full benchmark suite of §7.4 M1 (minimal Go benchmarks
+  exist: CEL predicate ≈ 290 ns/op, simple Starlark transform ≈ 1.4 µs/op
+  on the dev machine). From §5.10: `telemetry`/`dlq`/`codecs` pipeline
+  sections remain unimplemented (telemetry endpoints live in the Runtime
+  config; dead-letter retention and named codec reuse are P2). Per-message
+  span sampling and tail masking rules are P2 (review R12/R16). A
+  kafka-broker integration test (testcontainers) is a CI stretch, not on
+  the critical path.
 - **`limits` section** (M2): `max_in_flight` maps to the engine's spool
   admission high watermark and `drain_timeout` bounds graceful shutdown
   (replacing a hardcoded 10s); a `workers` total quota is trimmed (P2).
 - **`lint_constant_unused`** counts `${constants.x}` references on the
   loader's pre-substitution record, so substituted references no longer read
   as unused.
-- **Deployment-level config** (open question #10) is CLI flags for now:
-  `--data-dir`, `--ephemeral`.
+- **Deployment-level config** (open question #10): `kind: Runtime` YAML
+  (storage/admin/mcp/telemetry) resolved from `--runtime`, then
+  `./eventboat.yaml`, then defaults; `--data-dir`/`--ephemeral` remain as
+  overrides.
 
 ### The operations surface (M2, §3.4) — rulings
 
@@ -363,7 +376,7 @@ Other recorded trims:
 ## Repository layout
 
 ```
-cmd/eventboat/        CLI: verify / test / run / trigger / jobs
+cmd/eventboat/        CLI: verify / test / run / trigger / jobs / explain / replay / mcp
 internal/config/      typed config, strict loader, env+constants+parameters substitution
 internal/ir/          static IR: DAG, compiled CEL/Starlark, topology checks, job semantics, lint
 internal/lang/        celhost (predicates), starhost (Starlark sandbox host)
@@ -372,6 +385,12 @@ internal/jobs/        job runtime: scheduler, catchup, overlap, run lifecycle, h
 internal/store/       SQLite + in-memory spool/checkpoint/dead-letter/job-history stores
 internal/registry/    plugin registration with mandatory JSON Schemas
 internal/registry/builtin/  kafka/http_server/cron/file/sql sources, kafka/http/file/drop sinks, json/raw codecs
+internal/explain/     deterministic walkthroughs + topology rendering
+internal/ops/         the operations service behind MCP and Admin REST
+internal/mcpserver/   MCP tools (official Go SDK)
+internal/admin/       Admin REST + SSE + embedded read-only UI
+internal/runtimecfg/  kind: Runtime deployment configuration
+internal/obs/         OpenTelemetry: dual export, 25 metrics, spans
 internal/testkit/     injection/capture/fault-injection primitives + fakepull test source
 internal/testrun/     §3.2 contract-test runner
 examples/             linear, branching (CEL), fan-in, job-sync (sql + run/parameters)
