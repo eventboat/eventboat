@@ -100,9 +100,7 @@ eventboat [--json] plugin catalog           # registered plugins with ABI versio
 # WASM transform tier (wazero, capability sandbox): docs/wasm.md
 # CESQL edge dialect: when: { lang: cesql, expr: "region = 'EU' AND data.amount > 100" }
 
-# the ecosystem surface (M4, §7.4): convert, LSP, codecs, schema export, repl
-eventboat convert internal/convert/testdata/v2/02-route-branching.yaml -o v3.yaml --report v3.md
-eventboat verify --config v3.yaml                     # converted output must verify
+# the ecosystem surface (M4, §7.4): LSP, codecs, schema export, repl
 eventboat lsp                                          # language server over stdio (editors/editors/vscode)
 eventboat [--json] plugin schema kafka                 # one schema, pretty or JSON
 eventboat plugin schema --all --dir schemas/           # offline bundle for IDEs/agents
@@ -185,11 +183,7 @@ field, guests buildable with the standard Go toolchain,
 [docs/wasm.md](docs/wasm.md)) and the **CESQL edge dialect**
 (`when: {lang: cesql}` reusing the official CloudEvents parser, the official
 TCK vendored and 100% passing in CI, `data.*` payload extension); **the
-ecosystem surface (M4)**: the **convert** tool (every archived v2 writing
-style — steps/pipeline[]/edges, YAML or HOCON — into the v3 three-section
-form; eql1 rendered via the CEL AST into Starlark with a compile gate;
-itemized migration report; all 12 legacy fixtures convert-and-verify green
-in CI plus three permanent semantic-equivalence tests), the **LSP**
+ecosystem surface (M4)**: the **LSP**
 (`eventboat lsp`: diagnostics from the real verify pipeline, completion
 over the registry catalog + plugin schemas + framework whitelists, schema
 hover; minimal VS Code launcher in examples/editors/vscode), the
@@ -208,7 +202,7 @@ stdio + Streamable HTTP, 14 tools), **Admin REST + SSE + embedded read-only
 UI**, Runtime deployment config; **OpenTelemetry** (Prometheus + OTLP dual
 export, 28 metrics, job-run spans); JSON-Schema-enforced plugin registry with
 ABI versions; CLI `verify`/`test`/`run`/`trigger`/`jobs`/`explain`/`replay`/
-`convert`/`repl`/`lsp`/`plugin`/`mcp` with `--json`.
+`repl`/`lsp`/`plugin`/`mcp` with `--json`.
 
 ### The ecosystem surface (M4, §7.4) — rulings
 
@@ -248,22 +242,16 @@ implementation-time discoveries:
   factory)`). **Catalog JSON shape change**: `plugin catalog --json` and the
   MCP `catalog` tool now emit codecs as `{name, version, schema}` objects
   (previously bare name strings) — consumers must parse accordingly.
-- **convert**: the legacy loader is NOT importable (a separate module's
-  `internal/` packages), so the v2 shapes live as a read-only copy in
-  `internal/convert` (the legacy tree itself was never touched and has
-  since been removed from the worktree; v2 stays recoverable via git
-  history and the v0.1.0-beta tag). "Auto-migrated" means
-  machine-checked: generated scripts compile under the real Starlark host,
-  generated configs pass the real verify; anything else becomes a report
-  item with reason + suggested rewrite. Route transforms fold into ordered
-  edge guards (`p_i && !(p_1 || ... || p_{i-1})`), filters fold into their
-  outgoing edges' `when`; the recorded semantic difference is that v2's
-  silent no-match drop becomes v3's settle-as-filtered with a counter
-  (same message fate, observable). HOCON `${VAR}`/`${?VAR}` references are
-  protected and restored (not frozen at convert time), so the output
-  re-substitutes at v3 load time uniformly. Sticky er-route references
-  (routes read non-adjacently) keep the route node as a meta.route-writing
-  script with v3 `route:` sugar.
+- **convert** *(removed 2026-09-04 — no production v2 configs to migrate;
+  the M4 tool and `internal/convert` live on in git history and the
+  v0.1.0-beta tag; the migration mapping tables remain in the spec §4.8/§7.2
+  as a manual reference)*: when it existed, the legacy loader was NOT
+  importable (a separate module's `internal/` packages), so the v2 shapes
+  lived as a read-only copy inside the tool; "auto-migrated" meant
+  machine-checked (generated scripts compiled under the real Starlark host,
+  generated configs passed the real verify); route transforms folded into
+  ordered edge guards, filters into their outgoing edges' `when`, and v2's
+  silent no-match drop became v3's settle-as-filtered with a counter.
 - **starhost fixes found on the way**: `remove(dict, key)` glue added (the
   §4.8 `del()` migration target), and a **pre-existing silent-loss bug**
   fixed — nested writes through the lazy bindings (`payload.nested.k = v`)
@@ -682,7 +670,7 @@ why — and the before/after benchmark numbers):
 ## Repository layout
 
 ```
-cmd/eventboat/        CLI: verify / test / run / trigger / jobs / explain / replay / convert / repl / lsp / plugin / mcp
+cmd/eventboat/        CLI: verify / test / run / trigger / jobs / explain / replay / repl / lsp / plugin / mcp
 proto/                 eventboat.plugin.v1 — the out-of-process plugin protocol (.proto source)
 pkg/pluginv1/          generated protocol stubs (importable by third-party plugins)
 docs/                  plugins.md (gRPC SDK + crash policy), wasm.md (guest ABI and tier guide), codecs.md (codec guide), k8s.md (deployment), naming-checklist.md (§8.4 record)
@@ -696,7 +684,6 @@ internal/jobs/        job runtime: scheduler, catchup, overlap, run lifecycle, h
 internal/store/       SQLite + in-memory spool/checkpoint/dead-letter/job-history stores
 internal/registry/    plugin registration with mandatory JSON Schemas + ABI versions (codecs included, M4)
 internal/registry/builtin/  kafka/http_server/cron/file/sql sources, kafka/http/file/drop sinks, json/raw/csv/avro/protobuf codecs
-internal/convert/     the v2 → v3 migration tool: read-only v2 shape copy, eql renderer, guard folding, report
 internal/lsp/         language server: minimal JSON-RPC 2.0, verify diagnostics, completion, hover
 internal/explain/     deterministic walkthroughs + topology rendering
 internal/ops/         the operations service behind MCP and Admin REST

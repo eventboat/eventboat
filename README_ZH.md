@@ -85,17 +85,14 @@ eventboat run --config my.yaml --ephemeral
   `data.*` 为文档化扩展（合成驼峰标识符），带下划线的 meta 键在本方言
   不可达（用 CEL）——诚实入档。
 
-## M4：生态收口（convert / LSP / codec / Schema 分发 / repl）
+## M4：生态收口（LSP / codec / Schema 分发 / repl）
 
-- **convert（v2 → v3）**：`eventboat convert <v2配置> [-o out.yaml] [--report v3.md]`。
-  三套 v2 写法（steps / pipeline[] / 顶层 edges）+ HOCON 全部解析；eql1 经
-  CEL-AST 渲染为 Starlark，**"自动迁移" = 生成且通过真实编译器**（Starlark
-  走 starhost、产出走全量 verify），子集外逐条进报告（原因 + 建议改法）。
-  route/filter 折叠为有序边守卫；v2 无匹配静默丢弃 → v3 settle-as-filtered +
-  计数（结局相同、可观测）。**legacy 全部 12 个示例/testdata convert 后
-  verify 全绿进 CI**（快照 + 三例语义等价永久测试，fixture 现存于
-  `internal/convert/testdata/v2/`）。legacy 归档期间只读未动；移树后可经
-  git 历史与 v0.1.0-beta tag 考古恢复。
+- **convert（v2 → v3）——已移除（2026-09-04）**：确认无生产 v2 配置，
+  迁移工具按 v1.9"按需"定位退役，命令与 `internal/convert` 包已删
+  （M4 实现 + 12 个 fixture 快照经 git 历史与 v0.1.0-beta tag 可考古；
+  迁移对照表保留在规范 §4.8/§7.2 作手工参考）。存在期间：三套 v2 写法 +
+  HOCON 全解析，"自动迁移" = 生成且通过真实编译器，route/filter 折叠为
+  有序边守卫，12 个 v2 示例 convert 后 verify 全绿。
 - **LSP（编辑器内写管道）**：`eventboat lsp`（stdio）。诊断 = 真实 verify
   管线（与 CLI/MCP 同一代码路径，零第二套校验）；补全 = 顶层段/框架字段/
   插件名（registry catalog）/插件字段（JSON Schema）/边属性/codec 名；
@@ -239,7 +236,7 @@ cases:
 ## 仓库布局
 
 ```
-cmd/eventboat/        CLI：verify / test / run / trigger / jobs / explain / replay / convert / repl / lsp / plugin / mcp
+cmd/eventboat/        CLI：verify / test / run / trigger / jobs / explain / replay / repl / lsp / plugin / mcp
 internal/config/      类型化配置、严格加载、环境变量+常量替换、codecs: 声明
 internal/ir/          静态 IR：DAG、CEL/Starlark/CESQL 编译产物、拓扑校验、lint、codec 解析
 internal/lang/        celhost（谓词）、cesqlhost（CESQL 方言 + 官方 TCK）、starhost（Starlark 沙箱宿主）
@@ -250,7 +247,6 @@ internal/jobs/        作业运行时：调度、补偿、重叠、run 生命周
 internal/store/       SQLite + 内存版 spool/checkpoint/死信/作业历史存储
 internal/registry/    插件注册（强制 JSON Schema + ABI 版本，M4 起 codec 同规）
 internal/registry/builtin/  内置 kafka/http_server/cron/file/sql 源、kafka/http/file/drop 汇、json/raw/csv/avro/protobuf 编解码
-internal/convert/     v2 → v3 迁移工具：只读 v2 形状拷贝、eql 渲染器、守卫折叠、报告
 internal/lsp/         语言服务器：最小 JSON-RPC 2.0、verify 诊断、补全、hover
 internal/explain/     确定性推演 + 拓扑渲染
 internal/ops/         MCP 与 Admin REST 背后的操作服务
@@ -270,7 +266,7 @@ examples/             线性、CEL 分支、fan-in、job-sync（sql）、codecs�
 
 ```bash
 go build ./...
-go test ./...          # 含七条 TestInvariant_* 可靠性测试、convert 快照/验收、LSP 协议集成、codec conformance
+go test ./...          # 含七条 TestInvariant_* 可靠性测试、LSP 协议集成、codec conformance
 go test -race ./...
 
 # 集成套件（仅 CI 跑；本地无环境变量时自动跳过）

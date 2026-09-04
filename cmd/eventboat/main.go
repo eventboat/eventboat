@@ -19,7 +19,6 @@ Usage:
   eventboat [--json] jobs show <run-id> --config <job.yaml>
   eventboat [--json] explain --config <pipeline.yaml> [--message f.json] [--topology]
   eventboat [--json] replay --config <pipeline.yaml> (--dlq | --spool --from N | --job <run-id>) [--dry-run]
-  eventboat convert <v2-config> [-o out.yaml] [--report report.md]
   eventboat repl [--message sample.json] [--cel 'expr' | --script f.star]
   eventboat lsp                                          # language server over stdio
   eventboat [--json] plugin catalog
@@ -39,9 +38,6 @@ Commands:
             CEL evaluation and Starlark dry-run; --topology renders the DAG
   replay    re-inject dead letters (--dlq), a spool window (--spool) or one
             job run's dead letters (--job) into a live pipeline (§3.3)
-  convert   translate an archived v2 pipeline (steps/pipeline[]/edges, YAML
-            or HOCON) to the v3 three-section form + a migration report
-            (§7.3); exits 1 when the output fails verify
   repl      evaluate CEL predicates and Starlark scripts against one sample
             message without running a pipeline (§3.6/§4.4)
   lsp       language server over stdio: verify diagnostics, completion and
@@ -88,8 +84,6 @@ func run(args []string) int {
 		return cmdExplain(rest[1:], jsonOut)
 	case "replay":
 		return cmdReplay(rest[1:], jsonOut)
-	case "convert":
-		return cmdConvert(rest[1:], jsonOut)
 	case "repl":
 		return cmdRepl(rest[1:], jsonOut)
 	case "lsp":

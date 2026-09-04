@@ -1,7 +1,7 @@
 # v3 从零重设计提案 — Agent 原生事件路由器（零自研语言版）
 
 > **状态：POC 阶段**（提案定稿：定名 Eventboat、License Apache-2.0；v3 全新实现，**不向后兼容 v2**——无迁移义务）
-> **日期：2026-09-03**（修订 v1.1：零自研语言 CEL + Starlark + 性能评估；v1.2：吸收 dagu 作业模型（pipeline 级 `run`/`params`）；v1.3：拓扑结构改为**三段式 `sources`/`transforms`/`sinks` + `from` 连边 + 插件名即键**，命名体系定稿——含 DAG 描述模式调研结论，见 §5.1；v1.4：钩子段 `on`→`hooks`（GH Actions 撞形不同义），新增 consts/params 语义小节 §5.9；v1.5：**全称原则**——自造缩写全部展开：`params`→`parameters`、`consts`→`constants`、`dlq`→`dead_letter_queue`、`catchup`→`catchup_window`、`args`→`arguments`、`max_inflight`→`max_in_flight`，见 §5.1；v1.6：全称原则细化——**约定俗成的行业缩写保留**：`dlq`、`args`、`dsn` 维持缩写，回退 v1.5 对前两项的展开；v1.7：**定名 Eventboat**（§8，六轮核查 + 三选一裁决），全文占位符替换；v1.8：**License 定为 Apache-2.0**（仓库 LICENSE 落地，开放问题 #11 关闭）；v1.9：**明确 POC 阶段、不向后兼容 v2**——`convert` 降为按需工具，开放问题 #12 关闭；v1.10：按实现前审查（redesign-v3-review.md R1–R3）修正 §4.3 沙箱表：`while`/递归/顶层控制流的机制归属统一为 `syntax.FileOptions`，删除不存在的 `strings` 模块；v1.11：M2 落地对账——sql 源补 sqlite 方言（§3.5）、重注入=进入节点执行（§3.3）、§5.8 示例 `%.2f` 修正（go-starlark 的 `%` 不支持浮点格式动词，改 `math.floor`）、§6.6 span 措辞改批粒度近似、开放问题 #10 关闭（`kind: Runtime` + CLI 覆盖，见 redesign-v3-review-m2.md R13）；v1.12：M3 落地对账——`when` 增对象形态 `{lang, expr}`（§4.7），CESQL 标识符为纯字母数字（CloudEvents 属性形状）：带下划线的 meta 键在本方言不可达、`data.*` 扩展经字面量感知重写为合成驼峰标识符（`data.amount`→`dataAmount`，`data` 前缀标识符保留给扩展）；§6.5 补 WASM 资源模型（wazero 无指令计量：每次调用 wall-clock + 内存页双上限；`timeout_ms: 0` = 快速模式无击杀开关——ctx 击杀机制实测约 5× 开销）、guest 形态 = wasip1 **reactor**（标准 Go 工具链 `go build -buildmode=c-shared` 即可构建，无需 TinyGo/Rust）；gRPC 插件协议定稿：stdout 单行 JSON 握手 + 静态 manifest 文件（verify 不 spawn 进程）+ 运行时握手交叉核对 + 节点级 `version:` 版本钉（不符 = verify 错误）；TCK 验收口径 = vendored 自 sdk-go v2.16.2 tag 的官方套件（275 例 100%，spec 仓库 main 已有两处后发漂移），见 redesign-v3-review-m3.md；v1.13：M3 审核裁决 J2——§6.5 WASM 资源模型改为**缺省快速模式**（`timeout_ms` 缺省 0 无击杀，保护显式开启；未设置时 verify 告警 + 慢调用看门狗日志），理由：ctx 击杀约 5× 开销与该档"性能唯一存在理由"（§4.5）冲突，失控 guest 属可用性而非正确性风险）；v1.14：M4 落地对账——`codecs:` 命名声明段落地（§5.10：`name: {type: <codec>, ...配置}`，`decoder`/`encoder` 按名引用，声明名与注册 codec 名两名字空间禁遮蔽）；csv/avro/protobuf codec 落地（选型与 CEL 类型映射见 docs/codecs.md 与 redesign-v3-review-m4.md）；LSP 落地（`eventboat lsp`，手写最小 JSON-RPC——go.lsp.dev/protocol 需 Go 1.26 超本仓 1.25；诊断/补全/hover 数据源全部复用 verify 管线与 registry schema）；`convert` 落地（§4.8 表逐条 + 配置映射，eql1 经 CEL-AST 渲染为 Starlark 并以真实编译器机检，"自动"定义=生成且编译通过；route/filter 折叠为有序边守卫，v2 无匹配静默丢弃 → v3 settle-as-filtered + 计数——结局相同、可观测性变好，记档）；`plugin schema` 独立分发、`repl`（§3.6 自 M1 裁剪后回归）；裁剪记档：Pebble profile（非锚点、查询面需重写）、Operator 降为示例 Deployment 清单 + docs/k8s.md（§6.7 本就 P2）
+> **日期：2026-09-03**（修订 v1.1：零自研语言 CEL + Starlark + 性能评估；v1.2：吸收 dagu 作业模型（pipeline 级 `run`/`params`）；v1.3：拓扑结构改为**三段式 `sources`/`transforms`/`sinks` + `from` 连边 + 插件名即键**，命名体系定稿——含 DAG 描述模式调研结论，见 §5.1；v1.4：钩子段 `on`→`hooks`（GH Actions 撞形不同义），新增 consts/params 语义小节 §5.9；v1.5：**全称原则**——自造缩写全部展开：`params`→`parameters`、`consts`→`constants`、`dlq`→`dead_letter_queue`、`catchup`→`catchup_window`、`args`→`arguments`、`max_inflight`→`max_in_flight`，见 §5.1；v1.6：全称原则细化——**约定俗成的行业缩写保留**：`dlq`、`args`、`dsn` 维持缩写，回退 v1.5 对前两项的展开；v1.7：**定名 Eventboat**（§8，六轮核查 + 三选一裁决），全文占位符替换；v1.8：**License 定为 Apache-2.0**（仓库 LICENSE 落地，开放问题 #11 关闭）；v1.9：**明确 POC 阶段、不向后兼容 v2**——`convert` 降为按需工具，开放问题 #12 关闭；v1.10：按实现前审查（redesign-v3-review.md R1–R3）修正 §4.3 沙箱表：`while`/递归/顶层控制流的机制归属统一为 `syntax.FileOptions`，删除不存在的 `strings` 模块；v1.11：M2 落地对账——sql 源补 sqlite 方言（§3.5）、重注入=进入节点执行（§3.3）、§5.8 示例 `%.2f` 修正（go-starlark 的 `%` 不支持浮点格式动词，改 `math.floor`）、§6.6 span 措辞改批粒度近似、开放问题 #10 关闭（`kind: Runtime` + CLI 覆盖，见 redesign-v3-review-m2.md R13）；v1.12：M3 落地对账——`when` 增对象形态 `{lang, expr}`（§4.7），CESQL 标识符为纯字母数字（CloudEvents 属性形状）：带下划线的 meta 键在本方言不可达、`data.*` 扩展经字面量感知重写为合成驼峰标识符（`data.amount`→`dataAmount`，`data` 前缀标识符保留给扩展）；§6.5 补 WASM 资源模型（wazero 无指令计量：每次调用 wall-clock + 内存页双上限；`timeout_ms: 0` = 快速模式无击杀开关——ctx 击杀机制实测约 5× 开销）、guest 形态 = wasip1 **reactor**（标准 Go 工具链 `go build -buildmode=c-shared` 即可构建，无需 TinyGo/Rust）；gRPC 插件协议定稿：stdout 单行 JSON 握手 + 静态 manifest 文件（verify 不 spawn 进程）+ 运行时握手交叉核对 + 节点级 `version:` 版本钉（不符 = verify 错误）；TCK 验收口径 = vendored 自 sdk-go v2.16.2 tag 的官方套件（275 例 100%，spec 仓库 main 已有两处后发漂移），见 redesign-v3-review-m3.md；v1.13：M3 审核裁决 J2——§6.5 WASM 资源模型改为**缺省快速模式**（`timeout_ms` 缺省 0 无击杀，保护显式开启；未设置时 verify 告警 + 慢调用看门狗日志），理由：ctx 击杀约 5× 开销与该档"性能唯一存在理由"（§4.5）冲突，失控 guest 属可用性而非正确性风险）；v1.14：M4 落地对账——`codecs:` 命名声明段落地（§5.10：`name: {type: <codec>, ...配置}`，`decoder`/`encoder` 按名引用，声明名与注册 codec 名两名字空间禁遮蔽）；csv/avro/protobuf codec 落地（选型与 CEL 类型映射见 docs/codecs.md 与 redesign-v3-review-m4.md）；LSP 落地（`eventboat lsp`，手写最小 JSON-RPC——go.lsp.dev/protocol 需 Go 1.26 超本仓 1.25；诊断/补全/hover 数据源全部复用 verify 管线与 registry schema）；`convert` 落地（§4.8 表逐条 + 配置映射，eql1 经 CEL-AST 渲染为 Starlark 并以真实编译器机检，"自动"定义=生成且编译通过；route/filter 折叠为有序边守卫，v2 无匹配静默丢弃 → v3 settle-as-filtered + 计数——结局相同、可观测性变好，记档）；`plugin schema` 独立分发、`repl`（§3.6 自 M1 裁剪后回归）；裁剪记档：Pebble profile（非锚点、查询面需重写）、Operator 降为示例 Deployment 清单 + docs/k8s.md（§6.7 本就 P2）；v1.15：`convert` 移除——确认无生产 v2 配置，迁移工具按 v1.9"按需"定位退役（§7.3 墓碑，§4.8/§7.2 留历史对照，§3.6/§6.8 同步）
 >
 > 本文回答一个问题：**如果抛开 v2 现有实现，从零重新设计这个产品的方案、功能、配置方式和架构，应该长成什么样。**
 >
@@ -264,7 +264,6 @@ eventboat explain    --config [--message f.json]      路径推演（关卡三�
 eventboat replay     --dlq / --spool / --job [...]    死信/窗口/作业回放（关卡三）
 eventboat trigger    <pipeline> [--parameters json]   手动触发作业（§5.8）
 eventboat jobs       list | show <run-id>             作业历史
-eventboat convert    --from v2 --to v3                配置与 eql 迁移（§7.3）
 eventboat repl       [--script f.star] [--cel 'expr'] 脚本/表达式 REPL（§4.4）
 eventboat plugin     list | schema <plugin>           插件清单与 Schema
 eventboat mcp        [--stdio | --http]               启动 MCP Server（关卡四）
@@ -405,6 +404,8 @@ WASM / gRPC  重计算/任意语言/外部依赖（近原生，进程隔离）
 语义映射（v1.12 对账）：CESQL 上下文属性 → `meta`；`data.*` 扩展路径触达 `payload`（文档明示为规范扩展）；主语法保持 CEL；CESQL 是互操作出口，不是主方言。方言约束（诚实声明）：CESQL 标识符为纯字母数字（CloudEvents 属性形状），带下划线的 meta 键（`kafka_offset` 等）在本方言不可达（用 CEL）；`data.*` 经预解析重写为合成驼峰标识符（`data.amount`→`dataAmount`），`data` 前缀标识符保留给扩展；扩展模式 = "CESQL 子集 + 文档化扩展"，不宣称兼容（开放问题 #5）。纯模式跑官方 [CESQL TCK](https://github.com/cloudevents/spec/blob/main/cesql/README.md) 进 CI（口径：vendored 自 sdk-go v2.16.2 的官方套件，275 例 100%）。
 
 ### 4.8 eql1 → v3 迁移（比 v1.0 提案大幅变好）
+
+> （2026-09-04：`convert` 工具已随"无生产 v2 配置"移除，见 §7.3——本表保留为历史对照与手工迁移参考。）
 
 | eql1 | v3 | 迁移 |
 |------|-----|------|
@@ -843,7 +844,7 @@ WASM 资源模型（v1.13，M3 审核 J2 裁决修订）：wazero 无指令计�
 ### 6.8 模块划分（新 internal/ 布局）
 
 ```
-cmd/eventboat/      run verify test explain replay trigger jobs convert repl plugin mcp
+cmd/eventboat/      run verify test explain replay trigger jobs repl lsp plugin mcp
 internal/
   config/            typed config、loader、overlay 合并、env 替换
   ir/                静态 IR：DAG(nodes,edges)、编译产物、lint、explain 求值器
@@ -900,16 +901,13 @@ internal/
 
 ### 7.2 eql → v3 迁移对照速查
 
+> （2026-09-04：`convert` 已移除，见 §7.3——下述为 M4 时点的历史记录，对照表保留作手工迁移参考。）
+
 见 §4.8 表；迁移工具 `convert` 同时处理配置结构（§5.7 对照）与脚本（§4.8 对照），输出双清单（已自动迁移 / 需人工）+ 逐项 diff 报告。谓词零迁移 + 赋值同形使自动迁移覆盖率从 v1.0 提案估算的 ~90% 提升到 ~95% 以上。
 
-### 7.3 `convert` 语义
+### 7.3 `convert` 语义（已移除）
 
-**POC 阶段无迁移义务**：`convert` 是按需工具，不阻塞任何里程碑——v2 用户可继续留在归档的 v2 上，需要时再迁移。
-
-- 输入：v2 `PipelineConfig`（任意一种写法）+ eql1 程序；
-- 输出：v3 配置（三段式规范形态）+ CEL 谓词 + Starlark 脚本 + 迁移报告；
-- 不可自动项（eql1 自定义函数近似物、HOCON 专属写法等）逐条列出原因与建议改法；
-- `convert` 本身是纯函数，进 CI 做快照测试。
+**已移除（2026-09-04）**：确认无生产 v2 配置在用，迁移工具无用武之地——按 v1.9"按需工具"的定位正式退役，`eventboat convert` 命令与 `internal/convert` 包已删除（历史实现经 v0.1.0-beta tag 与 git 历史可考古）。曾于 M4 交付的形态：v2 任意写法（steps/pipeline[]/edges，YAML/HOCON）+ eql1 → v3 三段式 + 迁移报告；"自动迁移"的机器定义 = 生成物通过真实编译器；12 个 v2 示例 convert 后 verify 全绿、三例语义等价转正永久测试。§4.8 / §7.2 的对照表保留为历史参考。
 
 ### 7.4 里程碑
 

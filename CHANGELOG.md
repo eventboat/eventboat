@@ -14,6 +14,13 @@ All notable changes to Eventboat. The format follows
   The 12 v2 fixtures consumed by the convert acceptance tests now live in
   `internal/convert/testdata/v2/`; golden reports were re-pinned with only
   the embedded source-path line changing. No behavior change.
+- **The `convert` command and `internal/convert` package are removed.**
+  There are no production v2 pipelines to migrate, so the migration tool
+  (shipped in M4) is retired per the v1.9 "on-demand" ruling. Spec §7.3
+  records the tombstone; the §4.8/§7.2 mapping tables remain as a manual
+  reference. The M4 implementation (fixtures, snapshots, semantic-
+  equivalence tests) stays recoverable via git history and the
+  v0.1.0-beta tag. No other behavior change.
 
 ## v0.1.0-beta (2026-09-04)
 
