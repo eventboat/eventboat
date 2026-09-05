@@ -122,6 +122,28 @@ eventboat run --config my.yaml --ephemeral
   **嵌套写入静默丢失** bug（惰性绑定下 `payload.nested.k = v` 无声无效——
   容器字段现按引用语义物化，纯标量读保持惰性；回归测试锁定）。
 
+## Transform 插件化（规范 v1.19，2026-09-05）
+
+- **transform 与 source/sink 同级**：`registry.KindTransform` + `Transform`
+  接口（`Init(TransformEnv)` / `Apply → []Message` / `Close`；可选扩展
+  `Clone` = 每 worker 一份（wasm 模块实例非并发安全）、`Flavor` = 供
+  script/wasm 指标分型）；注册 API 双轨：`RegisterTransform`（字符串
+  schema 逃生口）与 `RegisterTransformT`（类型安全，**支持标量根配置**——
+  script 插件的配置就是 Starlark 源文本，非 mapping）。
+- 内置 script/split/wasm 迁移为注册插件，**YAML 形状不变**（`script: |`、
+  `split: {}`、`wasm: {...}` 继续可用）；"插件名即键"与 `version:` 版本钉
+  对 `transforms:` 段生效；第三方可在自己的构建里编译内注册 transform。
+  插件 transform 单次调用返回 0 条输出 = settle-as-filtered + NoMatch 计数
+  （与边谓词零匹配同语义）。
+- **supersede v1.17 的"transforms 维持手工解析"裁决**（同构优先）：字段级
+  错误改以 plugin_schema JSON-pointer 呈现，诊断码 `cfg_script_type`/
+  `cfg_wasm_*`/`cfg_split_type`/`cfg_transform_main_field` 退役，
+  `expr_starlark_compile`/`expr_wasm_compile`/`wasm_no_kill_switch` 经错误
+  分类保码保留；script 死信 backtrace 位置前缀变为 `script:L:C`。
+- `plugin catalog`/`plugin schema`、MCP catalog、LSP 补全与 hover、golden
+  schemas（`transform-*.json`）全部收录 transforms；gRPC 进程外 transform
+  协议暂未开放（见 [docs/plugins.md](docs/plugins.md)）。
+
 管道 = 三段式 + `from` 连边；插件名即键：
 
 ```yaml
@@ -246,7 +268,7 @@ internal/engine/      spool 准入、DAG 执行、commit、投递、死信、拉
 internal/jobs/        作业运行时：调度、补偿、重叠、run 生命周期、钩子
 internal/store/       SQLite + 内存版 spool/checkpoint/死信/作业历史存储
 internal/registry/    插件注册（强制 JSON Schema + ABI 版本，M4 起 codec 同规）
-internal/registry/builtin/  内置 kafka/http_server/cron/file/sql 源、kafka/http/file/drop 汇、json/raw/csv/avro/protobuf 编解码
+internal/registry/builtin/  内置 kafka/http_server/cron/file/sql 源、script/split/wasm transform、kafka/http/file/drop 汇、json/raw/csv/avro/protobuf 编解码
 internal/lsp/         语言服务器：最小 JSON-RPC 2.0、verify 诊断、补全、hover
 internal/explain/     确定性推演 + 拓扑渲染
 internal/ops/         MCP 与 Admin REST 背后的操作服务

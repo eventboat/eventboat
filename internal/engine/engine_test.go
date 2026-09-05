@@ -242,7 +242,9 @@ sinks:
 	if !strings.Contains(dls[0].Reason, "kaboom") {
 		t.Errorf("reason = %q", dls[0].Reason)
 	}
-	if !strings.Contains(dls[0].Backtrace, "transforms.t.script") {
+	// The script plugin compiles under the name "script" (plugin factories
+	// do not know node names); the dead-letter record names the node itself.
+	if !strings.Contains(dls[0].Backtrace, "script:1:5") {
 		t.Errorf("backtrace should name the script: %q", dls[0].Backtrace)
 	}
 	// 2 retries => 2 retry attempts recorded.

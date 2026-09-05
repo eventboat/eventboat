@@ -5,8 +5,8 @@
 package ir
 
 import (
-	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path"
 	"path/filepath"
@@ -22,7 +22,6 @@ import (
 	"github.com/eventboat/eventboat/internal/lang/cesqlhost"
 	"github.com/eventboat/eventboat/internal/lang/starhost"
 	"github.com/eventboat/eventboat/internal/registry"
-	"github.com/eventboat/eventboat/internal/wasmhost"
 )
 
 func hasCap(caps []string, want string) bool {
@@ -78,10 +77,13 @@ type Node struct {
 	Out []Edge
 	In  []Edge
 
-	Script   *starhost.Program
-	IsSplit  bool
-	Wasm     *wasmhost.Compiled // set when the main field is wasm (tier 3)
-	OrderKey *celhost.Predicate // sinks
+	// Transform holds the verify-time instance of the node's transform
+	// plugin when it declares the "explain-safe" capability (script, split):
+	// explain dry-runs it on scratch messages. Instances that are not
+	// explain-safe (wasm — explain must not execute guest code) are closed
+	// right after validation; the engine always instantiates its own.
+	Transform registry.Transform
+	OrderKey  *celhost.Predicate // sinks
 }
 
 // Pipeline is the compiled, ready-to-run form.
@@ -259,7 +261,7 @@ func Build(cfg *config.Pipeline, reg *registry.Registry, starOpts starhost.Optio
 				continue
 			}
 			up := p.Nodes[e.From]
-			if up.Section != config.SectionTransform || !assignsMetaRoute(up.Config.Script) {
+			if up.Section != config.SectionTransform || !assignsMetaRoute(scriptText(up.Config)) {
 				add(config.Diagnostic{Severity: "error", Code: "expr_route_dangling", File: file, Line: e.Line,
 					Message: fmt.Sprintf("edge %s -> %s uses route %q but upstream %q does not assign meta.route", e.From, e.To, e.RouteName, e.From),
 					Hint:    "assign meta.route in the upstream script or use an explicit when condition"})
@@ -306,40 +308,47 @@ func Build(cfg *config.Pipeline, reg *registry.Registry, starOpts starhost.Optio
 		n := p.Nodes[name]
 		switch n.Section {
 		case config.SectionTransform:
-			if n.Config.Script != "" {
-				prog, err := starhost.Compile("transforms."+name+".script", n.Config.Script, starOpts)
+			// Transforms are registry plugins like sources and sinks (spec
+			// v1.18): lookup, version pin, schema validation, factory
+			// instantiation. The factory compiles script (Starlark resolve)
+			// and wasm (module + ABI export check) at verify time — gate-1
+			// findings, not first-message failures.
+			if _, ok := reg.LookupTransform(n.Config.Plugin); !ok {
+				add(config.Diagnostic{Severity: "error", Code: "plugin_unknown", File: file, Line: n.Config.Line,
+					Message: fmt.Sprintf("unknown transform plugin %q", n.Config.Plugin),
+					Hint:    "run `eventboat plugin catalog` against a binary that registers this plugin"})
+			} else {
+				meta, _ := reg.LookupTransform(n.Config.Plugin)
+				checkDeclaredVersion(p, n, meta.Version, file, add)
+				t, err := reg.NewTransform(n.Config.Plugin, n.Config.PluginConfig, filepath.Dir(file))
 				if err != nil {
-					add(config.Diagnostic{Severity: "error", Code: "expr_starlark_compile", File: file, Line: n.Config.Line,
-						Message: err.Error(), Hint: "scripts bind payload, meta, constants; while/recursion are disabled"})
+					addFactoryDiags(file, n, err, add)
+				} else if hasCap(meta.Capabilities, "explain-safe") {
+					// Init binds constants/parameters so explain can dry-run
+					// the instance; the engine instantiates its own.
+					if ierr := t.Init(&registry.TransformEnv{Constants: p.Constants, Parameters: p.Parameters}); ierr != nil {
+						addFactoryDiags(file, n, ierr, add)
+						_ = t.Close()
+					} else {
+						n.Transform = t
+					}
 				} else {
-					n.Script = prog
+					_ = t.Close()
 				}
 			}
-			if n.Config.Split != nil {
-				n.IsSplit = true
-			}
-			if n.Config.Wasm != nil {
-				// Compile the guest at verify time: existence and ABI export
-				// check are gate-1 findings, not first-message failures.
-				// Compilation does not execute guest code.
-				modPath := n.Config.Wasm.Module
-				if !filepath.IsAbs(modPath) && filepath.Dir(file) != "." {
-					modPath = filepath.Join(filepath.Dir(file), modPath)
+			// Builtin lint (M3-audit J2): the wasm plugin runs guests without
+			// a kill switch unless timeout_ms is explicitly set. The plugin
+			// cannot raise diagnostics itself, so the lint stays here —
+			// deliberate builtin awareness, like the script lints below.
+			if n.Config.Plugin == "wasm" {
+				set := false
+				if cfg, ok := n.Config.PluginConfig.(map[string]any); ok {
+					_, set = cfg["timeout_ms"]
 				}
-				compiled, err := wasmhost.Compile(context.Background(), modPath, n.Config.Wasm)
-				if err != nil {
-					add(config.Diagnostic{Severity: "error", Code: "expr_wasm_compile", File: file, Line: n.Config.Line,
-						Message: fmt.Sprintf("transform %q: %v", name, err),
-						Hint:    "the module must be a wasm32-wasip1 reactor exporting _initialize, eb_alloc and transform (docs/wasm.md)"})
-				} else {
-					n.Wasm = compiled
-				}
-				// M3-audit J2: fast mode is the default, so an unset
-				// timeout_ms deserves an explicit warning (--strict upgrades).
-				if n.Config.Wasm.TimeoutMs < 0 {
+				if !set {
 					add(config.Diagnostic{Severity: "warning", Code: "wasm_no_kill_switch", File: file, Line: n.Config.Line,
 						Message: fmt.Sprintf("transform %q runs the WASM guest without a kill switch (timeout_ms unset): a runaway guest wedges one worker until the pipeline restarts — no data is lost and the seven invariants hold", name),
-						Hint:    "set wasm.timeout_ms to a positive wall-clock budget to arm per-invoke killing"})
+						Hint:    "set wasm timeout_ms to a positive wall-clock budget to arm per-invoke killing"})
 				}
 			}
 		case config.SectionSource:
@@ -352,7 +361,7 @@ func Build(cfg *config.Pipeline, reg *registry.Registry, starOpts starhost.Optio
 			} else {
 				meta, _ := reg.LookupSource(n.Config.Plugin)
 				checkDeclaredVersion(p, n, meta.Version, file, add)
-				if _, err := reg.NewSource(n.Config.Plugin, n.Config.PluginConfig); err != nil {
+				if _, err := reg.NewSource(n.Config.Plugin, pluginCfgMap(n.Config)); err != nil {
 					addSchemaDiags(file, n, err, add)
 				}
 			}
@@ -373,7 +382,7 @@ func Build(cfg *config.Pipeline, reg *registry.Registry, starOpts starhost.Optio
 			} else {
 				meta, _ := reg.LookupSink(n.Config.Plugin)
 				checkDeclaredVersion(p, n, meta.Version, file, add)
-				if _, err := reg.NewSink(n.Config.Plugin, n.Config.PluginConfig); err != nil {
+				if _, err := reg.NewSink(n.Config.Plugin, pluginCfgMap(n.Config)); err != nil {
 					addSchemaDiags(file, n, err, add)
 				}
 			}
@@ -481,7 +490,7 @@ func validateExternal(p *Pipeline, n *Node, reg *registry.Registry, kind string,
 			Message: fmt.Sprintf("manifest schema of plugin %q: %v", n.Config.Plugin, err)})
 		return
 	}
-	if err := registry.ValidateSchema(n.Config.Plugin, string(schemaJSON), n.Config.PluginConfig); err != nil {
+	if err := registry.ValidateSchema(n.Config.Plugin, string(schemaJSON), pluginCfgMap(n.Config)); err != nil {
 		addSchemaDiags(file, n, err, add)
 	}
 }
@@ -588,7 +597,7 @@ func checkJobSemantics(p *Pipeline, reg *registry.Registry, parameters map[strin
 	if !job {
 		for _, name := range p.Order {
 			n := p.Nodes[name]
-			for _, text := range []string{n.Config.Script, n.Config.OrderKey} {
+			for _, text := range []string{scriptText(n.Config), n.Config.OrderKey} {
 				if text != "" && parametersBindingPattern.MatchString(text) {
 					add(config.Diagnostic{Severity: "error", Code: "job_parameters_in_continuous", File: file,
 						Line:    n.Config.Line,
@@ -643,7 +652,6 @@ func checkJobSemantics(p *Pipeline, reg *registry.Registry, parameters map[strin
 	for _, name := range p.Order {
 		n := p.Nodes[name]
 		scanRefs(n.Config.PluginConfig, fmt.Sprintf("source/transform/sink %q", name), n.Config.Line)
-		scanRefs(n.Config.Script, fmt.Sprintf("script of %q", name), n.Config.Line)
 		scanRefs(n.Config.OrderKey, fmt.Sprintf("order_key of %q", name), n.Config.Line)
 		for _, e := range n.In {
 			scanRefs(e.WhenSource, fmt.Sprintf("edge %s -> %s", e.From, e.To), e.Line)
@@ -705,6 +713,42 @@ var metaRouteAssign = regexp.MustCompile(`(?m)^\s*meta\.route\s*=`)
 
 func assignsMetaRoute(script string) bool {
 	return metaRouteAssign.MatchString(script)
+}
+
+// scriptText returns the Starlark source of a script-plugin transform node
+// ("" otherwise). The route-sugar and parameter lints read raw script text;
+// this is deliberate builtin awareness — those lints are about Starlark,
+// which only the script plugin runs.
+func scriptText(n *config.Node) string {
+	if n.Section == config.SectionTransform && n.Plugin == "script" {
+		if s, ok := n.PluginConfig.(string); ok {
+			return s
+		}
+	}
+	return ""
+}
+
+// pluginCfgMap returns the plugin block of a source/sink node as a mapping.
+// Parse already rejects non-mapping blocks for those sections (nil here
+// means "no config", which the registry treats as empty).
+func pluginCfgMap(n *config.Node) map[string]any {
+	m, _ := n.PluginConfig.(map[string]any)
+	return m
+}
+
+// addFactoryDiags converts transform factory failures into diagnostics.
+// Schema failures anchor at the plugin block like the other kinds; a plugin
+// that knows its failure class (script/wasm compile errors) carries its own
+// diagnostic code and hint through TransformError.
+func addFactoryDiags(file string, n *Node, err error, add func(config.Diagnostic)) {
+	var te *registry.TransformError
+	if errors.As(err, &te) && te.DiagCode != "" {
+		add(config.Diagnostic{Severity: "error", Code: te.DiagCode, File: file, Line: n.Config.Line,
+			Message: fmt.Sprintf("node %q: %s", n.Name, te.Err.Error()),
+			Hint:    te.Hint})
+		return
+	}
+	addSchemaDiags(file, n, err, add)
 }
 
 // checkTopology enforces the six topology invariants of §3.1 item 2.
@@ -892,7 +936,6 @@ func lint(p *Pipeline, file string, add func(config.Diagnostic)) {
 	}
 	for _, name := range p.Order {
 		n := p.Nodes[name]
-		scan(n.Config.Script)
 		scan(n.Config.PluginConfig)
 		for _, e := range n.In {
 			scan(e.WhenSource)

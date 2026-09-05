@@ -8,8 +8,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/eventboat/eventboat/internal/config"
 )
 
 const guestPath = "testdata/aggregate.wasm"
@@ -74,7 +72,7 @@ func TestInvokeGuestError(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = compiled.Close(ctx) }()
-	inv := compiled.NewInvoker(&config.WasmConfig{}, nil, 0)
+	inv := compiled.NewInvoker(&Config{}, nil, 0)
 	defer func() { _ = inv.Close() }()
 
 	// Empty values: the guest reports a domain error via eb_last_error.
@@ -93,12 +91,12 @@ func TestInvokeGuestError(t *testing.T) {
 func TestInvokeTimeoutKillsAndRecovers(t *testing.T) {
 	path := skipIfGuestMissing(t)
 	ctx := context.Background()
-	compiled, err := Compile(ctx, path, &config.WasmConfig{TimeoutMs: 200, MaxMemoryPages: 1024})
+	compiled, err := Compile(ctx, path, &Config{TimeoutMs: 200, MaxMemoryPages: 1024})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = compiled.Close(ctx) }()
-	inv := compiled.NewInvoker(&config.WasmConfig{TimeoutMs: 200, MaxMemoryPages: 1024}, nil, 0)
+	inv := compiled.NewInvoker(&Config{TimeoutMs: 200, MaxMemoryPages: 1024}, nil, 0)
 	defer func() { _ = inv.Close() }()
 
 	// Huge input with many passes: the guest cannot finish in 200ms.

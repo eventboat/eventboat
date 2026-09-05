@@ -9,6 +9,18 @@ implementation to copy from is
 separate Go module that imports only the generated protocol code, never
 Eventboat internals.
 
+> **Transforms**: since spec v1.19, transforms are registered plugins fully
+> parallel to sources and sinks — but only **compiled-in** for now: register
+> through `registry.RegisterTransform` / `RegisterTransformT` in your own
+> Eventboat build (see [internal/registry](../internal/registry/registry.go)
+> and the three builtins under
+> [internal/registry/builtin](../internal/registry/builtin/) —
+> `transform_script.go`, `transform_split.go`, `wasm_transform.go`). A
+> transform implements `Init(TransformEnv)` / `Apply(*Message)
+> ([]*Message, error)` / `Close`; returning zero outputs filters the message.
+> The gRPC protocol below carries sources and sinks only; out-of-process
+> transforms are future work.
+
 The protocol files:
 
 - `proto/eventboat/plugin/v1/plugin.proto` — the contract
@@ -224,5 +236,7 @@ third party would and runs it through verify and a real engine run.
 
 - External **codec** plugins (decode/encode stays built-in; your payload is
   bytes, decode with the node's `decoder`).
+- External **transform** plugins (transforms register compiled-in since
+  v1.19; the gRPC protocol carries sources and sinks only).
 - TLS between host and plugin (loopback + one-shot token is the v1 threat
   model).

@@ -6,11 +6,13 @@ import (
 )
 
 // nodeWhitelist lists the framework fields allowed at node level, per section.
-// Everything else at node level must be exactly one plugin key (sources and
-// sinks); plugin fields live only inside the plugin block (redesign-v3.md §5.6).
+// Everything else at node level must be exactly one plugin key; plugin fields
+// live only inside the plugin block (redesign-v3.md §5.6). Transforms follow
+// the same rule — script/split/wasm are registered transform plugins, not
+// framework fields, so the whitelist carries only the shared node fields.
 var nodeWhitelist = map[Section]map[string]bool{
 	SectionSource:    {"decoder": true, "grpc": true, "version": true},
-	SectionTransform: {"from": true, "workers": true, "script": true, "split": true, "wasm": true},
+	SectionTransform: {"from": true, "workers": true, "version": true},
 	SectionSink:      {"from": true, "encoder": true, "workers": true, "order_key": true, "batch": true, "grpc": true, "version": true},
 }
 
@@ -104,12 +106,16 @@ func parseNode(file, name string, section Section, nodeRaw any, line, pluginLine
 	}
 
 	switch section {
-	case SectionSource, SectionSink:
+	case SectionSource, SectionSink, SectionTransform:
 		if len(pluginKeys) == 0 {
+			hint := "add exactly one plugin key, e.g. kafka: { ... } (the plugin name is the key)"
+			if section == SectionTransform {
+				hint = "add exactly one transform plugin key: script: | (Starlark), split: {}, wasm: { module: ... }, or a registered plugin's name"
+			}
 			res.Diagnostics = append(res.Diagnostics, Diagnostic{
 				Severity: "error", Code: "cfg_missing_plugin", File: file, Line: line,
 				Message: fmt.Sprintf("%s node %q has no plugin block", section, name),
-				Hint:    "add exactly one plugin key, e.g. kafka: { ... } (the plugin name is the key)",
+				Hint:    hint,
 			})
 			return nil
 		}
@@ -124,7 +130,12 @@ func parseNode(file, name string, section Section, nodeRaw any, line, pluginLine
 		}
 		n.Plugin = pluginKeys[0]
 		n.PluginLine = pluginLine
-		if cfg, ok := m[pluginKeys[0]].(map[string]any); ok {
+		if section == SectionTransform {
+			// Transform plugin blocks are not forced to mappings: the script
+			// plugin's block is the Starlark source text itself. The plugin's
+			// JSON Schema decides the shape at verify time.
+			n.PluginConfig = m[pluginKeys[0]]
+		} else if cfg, ok := m[pluginKeys[0]].(map[string]any); ok {
 			n.PluginConfig = cfg
 		} else {
 			res.Diagnostics = append(res.Diagnostics, Diagnostic{
@@ -133,125 +144,6 @@ func parseNode(file, name string, section Section, nodeRaw any, line, pluginLine
 				Hint:    fmt.Sprintf("write %s: { ... } with the plugin's own fields", pluginKeys[0]),
 			})
 			return nil
-		}
-	case SectionTransform:
-		_, hasScript := m["script"]
-		_, hasSplit := m["split"]
-		_, hasWasm := m["wasm"]
-		mains := 0
-		for _, b := range []bool{hasScript, hasSplit, hasWasm} {
-			if b {
-				mains++
-			}
-		}
-		if mains > 1 {
-			res.Diagnostics = append(res.Diagnostics, Diagnostic{
-				Severity: "error", Code: "cfg_transform_main_field", File: file, Line: line,
-				Message: fmt.Sprintf("transform %q declares multiple main fields (script/split/wasm); exactly one is allowed", name),
-				Hint:    "pick one main field: script (Starlark), split, or wasm",
-			})
-			return nil
-		}
-		if mains == 0 {
-			res.Diagnostics = append(res.Diagnostics, Diagnostic{
-				Severity: "error", Code: "cfg_transform_main_field", File: file, Line: line,
-				Message: fmt.Sprintf("transform %q needs a main field", name),
-				Hint:    "add script: | (Starlark), split: {}, or wasm: { module: ... }",
-			})
-			return nil
-		}
-		if hasScript {
-			src, ok := m["script"].(string)
-			if !ok || strings.TrimSpace(src) == "" {
-				res.Diagnostics = append(res.Diagnostics, Diagnostic{
-					Severity: "error", Code: "cfg_script_type", File: file, Line: line,
-					Message: fmt.Sprintf("script of transform %q must be a non-empty string", name), Hint: "",
-				})
-				return nil
-			}
-			n.Script = src
-		} else if hasWasm {
-			wm, ok := m["wasm"].(map[string]any)
-			if !ok {
-				res.Diagnostics = append(res.Diagnostics, Diagnostic{
-					Severity: "error", Code: "cfg_wasm_type", File: file, Line: line,
-					Message: fmt.Sprintf("wasm of transform %q must be a mapping", name),
-					Hint:    "wasm: { module: transforms/heavy.wasm, entrypoint: transform }",
-				})
-				return nil
-			}
-			for k := range wm {
-				if k != "module" && k != "entrypoint" && k != "timeout_ms" && k != "max_memory_pages" && k != "allow" {
-					res.Diagnostics = append(res.Diagnostics, Diagnostic{
-						Severity: "error", Code: "cfg_unknown_field", File: file, Line: line,
-						Message: fmt.Sprintf("unknown wasm field %q", k),
-						Hint:    "allowed: module, entrypoint, timeout_ms, max_memory_pages, allow",
-					})
-				}
-			}
-			// -1 = unset: fast mode plus a verify lint warning (M3-audit J2 —
-			// the ctx kill switch costs ~5x on loop-heavy guests, so the
-			// performance tier defaults to fast; protection is opt-in).
-			w := &WasmConfig{TimeoutMs: -1, MaxMemoryPages: DefaultWasmMaxMemoryPages}
-			mod, ok := wm["module"].(string)
-			if !ok || strings.TrimSpace(mod) == "" {
-				res.Diagnostics = append(res.Diagnostics, Diagnostic{
-					Severity: "error", Code: "cfg_wasm_module", File: file, Line: line,
-					Message: fmt.Sprintf("wasm.module of transform %q must be the guest module path (relative to the pipeline file)", name),
-					Hint:    "wasm: { module: transforms/heavy.wasm }",
-				})
-			} else {
-				w.Module = mod
-			}
-			if v, ok := wm["entrypoint"].(string); ok && strings.TrimSpace(v) != "" {
-				w.Entrypoint = v
-			}
-			if v, ok := wm["timeout_ms"]; ok {
-				w.TimeoutMs = asInt(v, -1)
-				if w.TimeoutMs < 0 {
-					res.Diagnostics = append(res.Diagnostics, Diagnostic{
-						Severity: "error", Code: "cfg_wasm_range", File: file, Line: line,
-						Message: "wasm.timeout_ms must be >= 0 (0 = fast mode, positive = wall-clock budget)",
-						Hint:    "",
-					})
-					w.TimeoutMs = 0
-				}
-			}
-			if v, ok := wm["max_memory_pages"]; ok {
-				w.MaxMemoryPages = asInt(v, 0)
-				if w.MaxMemoryPages < 1 || w.MaxMemoryPages > 65536 {
-					res.Diagnostics = append(res.Diagnostics, Diagnostic{
-						Severity: "error", Code: "cfg_wasm_range", File: file, Line: line,
-						Message: "wasm.max_memory_pages must be in [1, 65536] (pages of 64 KiB)", Hint: "",
-					})
-					w.MaxMemoryPages = 0
-				}
-			}
-			if arr, ok := wm["allow"].([]any); ok {
-				for _, a := range arr {
-					s, ok := a.(string)
-					if !ok || (s != "log") {
-						res.Diagnostics = append(res.Diagnostics, Diagnostic{
-							Severity: "error", Code: "cfg_wasm_allow", File: file, Line: line,
-							Message: fmt.Sprintf("wasm.allow entry %v is not a known capability", a),
-							Hint:    "known capabilities: log",
-						})
-						continue
-					}
-					w.Allow = append(w.Allow, s)
-				}
-			}
-			n.Wasm = w
-		} else {
-			if _, ok := m["split"].(map[string]any); !ok {
-				res.Diagnostics = append(res.Diagnostics, Diagnostic{
-					Severity: "error", Code: "cfg_split_type", File: file, Line: line,
-					Message: fmt.Sprintf("split of transform %q must be a mapping", name),
-					Hint:    "write split: {} (POC splits a JSON array payload into one message per element)",
-				})
-				return nil
-			}
-			n.Split = &SplitConfig{}
 		}
 	}
 
@@ -332,7 +224,7 @@ func parseNode(file, name string, section Section, nodeRaw any, line, pluginLine
 			n.Grpc = g
 		}
 	}
-	if v, ok := m["version"]; ok && (section == SectionSource || section == SectionSink) {
+	if v, ok := m["version"]; ok && (section == SectionSource || section == SectionSink || section == SectionTransform) {
 		ver := asInt(v, 0)
 		if ver < 1 {
 			res.Diagnostics = append(res.Diagnostics, Diagnostic{

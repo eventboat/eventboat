@@ -8,6 +8,38 @@ All notable changes to Eventboat. The format follows
 
 ### Changed
 
+- **Transforms are now registered plugins, peers of sources and sinks**
+  (spec v1.19). `registry` gains `KindTransform`, a `Transform` interface
+  (`Init(TransformEnv)` / `Apply(*Message) ([]*Message, error)` / `Close`)
+  with two optional extensions (`TransformCloner` — the engine clones once
+  per worker goroutine, used by wasm whose module instances are not
+  goroutine-safe; `TransformFlavor` — feeds the script/wasm metrics), plus
+  `RegisterTransform` (hand-written schema escape hatch) and
+  `RegisterTransformT` (typed; supports scalar root configs — the script
+  plugin's config is the Starlark source text itself, so transform plugin
+  blocks are not forced to mappings). The builtins script/split/wasm
+  register through it like every other plugin; existing pipeline YAML is
+  unchanged (`script: |`, `split: {}`, `wasm: {...}` keep working), the
+  plugin-name-as-key convention now applies to `transforms:` nodes, and
+  `version:` pins work there too. A plugin transform returning zero outputs
+  filters the message (settled + NoMatch counter, the same semantics as an
+  edge predicate with no matching edge). `plugin catalog` / `plugin schema`,
+  the MCP catalog, LSP completion/hover and the schema goldens expose the
+  new kind; third-party compile-in transforms register through the same
+  API (out-of-process gRPC transform plugins remain future work). This
+  supersedes the v1.17 ruling that kept hand-parsed transforms for
+  line-precise diagnostics:
+  - Diagnostic codes retired: `cfg_transform_main_field` (now
+    `cfg_missing_plugin` / `cfg_multiple_plugins`), `cfg_script_type`,
+    `cfg_split_type`, `cfg_wasm_type/module/range/allow` (now `plugin_schema`
+    issues, same as every other plugin kind).
+  - Preserved via error classification: `expr_starlark_compile` (with
+    backtrace), `expr_wasm_compile`, `wasm_no_kill_switch`.
+  - Script dead-letter backtraces now carry positions as `script:L:C`
+    instead of `transforms.<node>.script:L:C` (plugin factories don't know
+    node names; the dead-letter record already names the node).
+  - `engine.Metrics.TransformRuns` now counts split runs too.
+
 - **Vocabulary rename: Settled → Commit, everywhere.** The settle term was
   unusual for stream processing and forced a translation step at every use
   ("commit offsets HERE" was already how the docs explained it). The source

@@ -920,8 +920,7 @@ func SubstituteParameters(p *Pipeline, global map[string]any, valuesFor func(sou
 				values = merged
 			}
 		}
-		node.PluginConfig, _ = sub(node.PluginConfig, values).(map[string]any)
-		node.Script, _ = sub(node.Script, values).(string)
+		node.PluginConfig = sub(node.PluginConfig, values)
 		node.OrderKey, _ = sub(node.OrderKey, values).(string)
 		node.Decoder, _ = sub(node.Decoder, values).(string)
 		node.Encoder, _ = sub(node.Encoder, values).(string)
@@ -933,10 +932,6 @@ func SubstituteParameters(p *Pipeline, global map[string]any, valuesFor func(sou
 				node.Grpc.Env[k], _ = sub(v, values).(string)
 			}
 			node.Grpc.Schema, _ = sub(node.Grpc.Schema, values).(string)
-		}
-		if node.Wasm != nil {
-			node.Wasm.Module, _ = sub(node.Wasm.Module, values).(string)
-			node.Wasm.Entrypoint, _ = sub(node.Wasm.Entrypoint, values).(string)
 		}
 		for i := range node.From {
 			node.From[i].When, _ = sub(node.From[i].When, values).(string)

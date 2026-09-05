@@ -2,35 +2,31 @@ package engine
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
-	"strings"
+	"errors"
 	"time"
 
 	"github.com/eventboat/eventboat/internal/ir"
-	"github.com/eventboat/eventboat/internal/lang/starhost"
 	"github.com/eventboat/eventboat/internal/obs"
 	"github.com/eventboat/eventboat/internal/registry"
 	"github.com/eventboat/eventboat/internal/store"
-	"github.com/eventboat/eventboat/internal/wasmhost"
 )
 
-// runTransform executes script, split and wasm transforms. Script and wasm
-// failures retry per the incoming edge's delivery policy, then dead letter
-// (review R6: incoming edge policy governs).
+// runTransform applies one transform node's plugin. Plugins with per-worker
+// state implement TransformCloner and get an independent clone per goroutine
+// (wasm module instances are not goroutine-safe and die on traps,
+// review-m3 R4); stateless plugins (script programs are immutable, split has
+// no state) share one Init'ed instance.
 func (e *Engine) runTransform(node *ir.Node) {
 	defer e.wg.Done()
-	// One wasm invoker per worker goroutine: wazero module instances are not
-	// goroutine-safe and die on traps (review-m3 R4). The logger is wrapped
-	// so the slow-call watchdog names the node — "which pipeline node is
-	// wedged" is the actionable fact (M3-audit B follow-up).
-	var invoker *wasmhost.Invoker
-	if node.Wasm != nil {
-		nodeLogf := func(format string, args ...any) {
-			e.Opts.Logf("[node %s] "+format, append([]any{node.Name}, args...)...)
+	t := e.transforms[node.Name]
+	if cloner, ok := t.(registry.TransformCloner); ok {
+		clone, err := cloner.Clone()
+		if err != nil {
+			e.Opts.Logf("[node %s] transform worker clone failed (%v); continuing on the shared instance — Apply will dead-letter per message", node.Name, err)
+		} else {
+			t = clone
+			defer func() { _ = t.Close() }()
 		}
-		invoker = node.Wasm.NewInvoker(node.Config.Wasm, nodeLogf, e.Opts.WasmSlowCallWarnMs)
-		defer func() { _ = invoker.Close() }()
 	}
 	ch := e.chans[node.Name]
 	for {
@@ -38,132 +34,73 @@ func (e *Engine) runTransform(node *ir.Node) {
 		case <-e.ctx.Done():
 			return
 		case inst := <-ch:
-			e.processTransform(node, inst, invoker)
+			e.processTransform(node, inst, t)
 		}
 	}
 }
 
-func (e *Engine) processTransform(node *ir.Node, inst *instance, wasmInvoker *wasmhost.Invoker) {
-	if node.Wasm != nil && wasmInvoker != nil {
-		e.Metrics.TransformRuns.Add(1)
-		retries, backoff := e.deliveryOf(inst.via)
-		start := time.Now()
+// processTransform applies the plugin to one message: delivery retries per
+// the incoming edge's policy (review R6), then dead letter — a transform
+// failure never fails the node. Zero outputs filter the message (settled,
+// NoMatch — the same semantics as an edge predicate with no matching edge);
+// N outputs fan out with the commit accounting expanded for the extra
+// branches, the split plugin's 1→N contract.
+func (e *Engine) processTransform(node *ir.Node, inst *instance, t registry.Transform) {
+	e.Metrics.TransformRuns.Add(1)
+	retries, backoff := e.deliveryOf(inst.via)
+	start := time.Now()
 
-		var werr error
-		for attempt := 0; attempt <= retries; attempt++ {
-			if attempt > 0 {
-				e.Metrics.Retries.Add(1)
-				if !e.sleepBackoff(backoff, attempt) {
-					// Shutting down mid-retry: leave uncommitted for replay.
-					return
-				}
+	var outputs []*registry.Message
+	var aerr error
+	for attempt := 0; attempt <= retries; attempt++ {
+		if attempt > 0 {
+			e.Metrics.Retries.Add(1)
+			if !e.sleepBackoff(backoff, attempt) {
+				// Shutting down mid-retry: leave uncommitted for replay.
+				return
 			}
-			var in []byte
-			in, werr = json.Marshal(inst.msg.Decoded)
-			if werr != nil {
-				werr = fmt.Errorf("wasm: encode payload: %w", werr)
-				continue
-			}
-			var out []byte
-			out, werr = wasmInvoker.Invoke(e.ctx, in)
-			if werr != nil {
-				continue
-			}
-			if len(out) == 0 {
-				werr = fmt.Errorf("wasm: transform returned empty output (payload must be JSON)")
-				continue
-			}
-			var decoded any
-			if err := json.Unmarshal(out, &decoded); err != nil {
-				werr = fmt.Errorf("wasm: output is not valid JSON: %v", err)
-				continue
-			}
-			inst.msg.Decoded = decoded
-			werr = nil
+		}
+		outputs, aerr = t.Apply(&inst.msg)
+		if aerr == nil {
 			break
 		}
-		if werr != nil {
-			timedOut := strings.Contains(werr.Error(), "exceeded")
-			e.Opts.Obs.RecordWasm(e.IR.Config.Name, node.Name, time.Since(start), timedOut)
-			e.deadLetter(inst, node.Name, "wasm: "+strings.TrimPrefix(werr.Error(), "wasm: "), "")
-			return
-		}
-		e.Opts.Obs.RecordWasm(e.IR.Config.Name, node.Name, time.Since(start), false)
-		e.fanOut(node, inst.seq, inst.msg)
-		return
 	}
 
-	if node.Script != nil {
-		e.Metrics.TransformRuns.Add(1)
-		retries, backoff := e.deliveryOf(inst.via)
-		scriptStart := time.Now()
-
-		var payloadState, metaState *starhost.MsgState
-		var serr *starhost.ScriptError
-		for attempt := 0; attempt <= retries; attempt++ {
-			if attempt > 0 {
-				e.Metrics.Retries.Add(1)
-				if !e.sleepBackoff(backoff, attempt) {
-					// Shutting down mid-retry: leave uncommitted for replay.
-					return
-				}
-			}
-			// Fresh binding state per attempt: writes of a failed attempt
-			// must not leak into the retry.
-			ps := starhost.NewMsgState("payload", inst.msg.Decoded)
-			ms := starhost.NewMsgState("meta", inst.msg.Meta)
-			serr = node.Script.RunWithParams(ps, ms, e.IR.FrozenConstants, e.IR.FrozenParameters)
-			if serr == nil {
-				payloadState, metaState = ps, ms
-				break
-			}
+	flavor := ""
+	if f, ok := t.(registry.TransformFlavor); ok {
+		flavor = f.Flavor()
+	}
+	record := func(flag string) {
+		switch flavor {
+		case "script":
+			e.Opts.Obs.RecordScript(e.IR.Config.Name, node.Name, time.Since(start), flag == "steps")
+		case "wasm":
+			e.Opts.Obs.RecordWasm(e.IR.Config.Name, node.Name, time.Since(start), flag == "timeout")
 		}
-		if serr != nil {
-			e.Opts.Obs.RecordScript(e.IR.Config.Name, node.Name, time.Since(scriptStart),
-				strings.Contains(serr.Msg, "too many steps"))
-			e.deadLetter(inst, node.Name, "script: "+serr.Msg, serr.Backtrace)
-			return
-		}
-		e.Opts.Obs.RecordScript(e.IR.Config.Name, node.Name, time.Since(scriptStart), false)
-		if payloadState.Dirty() {
-			inst.msg.Decoded = payloadState.GoValue()
-		}
-		if metaState.Dirty() {
-			if m, ok := metaState.MapValue(); ok {
-				inst.msg.Meta = m
-			}
-		}
-		e.fanOut(node, inst.seq, inst.msg)
-		return
 	}
 
-	if node.IsSplit {
-		e.processSplit(node, inst)
+	if aerr != nil {
+		flag, backtrace := "", ""
+		var te *registry.TransformError
+		if errors.As(aerr, &te) {
+			flag, backtrace = te.Flag, te.Backtrace
+		}
+		record(flag)
+		e.deadLetter(inst, node.Name, node.Config.Plugin+": "+aerr.Error(), backtrace)
 		return
 	}
-
-	// Unreachable (verify rejects), but never drop silently.
-	e.deadLetter(inst, node.Name, "transform node has no main field", "")
-}
-
-// processSplit turns an array payload into one message per element (review
-// R8). Children share the parent's spool identity and message_id; the parent
-// commits only when all children's branches commit.
-func (e *Engine) processSplit(node *ir.Node, inst *instance) {
-	items, ok := inst.msg.Decoded.([]any)
-	if !ok {
-		e.deadLetter(inst, node.Name, fmt.Sprintf("split: payload is %T, want array", inst.msg.Decoded), "")
-		return
-	}
-	if len(items) == 0 {
+	record("")
+	if len(outputs) == 0 {
+		e.Metrics.NoMatch.Add(1)
+		e.Opts.Obs.RecordNoMatch(e.IR.Config.Name, node.Name)
 		e.commit.done(inst.seq)
 		return
 	}
-	e.commit.add(inst.seq, len(items)-1)
-	for _, item := range items {
-		child := inst.msg // shallow copy; COW bindings protect payload/meta
-		child.Decoded = item
-		e.fanOut(node, inst.seq, child)
+	if len(outputs) > 1 {
+		e.commit.add(inst.seq, len(outputs)-1)
+	}
+	for _, out := range outputs {
+		e.fanOut(node, inst.seq, *out)
 	}
 }
 

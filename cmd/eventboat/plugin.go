@@ -55,6 +55,14 @@ func pluginCatalog(jsonOut bool) int {
 		}
 		fmt.Printf("  %s (v%d)%s\n", s.Name, s.Version, caps)
 	}
+	fmt.Println("transforms:")
+	for _, t := range c.Transforms {
+		caps := ""
+		if len(t.Capabilities) > 0 {
+			caps = fmt.Sprintf("  capabilities: %v", t.Capabilities)
+		}
+		fmt.Printf("  %s (v%d)%s\n", t.Name, t.Version, caps)
+	}
 	fmt.Println("sinks:")
 	for _, s := range c.Sinks {
 		fmt.Printf("  %s (v%d)\n", s.Name, s.Version)
@@ -68,7 +76,7 @@ func pluginCatalog(jsonOut bool) int {
 
 // schemaEntry is one plugin's exported schema (JSON mode / --all files).
 type schemaEntry struct {
-	Kind    string `json:"kind"` // sources | sinks | codecs
+	Kind    string `json:"kind"` // sources | transforms | sinks | codecs
 	Name    string `json:"name"`
 	Version int    `json:"version"`
 	Schema  string `json:"schema"`
@@ -128,12 +136,15 @@ func pluginSchema(args []string, jsonOut bool) int {
 	return 0
 }
 
-// lookupSchema finds a name across all three sections (names are
-// section-scoped; a collision lists both entries).
+// lookupSchema finds a name across all four sections (names are
+// section-scoped; a collision lists every entry).
 func lookupSchema(reg *registry.Registry, name string) []schemaEntry {
 	var out []schemaEntry
 	if m, ok := reg.LookupSource(name); ok {
 		out = append(out, schemaEntry{Kind: "sources", Name: m.Name, Version: m.Version, Schema: m.Schema})
+	}
+	if m, ok := reg.LookupTransform(name); ok {
+		out = append(out, schemaEntry{Kind: "transforms", Name: m.Name, Version: m.Version, Schema: m.Schema})
 	}
 	if m, ok := reg.LookupSink(name); ok {
 		out = append(out, schemaEntry{Kind: "sinks", Name: m.Name, Version: m.Version, Schema: m.Schema})
@@ -172,6 +183,12 @@ func exportAllSchemas(reg *registry.Registry, dir string) int {
 	}
 	for _, s := range c.Sources {
 		if write("sources", s.Name, s.Version, s.Schema) != 0 {
+			return 1
+		}
+		count++
+	}
+	for _, t := range c.Transforms {
+		if write("transforms", t.Name, t.Version, t.Schema) != 0 {
 			return 1
 		}
 		count++

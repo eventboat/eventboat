@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"math/rand/v2"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -25,6 +26,13 @@ import (
 	"github.com/eventboat/eventboat/internal/rpcplugin"
 	"github.com/eventboat/eventboat/internal/store"
 )
+
+// pluginCfgMap narrows a node's plugin block to a mapping; parse guarantees
+// mappings for source/sink blocks (transform configs may be scalars).
+func pluginCfgMap(n *config.Node) map[string]any {
+	m, _ := n.PluginConfig.(map[string]any)
+	return m
+}
 
 // Options tunes engine behavior. Tests use tiny backoffs and fixed clocks.
 type Options struct {
@@ -147,11 +155,12 @@ type Engine struct {
 	Opts    Options
 	Metrics Metrics
 
-	commit  *commitTracker
-	chans   map[string]chan *instance
-	sinks   map[string]registry.Sink
-	codecs  map[string]registry.Codec // resolved by codec name
-	sources map[string]registry.Source
+	commit     *commitTracker
+	chans      map[string]chan *instance
+	sinks      map[string]registry.Sink
+	codecs     map[string]registry.Codec // resolved by codec name
+	sources    map[string]registry.Source
+	transforms map[string]registry.Transform
 
 	admitSem chan struct{}
 
@@ -238,6 +247,7 @@ func New(p *ir.Pipeline, st store.Store, reg *registry.Registry, opts Options) (
 		sinks:        map[string]registry.Sink{},
 		codecs:       map[string]registry.Codec{},
 		sources:      map[string]registry.Source{},
+		transforms:   map[string]registry.Transform{},
 		acquired:     map[int64]bool{},
 		srcErr:       map[string]error{},
 		srcDone:      map[string]bool{},
@@ -253,10 +263,10 @@ func New(p *ir.Pipeline, st store.Store, reg *registry.Registry, opts Options) (
 			var src registry.Source
 			var err error
 			if n.Config.Grpc != nil {
-				src, err = rpcplugin.SpawnSource(context.Background(), n.Config.Grpc, n.Config.Manifest, n.Config.PluginConfig, opts.Logf,
+				src, err = rpcplugin.SpawnSource(context.Background(), n.Config.Grpc, n.Config.Manifest, pluginCfgMap(n.Config), opts.Logf,
 					rpcplugin.WithRestartCounter(opts.Obs.RecordPluginRestart))
 			} else {
-				src, err = reg.NewSource(n.Config.Plugin, n.Config.PluginConfig)
+				src, err = reg.NewSource(n.Config.Plugin, pluginCfgMap(n.Config))
 			}
 			if err != nil {
 				return nil, fmt.Errorf("source %q: %w", name, err)
@@ -273,10 +283,10 @@ func New(p *ir.Pipeline, st store.Store, reg *registry.Registry, opts Options) (
 			var sink registry.Sink
 			var err error
 			if n.Config.Grpc != nil {
-				sink, err = rpcplugin.SpawnSink(context.Background(), n.Config.Grpc, n.Config.Manifest, n.Config.PluginConfig, opts.Logf,
+				sink, err = rpcplugin.SpawnSink(context.Background(), n.Config.Grpc, n.Config.Manifest, pluginCfgMap(n.Config), opts.Logf,
 					rpcplugin.WithRestartCounter(opts.Obs.RecordPluginRestart))
 			} else {
-				sink, err = reg.NewSink(n.Config.Plugin, n.Config.PluginConfig)
+				sink, err = reg.NewSink(n.Config.Plugin, pluginCfgMap(n.Config))
 			}
 			if err != nil {
 				return nil, fmt.Errorf("sink %q: %w", name, err)
@@ -301,6 +311,27 @@ func New(p *ir.Pipeline, st store.Store, reg *registry.Registry, opts Options) (
 			}
 			e.chans[name] = make(chan *instance, capacity)
 		case config.SectionTransform:
+			// Transforms instantiate through the registry like sources and
+			// sinks (spec v1.18); Init hands the plugin its constants,
+			// parameters, node logger and the slow-call advisory threshold
+			// before workers start.
+			t, err := reg.NewTransform(n.Config.Plugin, n.Config.PluginConfig, filepath.Dir(p.Config.File))
+			if err != nil {
+				return nil, fmt.Errorf("transform %q: %w", name, err)
+			}
+			nodeLogf := func(format string, args ...any) {
+				opts.Logf("[node %s] "+format, append([]any{name}, args...)...)
+			}
+			if err := t.Init(&registry.TransformEnv{
+				Constants:    p.Constants,
+				Parameters:   p.Parameters,
+				Logf:         nodeLogf,
+				SlowCallWarn: time.Duration(opts.WasmSlowCallWarnMs) * time.Millisecond,
+			}); err != nil {
+				_ = t.Close()
+				return nil, fmt.Errorf("transform %q: %w", name, err)
+			}
+			e.transforms[name] = t
 			workers := n.Config.Workers
 			if workers < 1 {
 				workers = 1
@@ -538,9 +569,16 @@ func (e *Engine) drain() {
 		<-done
 	}
 	for _, name := range e.IR.Order {
-		if e.IR.Nodes[name].Section == config.SectionSink {
+		switch e.IR.Nodes[name].Section {
+		case config.SectionSink:
 			if s, ok := e.sinks[name]; ok {
 				_ = s.Close()
+			}
+		case config.SectionTransform:
+			// Master instances (worker clones close themselves in
+			// runTransform); the wasm template releases the wazero runtime.
+			if t, ok := e.transforms[name]; ok {
+				_ = t.Close()
 			}
 		}
 	}

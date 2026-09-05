@@ -64,8 +64,8 @@ sinks:
 	if node.In[0].Required != true || node.In[0].Retries != 3 {
 		t.Errorf("edge defaults not applied: %+v", node.In[0])
 	}
-	if pip.Nodes["enrich"].Script == nil {
-		t.Error("script not compiled")
+	if pip.Nodes["enrich"].Transform == nil {
+		t.Error("script plugin instance not built (explain-safe transform)")
 	}
 }
 

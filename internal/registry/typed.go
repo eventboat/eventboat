@@ -99,6 +99,29 @@ func RegisterCodecT[C any](r *Registry, name string, version int, build func(cfg
 	})
 }
 
+// RegisterTransformT registers a transform plugin whose config contract is
+// the type C. C is usually a struct, but unlike the other kinds it may also
+// be a scalar: transform plugin blocks are not forced to mappings, and the
+// built-in script plugin's config is the Starlark source text itself
+// (C = string). dir (the pipeline file's directory) reaches build unchanged
+// for relative path resolution.
+func RegisterTransformT[T Transform, C any](r *Registry, name string, version int, capabilities []string, build func(cfg C, dir string) (T, error)) error {
+	if build == nil {
+		return fmt.Errorf("transform %q: nil factory", name)
+	}
+	plan, err := newTypePlan[C](name)
+	if err != nil {
+		return err
+	}
+	return r.RegisterTransform(name, version, plan.schema, capabilities, func(cfg any, dir string) (Transform, error) {
+		c, err := decodeTyped[C](cfg, plan.defaults)
+		if err != nil {
+			return nil, err
+		}
+		return build(c, dir)
+	})
+}
+
 // --- schema generation ---
 
 // typePlan holds everything derived from a config struct: the generated
@@ -110,19 +133,24 @@ type typePlan struct {
 
 func newTypePlan[C any](plugin string) (*typePlan, error) {
 	t := reflect.TypeOf((*C)(nil)).Elem()
-	if t.Kind() != reflect.Struct {
-		return nil, fmt.Errorf("plugin %q: config type must be a struct, got %s", plugin, t)
-	}
 	pb := &planBuilder{defs: &defaultTable{byType: map[reflect.Type][]fieldDefault{}}, seen: map[reflect.Type]bool{}}
 	root := newNode()
 	root.set("$schema", "https://json-schema.org/draft/2020-12/schema")
-	obj, err := pb.objectNode(t)
+	var node *schemaNode
+	var err error
+	if t.Kind() == reflect.Struct {
+		node, err = pb.objectNode(t)
+	} else {
+		// Scalar root (transform configs only): the plugin block's value is
+		// the config itself, e.g. the script plugin's Starlark source text.
+		node, err = pb.valueNode(t, fieldSpec{})
+	}
 	if err != nil {
 		return nil, fmt.Errorf("plugin %q: %w", plugin, err)
 	}
-	root.set("type", obj.vals["type"])
-	for _, k := range obj.keys[1:] { // required, properties, additionalProperties
-		root.set(k, obj.vals[k])
+	root.set("type", node.vals["type"])
+	for _, k := range node.keys[1:] { // required, properties, additionalProperties
+		root.set(k, node.vals[k])
 	}
 	var b strings.Builder
 	root.render(&b, "")
@@ -548,12 +576,14 @@ func applyDefaults(v reflect.Value, dt *defaultTable) {
 	}
 }
 
-// decodeTyped turns a raw config map into C. The map's YAML-decoded scalars
-// (int/float64/string/bool) are normalized through a JSON round trip; the
-// strict decoder rejects unknown fields, which normally never happens
-// because schema validation runs first; it is defense in depth against
-// schema/struct drift. Defaults are applied afterwards.
-func decodeTyped[C any](cfg map[string]any, dt *defaultTable) (C, error) {
+// decodeTyped turns a raw config value into C. Mapping configs (sources,
+// sinks, codecs) arrive as map[string]any; transform configs may be scalars
+// (the script plugin's source text). YAML-decoded scalars are normalized
+// through a JSON round trip; the strict decoder rejects unknown struct
+// fields, which normally never happens because schema validation runs first;
+// it is defense in depth against schema/struct drift. Defaults are applied
+// afterwards.
+func decodeTyped[C any](cfg any, dt *defaultTable) (C, error) {
 	var zero C
 	if cfg == nil {
 		cfg = map[string]any{}

@@ -268,6 +268,29 @@ func labels(items []completionItem) map[string]bool {
 	return out
 }
 
+func TestCompletionInTransformNode(t *testing.T) {
+	h := newHarness(t)
+	h.request("initialize", map[string]any{}, nil)
+	doc := `apiVersion: eventboat/v3
+kind: Pipeline
+metadata: {name: c}
+transforms:
+  enrich:
+    `
+	items := completionAt(t, h, doc, 5, 6)
+	got := labels(items)
+	// Framework fields plus the registered transform plugins (script/split/
+	// wasm arrive through the catalog like any plugin, spec v1.18).
+	for _, want := range []string{"from", "workers", "version", "script", "split", "wasm"} {
+		if !got[want] {
+			t.Errorf("missing completion %q; got %v", want, got)
+		}
+	}
+	if got["encoder"] {
+		t.Errorf("encoder offered inside transforms; got %v", got)
+	}
+}
+
 func TestCompletionInSourceNode(t *testing.T) {
 	h := newHarness(t)
 	h.request("initialize", map[string]any{}, nil)

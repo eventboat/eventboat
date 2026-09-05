@@ -1,9 +1,10 @@
 // Package registry defines the plugin registration model of Eventboat v3.
 //
-// Every plugin (source, sink, codec) must register a JSON Schema alongside its
-// factory; configuration blocks are validated strictly against that schema
-// (unknown fields are errors). This is the mechanism that keeps agents from
-// inventing plugins or fields that do not exist (redesign-v3.md §5.6).
+// Every plugin (source, transform, sink, codec) must register a JSON Schema
+// alongside its factory; configuration blocks are validated strictly against
+// that schema (unknown fields are errors). This is the mechanism that keeps
+// agents from inventing plugins or fields that do not exist (redesign-v3.md
+// §5.6).
 package registry
 
 import (
@@ -13,17 +14,19 @@ import (
 	"fmt"
 	"sort"
 	"sync"
+	"time"
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
 )
 
-// Kind enumerates the three plugin sections.
+// Kind enumerates the four plugin sections.
 type Kind string
 
 const (
-	KindSource Kind = "sources"
-	KindSink   Kind = "sinks"
-	KindCodec  Kind = "codecs"
+	KindSource    Kind = "sources"
+	KindTransform Kind = "transforms"
+	KindSink      Kind = "sinks"
+	KindCodec     Kind = "codecs"
 )
 
 // Message is the unit of data flowing through a pipeline. The engine owns the
@@ -76,6 +79,68 @@ type Sink interface {
 	Close() error
 }
 
+// Transform is implemented by transform plugins. The engine calls Init once
+// with the execution environment before workers start, then Apply per message
+// from `workers` concurrent goroutines (unless the plugin also implements
+// TransformCloner, in which case each worker applies on its own clone). Apply
+// turns one message into zero or more messages: zero outputs filter the
+// message (settled, counted as no-match — the same semantics as an edge
+// predicate with no matching edge); one or more outputs fan out downstream
+// and the engine expands the commit accounting for the extra branches. A
+// non-nil error retries per the incoming edge's delivery policy, then dead
+// letters the message; it never fails the node.
+type Transform interface {
+	Init(env *TransformEnv) error
+	Apply(msg *Message) ([]*Message, error)
+	Close() error
+}
+
+// TransformCloner is implemented by transforms whose execution state is not
+// goroutine-safe (wasm module instances die on traps). After Init the engine
+// clones once per worker goroutine; clones must be independent.
+type TransformCloner interface {
+	Clone() (Transform, error)
+}
+
+// TransformFlavor is implemented by transforms that participate in the
+// engine's per-flavor observability (script/wasm duration histograms, budget
+// and timeout counters); the engine reads it when recording metrics. Known
+// flavors are "script" and "wasm"; anything else is recorded generically.
+type TransformFlavor interface {
+	Flavor() string
+}
+
+// TransformEnv is the engine-provided execution environment handed to a
+// transform through Init: the pipeline's frozen constants and the run's
+// parameters (the script plugin binds both as Starlark globals), a
+// node-scoped logger, and an advisory slow-call threshold for plugins that
+// invoke heavyweight engines (the wasm guest watchdog).
+type TransformEnv struct {
+	Constants    map[string]any
+	Parameters   map[string]any
+	Logf         func(format string, args ...any)
+	SlowCallWarn time.Duration
+}
+
+// TransformError is the failure detail a transform plugin returns (or wraps)
+// from its factory or Apply. At verify time DiagCode/Hint route a factory
+// failure to a specific diagnostic code ("" falls back to plugin_schema).
+// At run time Backtrace reaches the dead-letter record verbatim (Starlark
+// backtraces); Flavor feeds the engine's per-flavor metrics ("script" and
+// "wasm" are recorded today, anything else is generic); Flag marks budget
+// exhaustion ("steps") or timeouts ("timeout").
+type TransformError struct {
+	Err       error
+	Backtrace string
+	Flavor    string
+	Flag      string
+	DiagCode  string
+	Hint      string
+}
+
+func (e *TransformError) Error() string { return e.Err.Error() }
+func (e *TransformError) Unwrap() error { return e.Err }
+
 // Codec turns raw bytes into a decoded value and back.
 type Codec interface {
 	Decode(raw []byte) (any, error)
@@ -83,10 +148,12 @@ type Codec interface {
 }
 
 // reservedNames may not be used as plugin names: they collide with node-level
-// framework fields or edge attributes (redesign-v3-review.md R5).
+// framework fields or edge attributes (redesign-v3-review.md R5). script,
+// split and wasm are NOT reserved — they are the built-in transform plugin
+// names, ordinary members of the transform namespace (spec v1.18).
 var reservedNames = map[string]bool{
 	"from": true, "decoder": true, "encoder": true, "workers": true,
-	"order_key": true, "batch": true, "script": true, "split": true, "wasm": true,
+	"order_key": true, "batch": true,
 	"when": true, "route": true, "buffer": true, "delivery": true, "required": true,
 }
 
@@ -97,6 +164,15 @@ type sourceEntry struct {
 	compiled     *jsonschema.Schema
 	capabilities []string
 	factory      func(cfg map[string]any) (Source, error)
+}
+
+type transformEntry struct {
+	name         string
+	version      int
+	schema       string
+	compiled     *jsonschema.Schema
+	capabilities []string
+	factory      func(cfg any, dir string) (Transform, error)
 }
 
 type sinkEntry struct {
@@ -118,17 +194,19 @@ type codecEntry struct {
 // Registry holds all registered plugins. Use Default() for the process-wide
 // registry that compiled-in builtins register into.
 type Registry struct {
-	mu      sync.RWMutex
-	sources map[string]*sourceEntry
-	sinks   map[string]*sinkEntry
-	codecs  map[string]*codecEntry
+	mu         sync.RWMutex
+	sources    map[string]*sourceEntry
+	transforms map[string]*transformEntry
+	sinks      map[string]*sinkEntry
+	codecs     map[string]*codecEntry
 }
 
 func New() *Registry {
 	return &Registry{
-		sources: map[string]*sourceEntry{},
-		sinks:   map[string]*sinkEntry{},
-		codecs:  map[string]*codecEntry{},
+		sources:    map[string]*sourceEntry{},
+		transforms: map[string]*transformEntry{},
+		sinks:      map[string]*sinkEntry{},
+		codecs:     map[string]*codecEntry{},
 	}
 }
 
@@ -178,6 +256,41 @@ func (r *Registry) RegisterSource(name string, version int, schema string, capab
 		return fmt.Errorf("source plugin %q already registered", name)
 	}
 	r.sources[name] = &sourceEntry{name: name, version: version, schema: schema, compiled: compiled, capabilities: capabilities, factory: factory}
+	return nil
+}
+
+// TransformFactory instantiates a transform plugin from its configuration.
+// cfg is the raw plugin-block value — unlike sources and sinks it is not
+// constrained to mappings, because the built-in script plugin's config is the
+// Starlark source itself (a string); the plugin's schema decides the shape.
+// dir is the pipeline file's directory ("" when unknown) so configs carrying
+// file paths (e.g. the wasm module) resolve against it, the rule the codec
+// tier uses.
+type TransformFactory = func(cfg any, dir string) (Transform, error)
+
+// RegisterTransform registers a transform plugin with its ABI version, JSON
+// Schema and optional capabilities such as "explain-safe" (the transform may
+// be dry-run by `eventboat explain` without side effects).
+func (r *Registry) RegisterTransform(name string, version int, schema string, capabilities []string, factory TransformFactory) error {
+	if reservedNames[name] {
+		return fmt.Errorf("plugin name %q is reserved by the framework field whitelist", name)
+	}
+	if version < 1 {
+		return fmt.Errorf("transform %q: version must be >= 1", name)
+	}
+	if factory == nil {
+		return fmt.Errorf("transform %q: nil factory", name)
+	}
+	compiled, err := compileSchema("transform/"+name, schema)
+	if err != nil {
+		return err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, dup := r.transforms[name]; dup {
+		return fmt.Errorf("transform plugin %q already registered", name)
+	}
+	r.transforms[name] = &transformEntry{name: name, version: version, schema: schema, compiled: compiled, capabilities: capabilities, factory: factory}
 	return nil
 }
 
@@ -256,10 +369,41 @@ func (r *Registry) NewSource(name string, cfg map[string]any) (Source, error) {
 	if !ok {
 		return nil, fmt.Errorf("unknown source plugin %q", name)
 	}
+	if cfg == nil {
+		cfg = map[string]any{}
+	}
 	if err := validate(e.compiled, name, cfg); err != nil {
 		return nil, err
 	}
 	return e.factory(cfg)
+}
+
+// LookupTransform returns the transform entry registered under name.
+func (r *Registry) LookupTransform(name string) (*TransformMeta, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	e, ok := r.transforms[name]
+	if !ok {
+		return nil, false
+	}
+	return &TransformMeta{Name: e.name, Version: e.version, Schema: e.schema, Capabilities: e.capabilities}, true
+}
+
+// NewTransform instantiates a transform plugin after validating cfg against
+// its schema. Unlike the other kinds a nil cfg is NOT normalized to an empty
+// object: the plugin block always carries its value in the YAML (a null
+// `script:` is a type error against the string schema, not an empty config).
+func (r *Registry) NewTransform(name string, cfg any, dir string) (Transform, error) {
+	r.mu.RLock()
+	e, ok := r.transforms[name]
+	r.mu.RUnlock()
+	if !ok {
+		return nil, fmt.Errorf("unknown transform plugin %q", name)
+	}
+	if err := validate(e.compiled, name, cfg); err != nil {
+		return nil, err
+	}
+	return e.factory(cfg, dir)
 }
 
 // LookupSink returns the sink entry registered under name.
@@ -280,6 +424,9 @@ func (r *Registry) NewSink(name string, cfg map[string]any) (Sink, error) {
 	r.mu.RUnlock()
 	if !ok {
 		return nil, fmt.Errorf("unknown sink plugin %q", name)
+	}
+	if cfg == nil {
+		cfg = map[string]any{}
 	}
 	if err := validate(e.compiled, name, cfg); err != nil {
 		return nil, err
@@ -326,6 +473,14 @@ type SourceMeta struct {
 	Capabilities []string `json:"capabilities,omitempty"`
 }
 
+// TransformMeta describes a registered transform (for catalog output).
+type TransformMeta struct {
+	Name         string   `json:"name"`
+	Version      int      `json:"version"`
+	Schema       string   `json:"schema"`
+	Capabilities []string `json:"capabilities,omitempty"`
+}
+
 // SinkMeta describes a registered sink (for catalog output).
 type SinkMeta struct {
 	Name    string `json:"name"`
@@ -343,9 +498,10 @@ type CodecMeta struct {
 
 // Catalog lists registered plugins grouped by section, sorted by name.
 type Catalog struct {
-	Sources []SourceMeta `json:"sources"`
-	Sinks   []SinkMeta   `json:"sinks"`
-	Codecs  []CodecMeta  `json:"codecs"`
+	Sources    []SourceMeta    `json:"sources"`
+	Transforms []TransformMeta `json:"transforms"`
+	Sinks      []SinkMeta      `json:"sinks"`
+	Codecs     []CodecMeta     `json:"codecs"`
 }
 
 func (r *Registry) Catalog() Catalog {
@@ -355,6 +511,9 @@ func (r *Registry) Catalog() Catalog {
 	for _, e := range r.sources {
 		c.Sources = append(c.Sources, SourceMeta{Name: e.name, Version: e.version, Schema: e.schema, Capabilities: e.capabilities})
 	}
+	for _, e := range r.transforms {
+		c.Transforms = append(c.Transforms, TransformMeta{Name: e.name, Version: e.version, Schema: e.schema, Capabilities: e.capabilities})
+	}
 	for _, e := range r.sinks {
 		c.Sinks = append(c.Sinks, SinkMeta{Name: e.name, Version: e.version, Schema: e.schema})
 	}
@@ -362,6 +521,7 @@ func (r *Registry) Catalog() Catalog {
 		c.Codecs = append(c.Codecs, CodecMeta{Name: e.name, Version: e.version, Schema: e.schema})
 	}
 	sort.Slice(c.Sources, func(i, j int) bool { return c.Sources[i].Name < c.Sources[j].Name })
+	sort.Slice(c.Transforms, func(i, j int) bool { return c.Transforms[i].Name < c.Transforms[j].Name })
 	sort.Slice(c.Sinks, func(i, j int) bool { return c.Sinks[i].Name < c.Sinks[j].Name })
 	sort.Slice(c.Codecs, func(i, j int) bool { return c.Codecs[i].Name < c.Codecs[j].Name })
 	return c
@@ -400,10 +560,10 @@ func (e *SchemaError) Error() string {
 	return s
 }
 
-func validate(sch *jsonschema.Schema, plugin string, cfg map[string]any) error {
-	if cfg == nil {
-		cfg = map[string]any{}
-	}
+// validate checks cfg against a compiled schema. cfg may be any JSON value:
+// the three mapping kinds always receive objects (their parse enforces it),
+// transforms may be scalars (the script plugin's config is the source text).
+func validate(sch *jsonschema.Schema, plugin string, cfg any) error {
 	if err := sch.Validate(cfg); err != nil {
 		var ve *jsonschema.ValidationError
 		if errors.As(err, &ve) {

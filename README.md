@@ -722,9 +722,14 @@ unchanged — `SchemaError` output, `plugin_schema` diagnostics and the
 external gRPC manifest path are byte-compatible. Generated schemas are
 pinned by goldens (`internal/registry/builtin/testdata/schemas/`,
 `-update-schemas`), making every schema change a reviewable diff. The
-string-based `Register*` API stays as an escape hatch; transforms
-(script/split/wasm) keep their hand parsing in `config/sections.go` — its
-per-field line-precise diagnostics are worth more than uniformity.
+string-based `Register*` API stays as an escape hatch. Since spec v1.19
+transforms are registered plugins too (`RegisterTransformT` supports
+scalar root configs — the script plugin's config is the Starlark source
+itself): script/split/wasm register like every other builtin, the
+plugin-name-as-key convention and `version:` pins apply to `transforms:`
+nodes, and third-party compile-in transforms use the same API. A plugin
+transform returning zero outputs filters the message (settle-as-filtered +
+NoMatch counter). Out-of-process gRPC transforms remain future work.
 
 ## Repository layout
 
@@ -742,7 +747,7 @@ internal/engine/      spool admission, DAG execution, commit, delivery, DLQ, pul
 internal/jobs/        job runtime: scheduler, catchup, overlap, run lifecycle, hooks
 internal/store/       SQLite + in-memory spool/checkpoint/dead-letter/job-history stores
 internal/registry/    plugin registration: JSON Schemas generated from typed config structs (RegisterSourceT/…) + ABI versions; string-schema API retained as escape hatch
-internal/registry/builtin/  kafka/http_server/cron/file/sql sources, kafka/http/file/drop sinks, json/raw/csv/avro/protobuf codecs
+internal/registry/builtin/  kafka/http_server/cron/file/sql sources, script/split/wasm transforms, kafka/http/file/drop sinks, json/raw/csv/avro/protobuf codecs
 internal/lsp/         language server: minimal JSON-RPC 2.0, verify diagnostics, completion, hover
 internal/explain/     deterministic walkthroughs + topology rendering
 internal/ops/         the operations service behind MCP and Admin REST

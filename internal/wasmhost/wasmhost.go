@@ -24,23 +24,32 @@ import (
 	"github.com/tetratelabs/wazero"
 	"github.com/tetratelabs/wazero/api"
 	"github.com/tetratelabs/wazero/imports/wasi_snapshot_preview1"
-
-	"github.com/eventboat/eventboat/internal/config"
 )
 
-// Defaults mirror config.DefaultWasm*; the config layer owns the values.
-const DefaultMaxMemoryPages = config.DefaultWasmMaxMemoryPages
+// DefaultMaxMemoryPages caps guest memory when max_memory_pages is unset.
+const DefaultMaxMemoryPages = 512 // 32 MiB
+
+// Config declares a WASM transform node (ladder tier 3, redesign-v3.md §4.5;
+// wire format and sandbox per redesign-v3-review-m3 R3/R4/R7). The schema
+// tags drive the builtin plugin's JSON Schema and default injection.
+type Config struct {
+	Module         string   `json:"module" schema:"minLen=1,desc=guest module path, relative to the pipeline file"`
+	Entrypoint     string   `json:"entrypoint" schema:"optional,default=transform,desc=exported transform function name"`
+	TimeoutMs      int      `json:"timeout_ms" schema:"optional,min=0,desc=per-invoke wall-clock budget in ms; 0 = fast mode without a kill switch"`
+	MaxMemoryPages int      `json:"max_memory_pages" schema:"optional,min=1,max=65536,default=512,desc=wazero memory pages cap"`
+	Allow          []string `json:"allow" schema:"optional,desc=capability allowlist; known: log"`
+}
 
 // Compile compiles a guest module once; the result is safe to share across
 // workers of the node it was compiled for. Memory cap and kill switch come
 // from the node config: a positive timeout_ms enables wazero's
 // CloseOnContextDone so per-invoke deadlines can kill runaway guests —
 // measured at ~5x slower on loop-heavy guests on some platforms — while the
-// default (unset / zero / negative) compiles the fast way with NO kill
-// switch (M3-audit J2: the performance tier defaults to fast; verify warns
-// on unset; a runaway guest then wedges its worker until the pipeline
+// default (unset / zero) compiles the fast way with NO kill switch
+// (M3-audit J2: the performance tier defaults to fast; verify warns on
+// unset; a runaway guest then wedges its worker until the pipeline
 // restarts, which the slow-call watchdog makes visible).
-func Compile(ctx context.Context, path string, cfg *config.WasmConfig) (*Compiled, error) {
+func Compile(ctx context.Context, path string, cfg *Config) (*Compiled, error) {
 	wasmBytes, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("wasmhost: read module: %w", err)
@@ -99,7 +108,7 @@ func (c *Compiled) Close(ctx context.Context) error {
 // call — killed calls never reach the duration histogram; <=0 disables).
 // One Invoker belongs to one worker goroutine; concurrent Invokes on the
 // same Invoker are not allowed (wazero modules are not goroutine-safe, R4).
-func (c *Compiled) NewInvoker(cfg *config.WasmConfig, logf func(string, ...any), slowCallWarnMs int) *Invoker {
+func (c *Compiled) NewInvoker(cfg *Config, logf func(string, ...any), slowCallWarnMs int) *Invoker {
 	timeoutMs := 0 // fast mode unless a positive budget is set
 	entry := "transform"
 	allowLog := false

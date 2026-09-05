@@ -157,12 +157,14 @@ type Node struct {
 	Workers  int    // default 1
 	OrderKey string // sinks; CEL expression
 	Batch    *Batch // sinks
-	Script   string // transforms (Starlark)
-	Split    *SplitConfig
-	Wasm     *WasmConfig // transforms (M3 ladder tier 3)
 
+	// Plugin is the node's single plugin block key (the plugin name); valid
+	// for all four sections — transforms register script/split/wasm as
+	// plugins like any other. PluginConfig is the block's raw value: a
+	// mapping for most plugins, but transforms may declare scalar roots (the
+	// script plugin's config is the Starlark source text).
 	Plugin       string
-	PluginConfig map[string]any
+	PluginConfig any
 	PluginLine   int
 
 	// Grpc marks the node as an out-of-process plugin (redesign-v3.md §6.5,
@@ -230,23 +232,6 @@ type Batch struct {
 	Size      int
 	TimeoutMs int // flush interval when the batch is not full
 }
-
-// SplitConfig marks a transform as a splitter. POC semantics: the payload must
-// be a JSON array; each element becomes one message (redesign-v3-review R8).
-type SplitConfig struct{}
-
-// WasmConfig declares a WASM transform (ladder tier 3, redesign-v3.md §4.5;
-// wire format and sandbox per redesign-v3-review-m3 R3/R4/R7).
-type WasmConfig struct {
-	Module         string   // module path, relative to the pipeline file
-	Entrypoint     string   // exported function name; "" means "transform"
-	TimeoutMs      int      // -1 = unset (fast mode + verify lint warning, the M3-audit J2 default); 0 = explicit fast mode (no kill switch); >0 = wall-clock budget with kill switch
-	MaxMemoryPages int      // wazero memory pages cap; 0 = DefaultWasmMaxMemoryPages
-	Allow          []string // capability allowlist; default none; known: log
-}
-
-// Default applied when wasm.max_memory_pages is absent.
-const DefaultWasmMaxMemoryPages = 512 // 32 MiB
 
 // BufferConfig is the in-memory per-edge buffer sizing (surge absorption
 // only; reliability comes from the spool, not from buffers).

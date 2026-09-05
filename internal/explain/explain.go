@@ -8,12 +8,13 @@ package explain
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/eventboat/eventboat/internal/config"
 	"github.com/eventboat/eventboat/internal/ir"
-	"github.com/eventboat/eventboat/internal/lang/starhost"
+	"github.com/eventboat/eventboat/internal/registry"
 )
 
 // Options tunes the walkthrough.
@@ -72,43 +73,35 @@ func Trace(pip *ir.Pipeline, opts Options) (string, error) {
 	return b.String(), nil
 }
 
-// walk visits one node's out-edges (message mode): scripts dry-run first so
-// downstream conditions see the transformed payload.
+// walk visits one node's out-edges (message mode): explain-safe transforms
+// dry-run first so downstream conditions see the transformed payload; other
+// transforms (wasm: guest code must not execute in explain) pass the payload
+// through unchanged (documented).
 func walk(pip *ir.Pipeline, node *ir.Node, payload any, meta map[string]any, b *strings.Builder) {
-	if node.Script != nil {
-		ps := starhost.NewMsgState("payload", payload)
-		ms := starhost.NewMsgState("meta", meta)
-		serr := node.Script.RunWithParams(ps, ms, pip.FrozenConstants, pip.FrozenParameters)
-		if serr != nil {
-			fmt.Fprintf(b, "%s: transform.script (starlark, %d statements, budget=%d steps)\n",
-				node.Name, countStatements(node.Script.Source()), pip.StarOptions.MaxSteps)
-			fmt.Fprintf(b, "  ✗ script failed at line %d: %s\n", serr.Line, serr.Msg)
-			fmt.Fprintf(b, "  %s\n", indent(serr.Backtrace))
+	if node.Transform != nil {
+		msg := &registry.Message{Decoded: payload, Meta: meta}
+		outs, aerr := node.Transform.Apply(msg)
+		if aerr != nil {
+			fmt.Fprintf(b, "%s: %s\n", node.Name, transformLabel(node))
+			fmt.Fprintf(b, "  ✗ %s\n", aerr.Error())
+			var te *registry.TransformError
+			if errors.As(aerr, &te) && te.Backtrace != "" {
+				fmt.Fprintf(b, "  %s\n", indent(te.Backtrace))
+			}
 			fmt.Fprintf(b, "  → the message would dead-letter on the incoming edge's delivery policy\n")
 			return
 		}
-		fmt.Fprintf(b, "%s: transform.script (starlark, %d statements, budget=%d steps) ✓\n",
-			node.Name, countStatements(node.Script.Source()), pip.StarOptions.MaxSteps)
-		if ps.Dirty() {
-			payload = ps.GoValue()
-		}
-		if ms.Dirty() {
-			if m, ok := ms.MapValue(); ok {
-				meta = m
-			}
-		}
-	} else if node.IsSplit {
-		if arr, ok := payload.([]any); ok {
-			fmt.Fprintf(b, "%s: transform.split → %d messages (children share the parent's identity)\n", node.Name, len(arr))
-		} else {
-			fmt.Fprintf(b, "%s: transform.split ✗ payload is not an array → dead letter\n", node.Name)
+		if len(outs) == 0 {
+			fmt.Fprintf(b, "%s: %s → 0 outputs: the message commits as filtered\n", node.Name, transformLabel(node))
 			return
 		}
-	} else if node.Wasm != nil {
-		// The guest is not dry-run in explain: downstream conditions
-		// evaluate against the pre-transform payload (documented).
-		fmt.Fprintf(b, "%s: transform.wasm (module %s, entrypoint %s) — guest not dry-run; downstream sees the pre-transform payload\n",
-			node.Name, node.Config.Wasm.Module, wasmEntry(node))
+		if len(outs) > 1 {
+			fmt.Fprintf(b, "%s: %s → %d messages (children share the parent's identity; walking child #1)\n",
+				node.Name, transformLabel(node), len(outs))
+		} else {
+			fmt.Fprintf(b, "%s: %s ✓\n", node.Name, transformLabel(node))
+		}
+		payload, meta = outs[0].Decoded, outs[0].Meta
 	}
 
 	matched := 0
@@ -178,14 +171,17 @@ func symbolic(pip *ir.Pipeline, b *strings.Builder) error {
 		case config.SectionSource:
 			fmt.Fprintf(b, "%s: source %s (decoder %s)\n", name, node.Config.Plugin, decoderOf(node))
 		case config.SectionTransform:
-			if node.Script != nil {
+			switch {
+			case node.Config.Plugin == "script":
 				fmt.Fprintf(b, "%s: transform.script (starlark, %d statements, budget=%d steps)\n",
-					name, countStatements(node.Script.Source()), pip.StarOptions.MaxSteps)
-			} else if node.IsSplit {
+					name, countStatements(rawScript(node)), pip.StarOptions.MaxSteps)
+			case node.Config.Plugin == "split":
 				fmt.Fprintf(b, "%s: transform.split (array payload → one message per element)\n", name)
-			} else if node.Wasm != nil {
+			case node.Config.Plugin == "wasm":
 				fmt.Fprintf(b, "%s: transform.wasm (module %s, entrypoint %s, budget %dms)\n",
-					name, node.Config.Wasm.Module, wasmEntry(node), wasmBudget(node))
+					name, wasmModule(node), wasmEntry(node), wasmBudget(node))
+			default:
+				fmt.Fprintf(b, "%s: transform.%s\n", name, node.Config.Plugin)
 			}
 		case config.SectionSink:
 			describeSink(node, b)
@@ -211,16 +207,64 @@ func decoderOf(n *ir.Node) string {
 	return n.Config.Decoder
 }
 
+// transformLabel renders the transform line prefix in message mode; the
+// builtins keep their descriptive labels, third-party plugins name
+// themselves.
+func transformLabel(node *ir.Node) string {
+	switch node.Config.Plugin {
+	case "script":
+		return "transform.script"
+	case "split":
+		return "transform.split"
+	case "wasm":
+		return "transform.wasm"
+	default:
+		return "transform." + node.Config.Plugin
+	}
+}
+
+// rawScript returns the Starlark source of a script-plugin transform node.
+func rawScript(n *ir.Node) string {
+	if s, ok := n.Config.PluginConfig.(string); ok {
+		return s
+	}
+	return ""
+}
+
+// wasmCfgMap returns the raw wasm plugin block (no defaults injected).
+func wasmCfgMap(n *ir.Node) map[string]any {
+	m, _ := n.Config.PluginConfig.(map[string]any)
+	return m
+}
+
+func wasmModule(n *ir.Node) string {
+	if s, ok := wasmCfgMap(n)["module"].(string); ok {
+		return s
+	}
+	return "?"
+}
+
 func wasmEntry(n *ir.Node) string {
-	if n.Config.Wasm.Entrypoint != "" {
-		return n.Config.Wasm.Entrypoint
+	if s, ok := wasmCfgMap(n)["entrypoint"].(string); ok && s != "" {
+		return s
 	}
 	return "transform"
 }
 
 func wasmBudget(n *ir.Node) int {
-	if n.Config.Wasm.TimeoutMs > 0 {
-		return n.Config.Wasm.TimeoutMs
+	switch v := wasmCfgMap(n)["timeout_ms"].(type) {
+	case int:
+		if v > 0 {
+			return v
+		}
+	case int64:
+		if v > 0 {
+			return int(v)
+		}
+	case float64:
+		if v > 0 && v == float64(int(v)) {
+			return int(v)
+		}
 	}
 	return 1000
 }

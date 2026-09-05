@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["module"],
+  "properties": {
+    "module": {
+      "type": "string",
+      "minLength": 1,
+      "description": "guest module path, relative to the pipeline file"
+    },
+    "entrypoint": {
+      "type": "string",
+      "default": "transform",
+      "description": "exported transform function name"
+    },
+    "timeout_ms": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "per-invoke wall-clock budget in ms; 0 = fast mode without a kill switch"
+    },
+    "max_memory_pages": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 65536,
+      "default": 512,
+      "description": "wazero memory pages cap"
+    },
+    "allow": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "capability allowlist; known: log"
+    }
+  },
+  "additionalProperties": false
+}

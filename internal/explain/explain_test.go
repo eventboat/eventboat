@@ -110,7 +110,7 @@ sinks:
   out: { from: [t], file: { path: o } }
 `)
 	out, _ := Trace(pip, Options{Message: []byte(`{}`)})
-	if !strings.Contains(out, "✗ script failed") || !strings.Contains(out, "kaboom") {
+	if !strings.Contains(out, "✗ fail: kaboom") || !strings.Contains(out, "kaboom") {
 		t.Errorf("script failure not rendered:\n%s", out)
 	}
 	if !strings.Contains(out, "dead-letter") {

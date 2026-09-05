@@ -89,7 +89,9 @@ sinks:
 	}
 }
 
-func TestTransformMainFieldMutualExclusion(t *testing.T) {
+func TestTransformMultiplePluginBlocksRejected(t *testing.T) {
+	// script and split are plugin keys now (spec v1.18): two plugin blocks on
+	// one transform node is the same error as on a source.
 	res := LoadBytes("p.yaml", []byte(`
 apiVersion: eventboat/v3
 kind: Pipeline
@@ -107,16 +109,19 @@ sinks:
 `))
 	found := false
 	for _, d := range res.Diagnostics {
-		if d.Code == "cfg_transform_main_field" {
+		if d.Code == "cfg_multiple_plugins" {
 			found = true
 		}
 	}
 	if !found {
-		t.Fatalf("expected cfg_transform_main_field, got %+v", res.Diagnostics)
+		t.Fatalf("expected cfg_multiple_plugins, got %+v", res.Diagnostics)
 	}
 }
 
-func TestWasmFieldParsing(t *testing.T) {
+func TestTransformPluginBlockRetainedRaw(t *testing.T) {
+	// The transform plugin block reaches the registry raw (script is a plain
+	// string, wasm a mapping); schema validation happens at verify with a
+	// registry, not at parse.
 	res := LoadBytes("p.yaml", []byte(`
 apiVersion: eventboat/v3
 kind: Pipeline
@@ -124,7 +129,11 @@ metadata: { name: x }
 sources:
   in: { file: { path: a } }
 transforms:
-  good:
+  scripted:
+    from: [in]
+    script: |
+      payload.x = 1
+  heavy:
     from: [in]
     wasm:
       module: guests/heavy.wasm
@@ -132,49 +141,47 @@ transforms:
       timeout_ms: 500
       max_memory_pages: 256
       allow: [log]
-  bad:
+  diced:
     from: [in]
-    wasm:
-      module: guests/heavy.wasm
-      timeout_ms: -1
-      max_memory_pages: 99999
-      allow: [net]
-  both:
-    from: [in]
-    wasm: { module: guests/heavy.wasm }
-    script: |
-      payload.x = 1
+    split: {}
 sinks:
-  out: { from: [good, bad, both], file: { path: b } }
+  out: { from: [scripted, heavy, diced], file: { path: b } }
 `))
-	var good *Node
-	codes := map[string]bool{}
-	for _, d := range res.Diagnostics {
-		codes[d.Code] = true
+	if res.HasErrors() {
+		t.Fatalf("unexpected errors: %+v", res.Diagnostics)
 	}
-	for _, code := range []string{"cfg_transform_main_field", "cfg_wasm_range", "cfg_wasm_allow"} {
-		if !codes[code] {
-			t.Errorf("missing %s in %+v", code, res.Diagnostics)
-		}
+	scripted := res.Pipeline.Transforms["scripted"]
+	if scripted.Plugin != "script" {
+		t.Errorf("scripted plugin = %q", scripted.Plugin)
 	}
-	for name, n := range res.Pipeline.Transforms {
-		if name == "good" {
-			good = n
-		}
+	if src, ok := scripted.PluginConfig.(string); !ok || strings.TrimSpace(src) == "" {
+		t.Errorf("script config not retained as string: %#v", scripted.PluginConfig)
 	}
-	if good == nil || good.Wasm == nil {
-		t.Fatalf("good wasm node not parsed: %+v", good)
+	h := res.Pipeline.Transforms["heavy"]
+	if h.Plugin != "wasm" {
+		t.Errorf("heavy plugin = %q", h.Plugin)
 	}
-	w := good.Wasm
-	if w.Module != "guests/heavy.wasm" || w.Entrypoint != "transform" || w.TimeoutMs != 500 || w.MaxMemoryPages != 256 || len(w.Allow) != 1 || w.Allow[0] != "log" {
-		t.Fatalf("wasm config parsed wrong: %+v", w)
+	wm, ok := h.PluginConfig.(map[string]any)
+	if !ok {
+		t.Fatalf("wasm config not retained as mapping: %#v", h.PluginConfig)
+	}
+	if wm["module"] != "guests/heavy.wasm" || wm["entrypoint"] != "transform" || wm["timeout_ms"] != 500 || wm["max_memory_pages"] != 256 {
+		t.Errorf("wasm config = %#v", wm)
+	}
+	if allow, ok := wm["allow"].([]any); !ok || len(allow) != 1 || allow[0] != "log" {
+		t.Errorf("allow = %#v", wm["allow"])
+	}
+	if d := res.Pipeline.Transforms["diced"]; d.Plugin != "split" {
+		t.Errorf("diced plugin = %q", d.Plugin)
+	}
+	if _, ok := res.Pipeline.Transforms["diced"].PluginConfig.(map[string]any); !ok {
+		t.Errorf("split config = %#v", res.Pipeline.Transforms["diced"].PluginConfig)
 	}
 }
 
-func TestWasmTimeoutDefaults(t *testing.T) {
-	// M3-audit J2: unset timeout_ms parses to the -1 sentinel (fast mode +
-	// verify lint warning); explicit 0 is a deliberate fast-mode choice and
-	// must not warn.
+func TestWasmRawConfigPreserved(t *testing.T) {
+	// M3-audit J2: unset vs explicit timeout_ms is a verify-time lint against
+	// the raw block; parse keeps both exactly as written.
 	res := LoadBytes("p.yaml", []byte(`
 apiVersion: eventboat/v3
 kind: Pipeline
@@ -194,11 +201,11 @@ sinks:
 	if res.HasErrors() {
 		t.Fatalf("unexpected errors: %+v", res.Diagnostics)
 	}
-	if got := res.Pipeline.Transforms["unset"].Wasm.TimeoutMs; got != -1 {
-		t.Errorf("unset timeout_ms = %d, want -1 sentinel", got)
+	if _, set := res.Pipeline.Transforms["unset"].PluginConfig.(map[string]any)["timeout_ms"]; set {
+		t.Errorf("unset timeout_ms should be absent from the raw block")
 	}
-	if got := res.Pipeline.Transforms["fast"].Wasm.TimeoutMs; got != 0 {
-		t.Errorf("explicit timeout_ms: 0 = %d, want 0", got)
+	if got := res.Pipeline.Transforms["fast"].PluginConfig.(map[string]any)["timeout_ms"]; got != 0 {
+		t.Errorf("explicit timeout_ms = %v, want 0", got)
 	}
 }
 
@@ -263,11 +270,11 @@ sinks:
 
 	// Optional key omitted: sink plugin block has only path.
 	sink := res.Pipeline.Sinks["out"]
-	if _, present := sink.PluginConfig["EB_TEST_OPTIONAL"]; present {
+	if _, present := (sink.PluginConfig.(map[string]any))["EB_TEST_OPTIONAL"]; present {
 		t.Errorf("optional key not omitted: %+v", sink.PluginConfig)
 	}
-	if sink.PluginConfig["path"] != "fixed.txt" {
-		t.Errorf("path = %v", sink.PluginConfig["path"])
+	if (sink.PluginConfig.(map[string]any))["path"] != "fixed.txt" {
+		t.Errorf("path = %v", (sink.PluginConfig.(map[string]any))["path"])
 	}
 	// Typed substitution: workers becomes int 4.
 	if res.Pipeline.Transforms["t"].Workers != 4 {
@@ -295,7 +302,7 @@ sinks:
 	if res.HasErrors() {
 		t.Fatalf("unexpected errors: %+v", res.Diagnostics)
 	}
-	if got := res.Pipeline.Sinks["out"].PluginConfig["path"]; got != "out-100.txt" {
+	if got := (res.Pipeline.Sinks["out"].PluginConfig.(map[string]any))["path"]; got != "out-100.txt" {
 		t.Errorf("path = %v, want out-100.txt", got)
 	}
 }
@@ -375,7 +382,7 @@ sinks:
 	if res.HasErrors() {
 		t.Fatalf("job pipeline with ${parameters.x} rejected at load: %+v", res.Diagnostics)
 	}
-	got := res.Pipeline.Sinks["out"].PluginConfig["path"]
+	got := (res.Pipeline.Sinks["out"].PluginConfig.(map[string]any))["path"]
 	if got != "run-${parameters.from}.txt" {
 		t.Errorf("parameters token did not pass through: %v", got)
 	}
@@ -400,7 +407,7 @@ sinks:
 	if res.HasErrors() {
 		t.Fatalf("unexpected errors: %+v", res.Diagnostics)
 	}
-	if got := res.Pipeline.Sinks["out"].PluginConfig["path"]; got != "gold-prod.txt" {
+	if got := (res.Pipeline.Sinks["out"].PluginConfig.(map[string]any))["path"]; got != "gold-prod.txt" {
 		t.Errorf("path = %v, want gold-prod.txt", got)
 	}
 }
@@ -459,7 +466,7 @@ sinks:
 	if res.HasErrors() {
 		t.Fatalf("unexpected errors: %+v", res.Diagnostics)
 	}
-	if _, present := res.Pipeline.Sinks["out"].PluginConfig["EB_TEST_OPTIONAL_UNSET"]; present {
+	if _, present := (res.Pipeline.Sinks["out"].PluginConfig.(map[string]any))["EB_TEST_OPTIONAL_UNSET"]; present {
 		t.Errorf("optional env key not omitted: %+v", res.Pipeline.Sinks["out"].PluginConfig)
 	}
 }

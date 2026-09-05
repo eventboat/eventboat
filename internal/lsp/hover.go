@@ -69,6 +69,10 @@ func (s *Server) hoverValue(text string, line, character int) string {
 		if m, ok := s.reg.LookupSource(word); ok {
 			return pluginSummary("source", m.Name, m.Version, m.Capabilities, m.Schema)
 		}
+	case "transforms":
+		if m, ok := s.reg.LookupTransform(word); ok {
+			return pluginSummary("transform", m.Name, m.Version, m.Capabilities, m.Schema)
+		}
 	case "sinks":
 		if m, ok := s.reg.LookupSink(word); ok {
 			return pluginSummary("sink", m.Name, m.Version, nil, m.Schema)
@@ -82,6 +86,10 @@ func (s *Server) hoverValue(text string, line, character int) string {
 			switch section {
 			case "sources":
 				if m, ok := s.reg.LookupSource(plugin); ok {
+					schema = m.Schema
+				}
+			case "transforms":
+				if m, ok := s.reg.LookupTransform(plugin); ok {
 					schema = m.Schema
 				}
 			case "sinks":

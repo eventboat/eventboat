@@ -3,11 +3,9 @@ package wasmhost
 import (
 	"context"
 	"encoding/json"
+	"github.com/eventboat/eventboat/internal/lang/starhost"
 	"os"
 	"testing"
-
-	"github.com/eventboat/eventboat/internal/config"
-	"github.com/eventboat/eventboat/internal/lang/starhost"
 )
 
 // The §4.6 "heavy script" benchmark: identical multi-pass aggregation over a
@@ -100,20 +98,20 @@ func BenchmarkHeavyTransform(b *testing.B) {
 	// protected (positive timeout_ms, wazero's ctx-close kill switch costs
 	// ~5x on loop-heavy guests) is the explicitly-named comparison. Both
 	// belong in the README table.
-	fastCompiled, err := Compile(ctx, path, &config.WasmConfig{})
+	fastCompiled, err := Compile(ctx, path, &Config{})
 	if err != nil {
 		b.Fatal(err)
 	}
 	defer func() { _ = fastCompiled.Close(ctx) }()
-	fastInv := fastCompiled.NewInvoker(&config.WasmConfig{}, nil, 0)
+	fastInv := fastCompiled.NewInvoker(&Config{}, nil, 0)
 	defer func() { _ = fastInv.Close() }()
 
-	protectedCompiled, err := Compile(ctx, path, &config.WasmConfig{TimeoutMs: 1000})
+	protectedCompiled, err := Compile(ctx, path, &Config{TimeoutMs: 1000})
 	if err != nil {
 		b.Fatal(err)
 	}
 	defer func() { _ = protectedCompiled.Close(ctx) }()
-	protectedInv := protectedCompiled.NewInvoker(&config.WasmConfig{TimeoutMs: 1000}, nil, 0)
+	protectedInv := protectedCompiled.NewInvoker(&Config{TimeoutMs: 1000}, nil, 0)
 	defer func() { _ = protectedInv.Close() }()
 
 	b.Run("wasm_heavy", func(b *testing.B) { // default: fast mode

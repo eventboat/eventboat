@@ -178,7 +178,7 @@ func TestWasmSlowCallWatchdog(t *testing.T) {
 	}
 	path := guestPath(t)
 	ctx := context.Background()
-	compiled, err := wasmhost.Compile(ctx, path, &config.WasmConfig{}) // fast: no kill switch
+	compiled, err := wasmhost.Compile(ctx, path, &wasmhost.Config{}) // fast: no kill switch
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -194,7 +194,7 @@ func TestWasmSlowCallWatchdog(t *testing.T) {
 
 	// Short-call phase: a 5s threshold leaves ample headroom even for a cold
 	// first invoke (instantiation + JSON) on a slow CI box under -race.
-	calm := compiled.NewInvoker(&config.WasmConfig{}, logf, 5000)
+	calm := compiled.NewInvoker(&wasmhost.Config{}, logf, 5000)
 	defer func() { _ = calm.Close() }()
 	if _, err := calm.Invoke(ctx, []byte(`{"samples":[1,2,3]}`)); err != nil {
 		t.Fatal(err)
@@ -209,7 +209,7 @@ func TestWasmSlowCallWatchdog(t *testing.T) {
 	// Long-call phase: a 1ms threshold guarantees the watchdog fires; the
 	// call (10M float ops) must still complete — fast mode never kills — and
 	// the warning must fire exactly once (throttled per call).
-	hot := compiled.NewInvoker(&config.WasmConfig{}, logf, 1)
+	hot := compiled.NewInvoker(&wasmhost.Config{}, logf, 1)
 	defer func() { _ = hot.Close() }()
 	values := make([]float64, 200_000)
 	in, _ := json.Marshal(map[string]any{"samples": values, "passes": 50})

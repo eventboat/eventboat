@@ -22,9 +22,11 @@ var topLevelSections = []string{
 }
 
 // Framework fields per section (mirrors config.sections.go nodeWhitelist).
+// script/split/wasm are not listed for transforms: they are registered
+// transform plugins and arrive through pluginItems (the catalog).
 var frameworkFields = map[string][]string{
 	"sources":    {"decoder", "grpc", "version"},
-	"transforms": {"from", "workers", "script", "split", "wasm"},
+	"transforms": {"from", "workers", "version"},
 	"sinks":      {"from", "encoder", "workers", "order_key", "batch", "grpc", "version"},
 }
 
@@ -388,7 +390,13 @@ func (s *Server) pluginItems(section string) []completionItem {
 			})
 		}
 	case "transforms":
-		// Transforms are framework main fields, not registry plugins.
+		for _, m := range s.reg.Catalog().Transforms {
+			out = append(out, completionItem{
+				Label: m.Name, Kind: kindProperty,
+				Detail:     "transform plugin (v" + itoa(m.Version) + ")" + capsSuffix(m.Capabilities),
+				InsertText: m.Name + ":",
+			})
+		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Label < out[j].Label })
 	return out
@@ -428,6 +436,10 @@ func (s *Server) pluginFieldItems(section, plugin string) []completionItem {
 	switch section {
 	case "sources":
 		if m, ok := s.reg.LookupSource(plugin); ok {
+			schema = m.Schema
+		}
+	case "transforms":
+		if m, ok := s.reg.LookupTransform(plugin); ok {
 			schema = m.Schema
 		}
 	case "sinks":

@@ -229,8 +229,30 @@ func TestTypedUnsupportedTypesRejected(t *testing.T) {
 	if _, err := newTypePlan[badMapVal]("x"); err == nil || !strings.Contains(err.Error(), "map values must be string or any") {
 		t.Errorf("int-valued map error = %v", err)
 	}
-	if _, err := newTypePlan[string]("x"); err == nil || !strings.Contains(err.Error(), "must be a struct") {
-		t.Errorf("non-struct top error = %v", err)
+	// Scalar roots are legal (transform configs, e.g. the script plugin's
+	// source text); unsupported root kinds are not.
+	if _, err := newTypePlan[string]("x"); err != nil {
+		t.Errorf("scalar top error = %v", err)
+	}
+	if _, err := newTypePlan[chan int]("x"); err == nil || !strings.Contains(err.Error(), "unsupported config field type") {
+		t.Errorf("chan top error = %v", err)
+	}
+}
+
+func TestTypedScalarRootPlan(t *testing.T) {
+	plan, err := newTypePlan[string]("script")
+	if err != nil {
+		t.Fatalf("plan: %v", err)
+	}
+	if !strings.Contains(plan.schema, `"type": "string"`) {
+		t.Errorf("schema = %s", plan.schema)
+	}
+	got, err := decodeTyped[string]("payload.x = 1", plan.defaults)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got != "payload.x = 1" {
+		t.Errorf("decoded = %q", got)
 	}
 }
 

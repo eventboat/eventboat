@@ -22,10 +22,10 @@ func NewServer(svc *ops.Service, name, version string) *mcp.Server {
 
 	// --- read tools ---
 	mcp.AddTool(server, &mcp.Tool{Name: "catalog",
-		Description: "List registered plugins (sources/sinks/codecs) with their JSON Schemas — the basis for generating valid pipeline configs."},
+		Description: "List registered plugins (sources/transforms/sinks/codecs) with their JSON Schemas — the basis for generating valid pipeline configs."},
 		func(ctx context.Context, req *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, any, error) {
 			c := svc.Catalog()
-			return textResult(c), map[string]any{"sources": len(c.Sources), "sinks": len(c.Sinks), "codecs": len(c.Codecs)}, nil
+			return textResult(c), map[string]any{"sources": len(c.Sources), "transforms": len(c.Transforms), "sinks": len(c.Sinks), "codecs": len(c.Codecs)}, nil
 		})
 
 	mcp.AddTool(server, &mcp.Tool{Name: "verify",

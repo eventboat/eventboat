@@ -25,10 +25,6 @@ func TopologyMermaid(pip *ir.Pipeline) string {
 		label := name
 		if node.Config.Plugin != "" {
 			label = name + "<br/>" + node.Config.Plugin
-		} else if node.Script != nil {
-			label = name + "<br/>script"
-		} else if node.IsSplit {
-			label = name + "<br/>split"
 		}
 		fmt.Fprintf(&b, "  "+shape+"\n", name, label)
 	}

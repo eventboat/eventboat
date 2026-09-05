@@ -50,6 +50,9 @@ func TestSchemaGoldens(t *testing.T) {
 	for _, m := range cat.Sources {
 		compare("source", m.Name, m.Schema)
 	}
+	for _, m := range cat.Transforms {
+		compare("transform", m.Name, m.Schema)
+	}
 	for _, m := range cat.Sinks {
 		compare("sink", m.Name, m.Schema)
 	}
