@@ -19,11 +19,11 @@ in CI. The full suite is `go test ./...`; CI runs it with `-race`.
 | Engine invariants | `internal/engine/invariants_test.go` | the seven §6.2 reliability invariants, one test each |
 | Engine behavior | `internal/engine/*_test.go` | delivery, fan-out, split, transform plugins, wasm, CESQL, admission pooling |
 | Persistence/recovery | `internal/engine/commit_persist_test.go`, `retention_test.go`, `internal/store` | flush ordering, retention bounds, crash replay |
-| Golden tests | `cmd/eventboat/testdata/help/`, `internal/registry/builtin/testdata/schemas/` | CLI help screens; generated plugin JSON Schemas |
+| Golden tests | `internal/cli/testdata/help/`, `internal/registry/builtin/testdata/schemas/` | CLI help screens; generated plugin JSON Schemas |
 | Contract tests | `internal/testrun` + `examples/*/tests/` | pipeline behavior through the real engine via suite YAML |
 | Integration | `internal/inttests/kafka`, `internal/inttests/soak` | real broker roundtrips; long-run stability (env-gated, need Docker) |
 | Benchmarks | `internal/engine`, `internal/lang/*`, `internal/wasmhost` | performance gates and the Starlark-vs-WASM comparison |
-| Acceptance | `cmd/eventboat/examples_test.go`, `internal/rpcplugin/acceptance_test.go`, `cmd/eventboat/agent_loop_test.go` | every example verifies and passes its suites; the third-party gRPC plugin builds and runs; the full agent loop over MCP stdio |
+| Acceptance | `internal/cli/examples_test.go`, `acceptance_test.go` (root), `internal/rpcplugin/acceptance_test.go`, `internal/cli/agent_loop_test.go` | every example verifies and passes its suites; the custom-build binary links `pkg/plugin` plugins and runs them; the third-party gRPC plugin builds and runs; the full agent loop over MCP stdio |
 
 ## The seven engine invariants
 
@@ -54,9 +54,9 @@ bug in the durability model, not a hygiene issue.
 
 Three golden surfaces, each with its own regenerate flag:
 
-- **CLI help snapshots**: `cmd/eventboat/testdata/help/*.txt` pin every verb's
+- **CLI help snapshots**: `internal/cli/testdata/help/*.txt` pin every verb's
   help screen. After changing a flag or usage string:
-  `go test ./cmd/eventboat -update` and commit the diff.
+  `go test ./internal/cli -update` and commit the diff.
 - **Plugin schema goldens**: `internal/registry/builtin/testdata/schemas/*.json`
   pin the JSON Schema generated from every builtin config struct. After
   changing a config struct: `go test ./internal/registry/builtin
@@ -193,5 +193,5 @@ instead of asserting something weaker.
 
 **Add a contract test for a user-visible pipeline behavior**: write the
 suite under `examples/<pipeline>/tests/`, fixtures under `tests/fixtures/`,
-and rely on the CI examples gate (`cmd/eventboat/examples_test.go`) to keep
+and rely on the CI examples gate (`internal/cli/examples_test.go`) to keep
 it green.

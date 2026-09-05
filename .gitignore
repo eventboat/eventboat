@@ -7,6 +7,9 @@ data/
 *.db-shm
 /eventboat
 /eventboat.exe
+# the custom-build example's binary (go build -o my-eventboat .)
+examples/custom-build/my-eventboat
+examples/custom-build/my-eventboat.exe
 output/
 # generated documentation site (tools/sitegen output; the Pages artifact)
 site-public/

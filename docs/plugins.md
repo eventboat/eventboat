@@ -1,5 +1,22 @@
 # Writing Eventboat plugins (gRPC, any language)
 
+Eventboat has **two extension routes**; this document specifies the second.
+
+1. **Compiled-in (Go)** — your own `main` blank-imports plugin packages that
+   register through [`pkg/plugin`](../pkg/plugin/plugin.go) and delegates to
+   the root package's `RunCLI`; the full CLI (verify, catalog, LSP, MCP)
+   then treats your plugins like built-ins. Runnable reference:
+   [examples/custom-build](../examples/custom-build). This is also the only
+   route for third-party **transforms** today (see the note below).
+2. **Out-of-process (any language)** — the rest of this document: a
+   subprocess speaking gRPC, launched per the node's `grpc.command`;
+   process isolation, no host recompilation, no Go.
+
+Both share the same semantics — a JSON-Schema-validated plugin block, and
+name/version pinning — and one pipeline can mix them freely.
+
+---
+
 Eventboat sources and sinks can live outside the binary as **out-of-process
 plugins** speaking gRPC ([redesign-v3.md](../redesign-v3.md) §6.5). A plugin
 is a program in any language that can serve gRPC; the contract is fully
@@ -11,8 +28,9 @@ Eventboat internals.
 
 > **Transforms**: since spec v1.19, transforms are registered plugins fully
 > parallel to sources and sinks — but only **compiled-in** for now: register
-> through `registry.RegisterTransform` / `RegisterTransformT` in your own
-> Eventboat build (see [internal/registry](../internal/registry/registry.go)
+> through `pkg/plugin.RegisterTransform` in a custom build (route 1 above;
+> it fronts `registry.RegisterTransform` / `RegisterTransformT`, see
+> [internal/registry](../internal/registry/registry.go)
 > and the three builtins under
 > [internal/registry/builtin](../internal/registry/builtin/) —
 > `transform_script.go`, `transform_split.go`, `wasm_transform.go`). A

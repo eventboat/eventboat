@@ -533,6 +533,14 @@ From [redesign-v3-review-m3.md](redesign-v3-review-m3.md) (all verified
 against live dependencies, several empirically) plus implementation-time
 discoveries:
 
+- **Compiled-in plugins (custom builds)**: `pkg/plugin` is the plugin ABI —
+  a Go package registers a source/transform/sink/codec from `init()` and a
+  four-line `main` delegates to the root package's `RunCLI`, yielding a
+  private `eventboat` binary where the plugin is a first-class citizen
+  (verify schema, `plugin catalog`, LSP, MCP). Runnable reference:
+  [examples/custom-build](examples/custom-build), acceptance-tested from
+  outside the module (`TestCustomBuildAcceptance`); the dependency rule is
+  plugin packages import `pkg/plugin` only, never the root package.
 - **gRPC plugins (§6.5)**: protocol `eventboat.plugin.v1`
   ([proto/eventboat/plugin/v1/plugin.proto](proto/eventboat/plugin/v1/plugin.proto)).
   A plugin is any program that listens on 127.0.0.1, prints one JSON
@@ -754,9 +762,12 @@ NoMatch counter). Out-of-process gRPC transforms remain future work.
 ## Repository layout
 
 ```
-cmd/eventboat/        CLI: verify / test / run / trigger / jobs / explain / replay / repl / lsp / plugin / mcp
+eventboat.go           RunCLI — the library entry point for custom builds (link pkg/plugin plugins, run the full CLI)
+cmd/eventboat/        the shipped binary: a thin main over internal/cli
+internal/cli/          the CLI verb table: verify / test / run / trigger / jobs / explain / replay / repl / lsp / plugin / mcp
 proto/                 eventboat.plugin.v1 — the out-of-process plugin protocol (.proto source)
 pkg/pluginproto/       generated protocol stubs (importable by third-party plugins)
+pkg/plugin/            the compile-time plugin ABI: typed Register* for custom builds (docs/plugins.md route 1)
 docs/                  plugins.md (gRPC SDK + crash policy), wasm.md (guest ABI and tier guide), codecs.md (codec guide), k8s.md (deployment), naming-checklist.md (§8.4 record)
 internal/config/      typed config, strict loader, env+constants+parameters substitution, codecs: declarations
 internal/ir/          static IR: DAG, compiled CEL/Starlark/CESQL, topology checks, job semantics, lint, codec resolution
@@ -779,7 +790,7 @@ internal/testkit/     injection/capture/fault-injection primitives + fakepull te
 internal/testrun/     §3.2 contract-test runner
 internal/inttests/    env-gated integration suites: kafka/ (real broker via testcontainers), soak/ (long-run stability)
 scripts/              bench-gate.sh — the CI loose performance threshold gate
-examples/             linear, branching (CEL), fan-in, job-sync (sql), codecs (csv+avro), plugins/ (gRPC), editors/vscode, k8s
+examples/             linear, branching (CEL), fan-in, job-sync (sql), codecs (csv+avro), custom-build (compile-time plugin SDK), plugins/ (gRPC), editors/vscode, k8s
 ```
 
 ## Development

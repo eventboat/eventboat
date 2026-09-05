@@ -1,4 +1,4 @@
-package main
+package cli
 
 import (
 	"bytes"
@@ -41,7 +41,7 @@ func TestHelpSnapshots(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			var stdout, stderr bytes.Buffer
 			env := &commands.Environment{Stdout: &stdout, Stderr: &stderr}
-			code := newApp().Run(context.Background(), env, tc.args)
+			code := NewApp().Run(context.Background(), env, tc.args)
 			if code != commands.ExitOK {
 				t.Fatalf("help exit = %d, stderr:\n%s", code, stderr.String())
 			}

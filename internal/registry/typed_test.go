@@ -381,7 +381,7 @@ func TestDecodeTypedRejectsUnknownAndMistyped(t *testing.T) {
 
 // --- end-to-end registration ---
 
-type demoSource struct{ group string }
+type demoSource struct{}
 
 func (d *demoSource) Init([]byte) error                             { return nil }
 func (d *demoSource) Run(context.Context, func(Message))            {}

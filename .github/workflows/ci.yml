@@ -33,7 +33,8 @@ jobs:
           GOOS=wasip1 GOARCH=wasm go build -buildmode=c-shared -o ../aggregate.wasm .
 
       # Includes the seven TestInvariant_* reliability tests, the examples
-      # verify/test acceptance gate (cmd/eventboat/examples_test.go), the
+      # verify/test acceptance gate (internal/cli/examples_test.go), the
+      # custom-build acceptance (root acceptance_test.go), the
       # third-party gRPC plugin acceptance (internal/rpcplugin), the CESQL
       # TCK (internal/lang/cesqlhost) and the WASM tier tests. The
       # env-gated integration packages (kafka, soak) skip without their env.

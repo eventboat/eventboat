@@ -103,7 +103,7 @@ surface); `run --config-dir` and `mcp --http` serve both readers.
 `internal/admin` serves the whole surface on one mux — Admin REST + SSE +
 UI, `/metrics`, `/mcp` — behind one security middleware. Auth: an optional
 bearer token resolved as `--admin-token` flag > `EVENTBOAT_ADMIN_TOKEN` env
-> `admin.token` in the Runtime config (`cmd/eventboat/mcp.go`,
+> `admin.token` in the Runtime config (`internal/cli/mcp.go`,
 `internal/runtimecfg`). With a token set, every request needs
 `Authorization: Bearer <token>` (the `?token=` query form exists only for
 the UI's EventSource and first navigation — it then appears in browser

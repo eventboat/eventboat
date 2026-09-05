@@ -1,4 +1,4 @@
-package main
+package cli
 
 import (
 	"context"
@@ -18,11 +18,11 @@ import (
 
 const jsonFlagHelp = "machine-readable output for agents and CI (the global --json, also accepted here)"
 
-// newApp assembles the dispatch table. --json is a global root bool (parsed
+// NewApp assembles the dispatch table. --json is a global root bool (parsed
 // wherever it appears, delivered via Environment.RootBools); renderSilent
 // keeps the cmdX executors the single source of error lines — the framework
 // adds only the exit code and the usage hint.
-func newApp() *commands.App {
+func NewApp() *commands.App {
 	app := commands.New()
 	app.RootBoolFlags = []string{"json"}
 	app.RenderError = renderSilent

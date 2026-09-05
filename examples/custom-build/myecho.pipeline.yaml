@@ -1,0 +1,16 @@
+apiVersion: eventboat/v3
+kind: Pipeline
+metadata: { name: custom-build-demo }
+
+sources:
+  ingest:
+    decoder: json
+    file:
+      path: input/orders.jsonl
+
+sinks:
+  echoed:
+    from: [ingest]
+    encoder: json
+    myecho:
+      path: output/echoed.out.jsonl

@@ -282,7 +282,10 @@ cases:
 ## 仓库布局
 
 ```
-cmd/eventboat/        CLI：verify / test / run / trigger / jobs / explain / replay / repl / lsp / plugin / mcp
+eventboat.go           RunCLI —— 库入口:自定义构建(链接 pkg/plugin 插件,运行完整 CLI)
+cmd/eventboat/        发布二进制:internal/cli 之上的薄 main
+internal/cli/          CLI 动词表:verify / test / run / trigger / jobs / explain / replay / repl / lsp / plugin / mcp
+pkg/plugin/            编译期插件 ABI:自定义构建的类型化 Register*(docs/plugins.md 路线一)
 internal/config/      类型化配置、严格加载、环境变量+常量替换、codecs: 声明
 internal/ir/          静态 IR：DAG、CEL/Starlark/CESQL 编译产物、拓扑校验、lint、codec 解析
 internal/lang/        celhost（谓词）、cesqlhost（CESQL 方言 + 官方 TCK）、starhost（Starlark 沙箱宿主）

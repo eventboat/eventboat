@@ -84,7 +84,7 @@ Rules of thumb distilled from the log:
 | You touch... | You must also... |
 |---|---|
 | a plugin config struct (new field) | add `schema` tags; regenerate the goldens (`go test ./internal/registry/builtin -update-schemas`); check whether a runtimecfg/registry test pins the unknown-key behavior |
-| a CLI flag or usage string | regenerate help goldens (`go test ./cmd/eventboat -update`) |
+| a CLI flag or usage string | regenerate help goldens (`go test ./internal/cli -update`) |
 | a metric | add the instrument in `internal/obs/obs.go`; record it where the event happens; this developer guide's metrics table |
 | a diagnostic code | add it to the diagnostics table in [Configuration & diagnostics](04-config-pipeline.md); codes are API — do not rename, retire with a mapping in the CHANGELOG |
 | the engine's delivery/commit paths | keep the seven invariants green and run `-race`; extend the relevant `TestInvariant_*` scenario if you changed a guarantee |
@@ -118,7 +118,7 @@ transform) — every step has a test that fails until you do it:
 - Full suite green (`go test ./...`), with `-race` on the engine and store
   packages (CI does this; run it locally first).
 - The examples gate stays green: every pipeline under `examples/` must
-  verify and pass its contract suites (`cmd/eventboat/examples_test.go`
+  verify and pass its contract suites (`internal/cli/examples_test.go`
   runs it in CI).
 - Golden diffs (help screens, plugin schemas) present and reviewed line by
   line — a schema golden diff that "just regenerates" without discussion is

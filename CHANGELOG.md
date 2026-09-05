@@ -8,6 +8,18 @@ All notable changes to Eventboat. The format follows
 
 ### Added
 
+- **Compile-time plugin extension (Benthos-style custom builds)**: the root
+  package gains `RunCLI` — a custom `main` blank-imports plugin packages
+  and runs the full CLI; `pkg/plugin` is the plugin ABI (aliases of the
+  engine's plugin interfaces) plus typed `RegisterSource` /
+  `RegisterTransform` / `RegisterSink` / `RegisterCodec` into the
+  process-wide registry, so a registered plugin is a first-class citizen of
+  the verify gate, `plugin catalog`, LSP and MCP surface. The CLI verb
+  table moved from `cmd/eventboat` to `internal/cli`, shared by both entry
+  points (`cmd/eventboat` is now a thin main; `cli.Run` returns the exit
+  code). Runnable reference:
+  [examples/custom-build](examples/custom-build), built and driven from
+  outside the module by the root package's `TestCustomBuildAcceptance`.
 - **Developer documentation** ([docs/developer/](docs/developer/)): nine
   guides (architecture through contributing) with YAML frontmatter
   (`title:` + `order:`) that drives ordering on the documentation site.
