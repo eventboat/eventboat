@@ -4,7 +4,15 @@ All notable changes to Eventboat. The format follows
 [Keep a Changelog](https://keepachangelog.com/); versions follow semver
 (pre-1.0: the API surface may still shift between minor versions).
 
-## Unreleased
+## v0.3.0 (2026-09-05)
+
+The post-rc release line: transforms join the registry as first-class
+plugins (spec v1.19), plugins extend at compile time (the root package's
+`RunCLI` + `pkg/plugin` custom builds), the out-of-process stubs move to
+`pkg/pluginproto`, and the developer guides ship on the documentation site —
+with the security and performance audit fixes folded in. Two external-ABI
+breaks for plugin authors: the gRPC stubs' import path, and the
+Settled → Commit rename (rebuild external plugins against this tag).
 
 ### Added
 
