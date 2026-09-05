@@ -114,9 +114,20 @@ There is deliberately **no moving `0.x` tag** while pre-1.0: a floating
 the soak suite under mixed load with injected faults, duration controlled by
 the workflow input (default 25m).
 
-The docs site is published by a GitHub Pages workflow (being added in
-parallel): it builds and deploys the site from `docs/` changes — content
-pages and the generator — so docs edits go live without a release.
+The docs site is published by a GitHub Pages workflow (`.github/workflows/pages.yml`):
+it builds and deploys the site from `docs/` changes — content pages and the
+generator — so docs edits go live without a release. The rendered result
+lives at `eventboat.dev/eventboat/` (the project-pages subpath under the
+organization domain).
+
+The public docs site (`eventboat.dev`, the `eventboat/eventboat.github.io`
+Hugo repo) consumes this repo's developer guides at ITS build time: its
+Pages workflow checks out `eventboat/eventboat` and runs
+`tools/sitegen -hugo-out` to render `docs/developer/*.md` into Hugo content
+under `content/docs/developer/`, then builds Hugo as usual — plus a daily
+scheduled rebuild to pick up upstream doc changes. Nothing is copied into
+that repo; this repo stays the single source of truth, so a guide edit here
+is live there after the next org-site build (push-triggered or daily).
 
 ## The editor story
 

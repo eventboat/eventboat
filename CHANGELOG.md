@@ -17,6 +17,11 @@ All notable changes to Eventboat. The format follows
   the landing page into a flat, relative-URL tree, deployed to GitHub Pages
   by [.github/workflows/pages.yml](.github/workflows/pages.yml); live at
   <https://eventboat.github.io/eventboat/>.
+- **Developer guides on eventboat.dev/docs**: `sitegen -hugo-out` renders
+  `docs/developer/*.md` into Hugo content (frontmatter conversion, guide
+  cross-links rewritten to section URLs, duplicated title heading dropped);
+  the organization site's Pages workflow runs it at build time against this
+  repo, so the guides publish there with no copied content to drift.
 
 ### Changed
 

@@ -72,8 +72,20 @@ func main() {
 	log.SetFlags(0)
 	src := flag.String("src", ".", "repository root to render (must contain docs/ and site/content/)")
 	out := flag.String("out", "bin/site", "output directory, relative to the current directory")
+	hugoOut := flag.String("hugo-out", "", "emit Hugo content (developer guides) into <dir>/developer/ instead of the HTML site")
 	ver := flag.String("version", version, "version string shown in the site header")
 	flag.Parse()
+
+	if *hugoOut != "" {
+		site, err := loadSite(*src)
+		if err != nil {
+			log.Fatalf("sitegen: %v", err)
+		}
+		if err := emitHugo(*hugoOut, site); err != nil {
+			log.Fatalf("sitegen: %v", err)
+		}
+		return
+	}
 
 	if err := run(*src, *out, *ver); err != nil {
 		log.Fatalf("sitegen: %v", err)
