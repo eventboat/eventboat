@@ -30,7 +30,9 @@ import "github.com/eventboat/eventboat/internal/registry"
 // hands *registry.Message to sources and sinks, and *Message to transform
 // workers; changing those shapes is a breaking release, not a refactor.
 type (
-	// Message is the unit of data flowing through a pipeline.
+	// Message is the unit of data flowing through a pipeline. Fan-out
+	// branches share the underlying Decoded/Meta maps — never mutate them
+	// in place; assign a fresh value instead (see registry.Message).
 	Message = registry.Message
 	// Source is implemented by continuous source plugins.
 	Source = registry.Source

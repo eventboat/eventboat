@@ -107,7 +107,7 @@ func TestSoakMixedLoadWithFaults(t *testing.T) {
 	// spool-append faults (the retry path must absorb them; the injection is
 	// refused and the driver retries — never lost).
 	var spoolFaults, dlFaults atomic.Int64
-	wrapped := &testkit.StoreWrapper{Inner: store.NewMemory("soak-fan")}
+	wrapped := &testkit.StoreWrapper{Inner: store.NewMemory()}
 	wrapped.AppendHook = func(m registry.Message) error {
 		if rand.IntN(200) == 0 {
 			spoolFaults.Add(1)

@@ -88,10 +88,16 @@ func (s Security) allowedHosts() map[string]bool {
 // Middleware guards every request on the listener: Host allowlist first
 // (403), then the bearer token (401). Browser navigations that fail the
 // token check get the sign-in page as the 401 body (data stays denied;
-// humans get a way in — see loginHTML).
+// humans get a way in — see loginHTML). Every response carries
+// X-Content-Type-Options: nosniff — bodies include attacker-influenced
+// strings (pipeline diagnostics), and a sniffed MIME must never be
+// interpreted as executable content.
 func (s Security) Middleware(next http.Handler) http.Handler {
 	hosts := s.allowedHosts()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Set before anything is written so it covers the 401/403 error
+		// bodies, the HTML shell, SSE and /metrics alike.
+		w.Header().Set("X-Content-Type-Options", "nosniff")
 		if hosts != nil && !hosts[r.Host] {
 			http.Error(w, "host not allowed", http.StatusForbidden)
 			return
@@ -111,14 +117,18 @@ func (s Security) Middleware(next http.Handler) http.Handler {
 }
 
 // authorized accepts the token via `Authorization: Bearer <token>` (what
-// curl/agents should use) or the `?token=` query parameter. The query form
-// exists for the UI only: EventSource cannot set headers and browsers cannot
-// add headers to navigations — the price is that the token then appears in
-// URLs (browser history, proxies' access logs; eventboat itself does not log
-// requests), which the header form avoids. Both compare in constant time.
+// curl/agents and the UI's fetches use). The `?token=` query parameter is
+// accepted on the SSE endpoint only (/admin/sse): EventSource cannot set
+// headers. Narrowing it to that one path keeps a token leaked in a URL
+// (browser history, proxies' access logs; eventboat itself does not log
+// requests) from unlocking the whole write surface — deploy executes
+// pipeline plugin commands on the host. Both compare in constant time.
 func (s Security) authorized(r *http.Request) bool {
 	if subtle.ConstantTimeCompare(bearerToken(r.Header.Get("Authorization")), []byte(s.Token)) == 1 {
 		return true
+	}
+	if r.URL.Path != "/admin/sse" {
+		return false
 	}
 	return subtle.ConstantTimeCompare([]byte(r.URL.Query().Get("token")), []byte(s.Token)) == 1
 }
@@ -133,8 +143,9 @@ func bearerToken(auth string) []byte {
 
 // loginHTML is the token prompt served as the 401 body for browser
 // navigations. It holds no data; the entered token is verified against
-// /admin/status.json, kept in sessionStorage and passed on to the console
-// once (?token= — see authorized for the leakage caveat).
+// /admin/status.json (fetch + Authorization header), kept in sessionStorage
+// and handed to the console by a plain redirect — ?token= is deliberately
+// not used outside the SSE endpoint (see authorized for the leakage caveat).
 const loginHTML = `<!doctype html>
 <html lang="en">
 <head>
@@ -164,7 +175,7 @@ async function go() {
   const res = await fetch('/admin/status.json', {headers: {Authorization: 'Bearer ' + t}});
   if (!res.ok) { document.getElementById('err').textContent = 'invalid token'; return; }
   sessionStorage.setItem('eb_admin_token', t);
-  location.href = '/admin/?token=' + encodeURIComponent(t);
+  location.href = '/admin/';
 }
 document.getElementById('tok').addEventListener('keydown', e => { if (e.key === 'Enter') go(); });
 </script>

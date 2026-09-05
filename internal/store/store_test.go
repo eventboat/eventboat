@@ -97,7 +97,7 @@ func exerciseStore(t *testing.T, st Store) {
 }
 
 func TestMemoryStore(t *testing.T) {
-	exerciseStore(t, NewMemory("p"))
+	exerciseStore(t, NewMemory())
 }
 
 func TestSQLiteStore(t *testing.T) {
@@ -292,7 +292,7 @@ func exerciseJobStore(t *testing.T, st Store) {
 }
 
 func TestMemoryJobStore(t *testing.T) {
-	exerciseJobStore(t, NewMemory("p"))
+	exerciseJobStore(t, NewMemory())
 }
 
 func TestSQLiteJobStore(t *testing.T) {
@@ -367,7 +367,7 @@ func exerciseSpoolRetention(t *testing.T, st Store) {
 }
 
 func TestMemorySpoolRetention(t *testing.T) {
-	exerciseSpoolRetention(t, NewMemory("p"))
+	exerciseSpoolRetention(t, NewMemory())
 }
 
 func TestSQLiteSpoolRetention(t *testing.T) {

@@ -44,7 +44,7 @@ func TestCommitFlushOutOfLockUnderConcurrency(t *testing.T) {
 	h := newHarness(t)
 	pip := h.build(persistYAML)
 
-	wrapped := &testkit.StoreWrapper{Inner: store.NewMemory("perst")}
+	wrapped := &testkit.StoreWrapper{Inner: store.NewMemory()}
 	var mu sync.Mutex
 	var checkpointWrites []int64
 	wrapped.SetCheckpointHook = func(seq int64) error {
@@ -103,7 +103,7 @@ func TestCommitFlushFailureDoesNotBlockWaitCommit(t *testing.T) {
 	h := newHarness(t)
 	pip := h.build(persistYAML)
 
-	wrapped := &testkit.StoreWrapper{Inner: store.NewMemory("perst")}
+	wrapped := &testkit.StoreWrapper{Inner: store.NewMemory()}
 	wrapped.SetCheckpointHook = func(seq int64) error { return errString("disk gone") }
 	eng, stop := runEngine(t, pip, wrapped, h.reg, fastOptions())
 	defer stop()

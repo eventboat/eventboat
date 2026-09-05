@@ -190,7 +190,7 @@ func runCase(baseDir, pipelinePath string, pip *ir.Pipeline, c specCase, reg *re
 	// read whatever data sits behind the plugin config).
 	opts.DisableSources = pip.Config.IsJob()
 
-	st := store.NewMemory(pip.Config.Name)
+	st := store.NewMemory()
 	eng, err := engine.New(pip, st, reg, opts.WithLimits(pip.Config.Limits))
 	if err != nil {
 		fail("engine build: %v", err)

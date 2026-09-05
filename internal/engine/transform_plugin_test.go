@@ -38,7 +38,7 @@ transforms:
 sinks:
   out: { from: [t], mem: { id: out } }
 `)
-	st := store.NewMemory("sieve")
+	st := store.NewMemory()
 	eng, _ := runEngine(t, pip, st, h.reg, fastOptions())
 
 	h.source("in").Emit([]byte(`{"keep": false}`), "")
@@ -85,7 +85,7 @@ transforms:
 sinks:
   out: { from: [t], mem: { id: out } }
 `)
-	st := store.NewMemory("triple")
+	st := store.NewMemory()
 	eng, _ := runEngine(t, pip, st, h.reg, fastOptions())
 
 	h.source("in").Emit([]byte(`{"x":1}`), "")
@@ -128,7 +128,7 @@ transforms:
 sinks:
   out: { from: [t], mem: { id: out } }
 `)
-	st := store.NewMemory("flaky")
+	st := store.NewMemory()
 	eng, _ := runEngine(t, pip, st, h.reg, fastOptions())
 
 	h.source("in").Emit([]byte(`{"a":1}`), "")
@@ -187,7 +187,7 @@ transforms:
 sinks:
   out: { from: [t], mem: { id: out } }
 `)
-	st := store.NewMemory("cloner")
+	st := store.NewMemory()
 	eng, err := New(pip, st, h.reg, fastOptions())
 	if err != nil {
 		t.Fatal(err)

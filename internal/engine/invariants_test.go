@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"sync/atomic"
@@ -38,7 +39,7 @@ func TestInvariant_SpoolBeforeVisible(t *testing.T) {
 	h := newHarness(t)
 	pip := h.build(invYAML)
 
-	wrapped := &testkit.StoreWrapper{Inner: store.NewMemory("inv")}
+	wrapped := &testkit.StoreWrapper{Inner: store.NewMemory()}
 	failAppend := true
 	wrapped.AppendHook = func(m registry.Message) error {
 		if failAppend {
@@ -73,7 +74,7 @@ func TestInvariant_SpoolBeforeVisible(t *testing.T) {
 func TestInvariant_CheckpointAdvancesOnlyAfterCommit(t *testing.T) {
 	h := newHarness(t)
 	pip := h.build(invYAML)
-	st := store.NewMemory("inv")
+	st := store.NewMemory()
 	gate := make(chan struct{})
 	h.sink("out").block = func(attempt int) (<-chan struct{}, bool) {
 		if attempt == 2 {
@@ -173,7 +174,7 @@ func TestInvariant_DeadLetterWriteFailureBlocksCommit(t *testing.T) {
 	h := newHarness(t)
 	pip := h.build(invYAML)
 
-	wrapped := &testkit.StoreWrapper{Inner: store.NewMemory("inv")}
+	wrapped := &testkit.StoreWrapper{Inner: store.NewMemory()}
 	var dlBroken atomic.Bool
 	dlBroken.Store(true)
 	wrapped.DeadLetterHook = func(dl store.DeadLetter) error {
@@ -237,7 +238,7 @@ sinks:
     from: { in: { required: false } }
     mem: { id: telemetry }
 `)
-	st := store.NewMemory("inv5")
+	st := store.NewMemory()
 	eng, _ := runEngine(t, pip, st, h.reg, fastOptions())
 	h.sink("telemetry").fail = func(attempt int) error { return errString("telemetry down") }
 
@@ -269,7 +270,7 @@ func TestInvariant_RedeliveryKeepsMessageIdStable(t *testing.T) {
 	// Duplicate delivery of the same raw input: two distinct messages, but
 	// each carries a stable idempotency key (meta.message_id) and identical
 	// content — what an idempotent sink needs to deduplicate safely.
-	st := store.NewMemory("inv")
+	st := store.NewMemory()
 	eng, stopA := runEngine(t, pip, st, h.reg, fastOptions())
 	h.source("in").Emit([]byte(`{"i":1}`), "")
 	h.source("in").Emit([]byte(`{"i":1}`), "")
@@ -419,6 +420,66 @@ sinks:
 		state, len(delivered7), writes7, out7, through7, arrived7)
 	if !strings.Contains(string(state), `"c3"`) {
 		t.Fatalf("watermark state after full commit = %s, want c3", state)
+	}
+}
+
+// Invariant 8: fan-out sibling branches share a message's underlying
+// Decoded/Meta Go maps (deliver shallow-copies the struct per edge), so no
+// transform may mutate them in place. Before review-2026-09, the script
+// binding's lazy remove(payload, "k0") deleted the key from the shared map,
+// racing the sibling sink branch's json encode — a fatal (unrecoverable)
+// concurrent map iteration and map write: the message stayed uncommitted and
+// crashed the process again on replay. The COW binding must isolate the
+// branches: the sink still sees "k0", and nothing crashes.
+func TestInvariant_BranchIsolation(t *testing.T) {
+	h := newHarness(t)
+	pip := h.build(`
+apiVersion: eventboat/v3
+kind: Pipeline
+metadata: { name: inv8 }
+edge_defaults:
+  delivery: { retries: 0, backoff: constant }
+sources:
+  in:
+    decoder: json
+    manual: { id: in }
+transforms:
+  scrub:
+    from: [in]
+    script: |
+      remove(payload, "k0")
+sinks:
+  out:
+    from: [in]
+    encoder: json
+    mem: { id: out }
+`)
+	st := store.NewMemory()
+	eng, _ := runEngine(t, pip, st, h.reg, fastOptions())
+
+	const msgs = 20
+	const keys = 3000 // wide maps widen the read/write window on the shared map
+	for i := 0; i < msgs; i++ {
+		payload := make(map[string]any, keys)
+		for k := 0; k < keys; k++ {
+			payload[fmt.Sprintf("k%d", k)] = k
+		}
+		raw, err := json.Marshal(payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+		h.source("in").Emit(raw, "")
+	}
+	waitCommit(t, eng)
+
+	delivered, _, _ := h.sink("out").snapshot()
+	if len(delivered) != msgs {
+		t.Fatalf("sink delivered %d messages, want %d", len(delivered), msgs)
+	}
+	for i, m := range delivered {
+		if !strings.Contains(string(m.Out), `"k0"`) {
+			t.Fatalf("delivery %d: sibling branch polluted — k0 removed from the shared map: %.200s", i, m.Out)
+		}
 	}
 }
 

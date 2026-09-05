@@ -18,23 +18,21 @@ import (
 // DeadLetter is one dead-lettered message with its full original content and
 // the error context (including Starlark backtraces / CEL error text).
 type DeadLetter struct {
-	ID         int64          `json:"id"`
-	Pipeline   string         `json:"pipeline"`
-	MessageID  string         `json:"message_id"`
-	RunID      string         `json:"job_run_id"` // job run attribution ("" for continuous pipelines)
-	Node       string         `json:"node"`
-	Edge       string         `json:"edge"` // "from -> to"
-	Reason     string         `json:"reason"`
-	Backtrace  string         `json:"backtrace"`
-	OriginNode string         `json:"origin_node"`
-	Raw        []byte         `json:"raw"`
-	Codec      string         `json:"codec"`
-	Meta       map[string]any `json:"meta"`
-	Cursor     string         `json:"cursor"`
-	SrcName    string         `json:"src_name"`
-	SrcSeq     int64          `json:"src_seq"`
-	RetryCount int            `json:"retry_count"`
-	CreatedAt  time.Time      `json:"created_at"`
+	ID        int64          `json:"id"`
+	Pipeline  string         `json:"pipeline"`
+	MessageID string         `json:"message_id"`
+	RunID     string         `json:"job_run_id"` // job run attribution ("" for continuous pipelines)
+	Node      string         `json:"node"`
+	Edge      string         `json:"edge"` // "from -> to"
+	Reason    string         `json:"reason"`
+	Backtrace string         `json:"backtrace"`
+	Raw       []byte         `json:"raw"`
+	Codec     string         `json:"codec"`
+	Meta      map[string]any `json:"meta"`
+	Cursor    string         `json:"cursor"`
+	SrcName   string         `json:"src_name"`
+	SrcSeq    int64          `json:"src_seq"`
+	CreatedAt time.Time      `json:"created_at"`
 }
 
 // Job statuses (redesign-v3.md §5.8 lifecycle).
@@ -168,7 +166,6 @@ type memRow struct {
 
 type memStore struct {
 	mu          sync.Mutex
-	pipeline    string
 	spool       []memRow
 	nextSeq     int64 // monotonic across trims: seqs never restart or collide
 	checkpoints map[string]int64
@@ -184,10 +181,11 @@ type memSrcState struct {
 	srcSeq int64
 }
 
-// NewMemory returns an in-memory store bound to one pipeline name.
-func NewMemory(pipeline string) Store {
+// NewMemory returns an in-memory store for tests and --ephemeral runs. It is
+// not bound to a pipeline: like the SQLite implementation, every method keys
+// off the pipeline argument passed to it.
+func NewMemory() Store {
 	return &memStore{
-		pipeline:    pipeline,
 		checkpoints: map[string]int64{},
 		srcStates:   map[string]memSrcState{},
 	}

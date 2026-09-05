@@ -50,7 +50,7 @@ func TestMessageSpanSampling(t *testing.T) {
 	opts := fastOptions()
 	opts.Obs = o
 	opts.SpanSampleRate = 1
-	eng, _ := runEngine(t, pip, store.NewMemory("inv"), h.reg, opts)
+	eng, _ := runEngine(t, pip, store.NewMemory(), h.reg, opts)
 
 	h.source("in").Emit([]byte(`{"i":1}`), "")
 	waitCommit(t, eng)
@@ -83,7 +83,7 @@ func TestMessageSpanDeadLetterTerminal(t *testing.T) {
 	opts := fastOptions()
 	opts.Obs = o
 	opts.SpanSampleRate = 1
-	st := store.NewMemory("inv")
+	st := store.NewMemory()
 	eng, _ := runEngine(t, pip, st, h.reg, opts)
 
 	h.sink("out").fail = func(attempt int) error { return errString("sink down") }
@@ -112,7 +112,7 @@ func TestMessageSpanSamplingDefaultOff(t *testing.T) {
 	pip := h.build(invYAML)
 	opts := fastOptions()
 	opts.Obs = o
-	eng, _ := runEngine(t, pip, store.NewMemory("inv"), h.reg, opts)
+	eng, _ := runEngine(t, pip, store.NewMemory(), h.reg, opts)
 
 	h.source("in").Emit([]byte(`{"i":1}`), "")
 	waitCommit(t, eng)

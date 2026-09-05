@@ -26,7 +26,7 @@ func NewApp() *commands.App {
 	app := commands.New()
 	app.RootBoolFlags = []string{"json"}
 	app.RenderError = renderSilent
-	app.HelpHeader = "eventboat — agent-native event router (v3 POC)"
+	app.HelpHeader = "eventboat — agent-native event router"
 	app.VerbTitle = "commands:"
 	app.HelpFooter = `Global flags:
   --json    machine-readable output for agents and CI (any position:

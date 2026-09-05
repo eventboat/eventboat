@@ -157,8 +157,11 @@ func (e *Engine) runSink(node *ir.Node) {
 }
 
 // writeBatch encodes, writes with per-edge delivery retries, and commits or
-// dead letters. Mixed-edge batches take the strictest retry policy and
-// dead-letter attribution stays per instance (its own via-edge).
+// dead letters. Mixed-edge batches take the strictest rule per dimension
+// (review-2026-09): the max retry count, and the max explicit TimeoutMs —
+// DefaultTimeout applies only when no edge in the batch sets one, so a short
+// edge timeout can never truncate a longer write sharing the batch. Dead-letter
+// attribution stays per instance (its own via-edge).
 func (e *Engine) writeBatch(node *ir.Node, sink registry.Sink, insts []*instance) {
 	encoderName := node.Config.Encoder
 	if encoderName == "" {
@@ -178,7 +181,7 @@ func (e *Engine) writeBatch(node *ir.Node, sink registry.Sink, insts []*instance
 	}
 	var batch []ready
 	retries, backoff := 0, "exponential"
-	timeout := e.Opts.DefaultTimeout
+	timeoutMs := 0
 	for _, inst := range insts {
 		m := inst.msg
 		if m.Decoded != nil {
@@ -198,14 +201,18 @@ func (e *Engine) writeBatch(node *ir.Node, sink registry.Sink, insts []*instance
 			if inst.via.Retries > retries {
 				retries = inst.via.Retries
 			}
-			if inst.via.TimeoutMs > 0 {
-				timeout = time.Duration(inst.via.TimeoutMs) * time.Millisecond
+			if inst.via.TimeoutMs > timeoutMs {
+				timeoutMs = inst.via.TimeoutMs
 			}
 		}
 		batch = append(batch, ready{inst: inst, msg: m})
 	}
 	if len(batch) == 0 {
 		return
+	}
+	timeout := e.Opts.DefaultTimeout
+	if timeoutMs > 0 {
+		timeout = time.Duration(timeoutMs) * time.Millisecond
 	}
 
 	msgs := make([]registry.Message, len(batch))

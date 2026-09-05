@@ -73,7 +73,12 @@ var (
 )
 
 func (m msgValue) Type() string { return m.s.kind }
-func (m msgValue) Freeze()      {} // engine-owned per message; never shared
+
+// Freeze is a no-op: the binding is per-message, but the underlying
+// Decoded/Meta Go maps may be shared across sibling fan-out branches (the
+// engine shallow-copies registry.Message per edge) — which is exactly why
+// every mutation path materializes a private copy first.
+func (m msgValue) Freeze() {}
 
 func (m msgValue) Hash() (uint32, error) {
 	return 0, fmt.Errorf("unhashable type: %s", m.s.kind)
@@ -360,29 +365,33 @@ func (m msgValue) materialize() error {
 }
 
 // deleteKey removes one key (remove() glue, spec §4.8 del() migration
-// target). Works on both the lazy Go root and the materialized tree; marks
-// the state dirty so the engine writes the deletion back. A missing key is
-// a no-op.
+// target). Like SetKey/SetField it materializes first — even on the lazy
+// path: fan-out sibling branches share the underlying Decoded/Meta Go map,
+// so deleting in place from the lazy root would be a cross-branch data race
+// (fatal concurrent map iteration and map write; review-2026-09). The delete
+// lands on the private COW tree, whose marker dirties the state so the
+// engine writes the deletion back. A missing key is a no-op.
 func (m msgValue) deleteKey(k starlark.Value) error {
 	key, ok := k.(starlark.String)
 	if !ok {
 		return fmt.Errorf("%s: remove key must be a string, got %s", m.s.kind, k.Type())
 	}
-	if m.s.star != nil {
-		if d, ok := m.s.star.(deleter); ok {
-			_, _, err := d.Delete(k)
-			return err
+	if m.s.star == nil {
+		if root, ok := m.lazyRoot(); !ok {
+			return fmt.Errorf("%s: value of type %T is not a mapping", m.s.kind, m.s.goVal)
+		} else if _, found := root[key.GoString()]; !found {
+			return nil // missing key: no-op without materializing
 		}
+	}
+	if err := m.materialize(); err != nil {
+		return err
+	}
+	d, ok := m.s.star.(deleter)
+	if !ok {
 		return fmt.Errorf("%s: value of type %s does not support remove", m.s.kind, m.s.star.Type())
 	}
-	root, ok := m.lazyRoot()
-	if !ok {
-		return fmt.Errorf("%s: value of type %T is not a mapping", m.s.kind, m.s.goVal)
-	}
-	delete(root, key.GoString())
-	delete(m.s.cache, key.GoString())
-	m.s.dirty = true
-	return nil
+	_, _, err := d.Delete(k)
+	return err
 }
 
 // deleter matches *starlark.Dict (and attrDict embedding it).

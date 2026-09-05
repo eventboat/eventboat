@@ -70,7 +70,7 @@ func cmdTrigger(args []string, jsonOut bool) int {
 
 	var st store.Store
 	if *ephemeral {
-		st = store.NewMemory(lr.Pipeline.Name)
+		st = store.NewMemory()
 	} else {
 		if err := os.MkdirAll(*dataDir, 0o755); err != nil {
 			fmt.Fprintf(os.Stderr, "trigger: data dir: %v\n", err)

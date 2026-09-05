@@ -127,7 +127,7 @@ func newOpsService(reg *registry.Registry, rt runtimecfg.Config) (svc *ops.Servi
 		SpoolRetention: rt.Storage.SpoolRetention,
 		StoreFor: func(pipeline string) (store.Store, error) {
 			if rt.Storage.Ephemeral {
-				return store.NewMemory(pipeline), nil
+				return store.NewMemory(), nil
 			}
 			sdir := filepath.Join(dir, "stores")
 			if err := os.MkdirAll(sdir, 0o755); err != nil {

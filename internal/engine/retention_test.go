@@ -155,7 +155,7 @@ func TestSpoolRetentionKeepsUncommittedTail(t *testing.T) {
 func TestSpoolRetentionBindsMemoryStore(t *testing.T) {
 	h := newHarness(t)
 	pip := h.build(retentionYAML)
-	st := store.NewMemory("ret")
+	st := store.NewMemory()
 
 	opts := fastOptions()
 	opts.SpoolRetention = 5

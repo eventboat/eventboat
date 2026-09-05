@@ -1,4 +1,4 @@
-eventboat — agent-native event router (v3 POC)
+eventboat — agent-native event router
 
 commands:
   explain    deterministic walkthrough: symbolic, message-level with real CEL/Starlark, or --topology DAG render

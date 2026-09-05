@@ -7,6 +7,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/rand/v2"
 	"path/filepath"
@@ -94,7 +95,8 @@ type Options struct {
 	Logf func(format string, args ...any)
 
 	// WasmSlowCallWarnMs arms the zero-interference wasm slow-call watchdog
-	// (log once per long-running invoke; <=0 disables). Default 5000.
+	// (log once per long-running invoke). 0 = default (5000, normalized by
+	// New like every other numeric option); a negative value disables.
 	WasmSlowCallWarnMs int
 }
 
@@ -258,6 +260,11 @@ func New(p *ir.Pipeline, st store.Store, reg *registry.Registry, opts Options) (
 	if opts.SpoolRetention <= 0 {
 		opts.SpoolRetention = DefaultSpoolRetention
 	}
+	if opts.WasmSlowCallWarnMs == 0 {
+		// Negative explicitly disables; zero keeps the default watchdog so a
+		// hand-built Options{} does not silently lose it (review-2026-09).
+		opts.WasmSlowCallWarnMs = 5000
+	}
 
 	e := &Engine{
 		IR:           p,
@@ -323,14 +330,7 @@ func New(p *ir.Pipeline, st store.Store, reg *registry.Registry, opts Options) (
 			if _, err := e.codec(codecName, reg); err != nil {
 				return nil, fmt.Errorf("sink %q: %w", name, err)
 			}
-			capacity := opts.ChannelSize
-			for _, edge := range n.In {
-				if edge.BufferMax > 0 && edge.BufferMax < capacity*4 {
-					// per-edge buffer sizing acts as surge capacity (§6.2)
-					capacity = maxInt(capacity, edge.BufferMax)
-				}
-			}
-			e.chans[name] = make(chan *instance, capacity)
+			e.chans[name] = make(chan *instance, channelCapacity(opts.ChannelSize, n.In))
 		case config.SectionTransform:
 			// Transforms instantiate through the registry like sources and
 			// sinks (spec v1.19); Init hands the plugin its constants,
@@ -353,18 +353,7 @@ func New(p *ir.Pipeline, st store.Store, reg *registry.Registry, opts Options) (
 				return nil, fmt.Errorf("transform %q: %w", name, err)
 			}
 			e.transforms[name] = t
-			workers := n.Config.Workers
-			if workers < 1 {
-				workers = 1
-			}
-			capacity := opts.ChannelSize
-			for _, edge := range n.In {
-				if edge.BufferMax > 0 {
-					capacity = maxInt(capacity, edge.BufferMax)
-				}
-			}
-			e.chans[name] = make(chan *instance, capacity)
-			_ = workers // used at Run
+			e.chans[name] = make(chan *instance, channelCapacity(opts.ChannelSize, n.In))
 		}
 	}
 
@@ -381,6 +370,21 @@ func New(p *ir.Pipeline, st store.Store, reg *registry.Registry, opts Options) (
 		e.admitSem = make(chan struct{}, opts.HighWatermark)
 	}
 	return e, nil
+}
+
+// channelCapacity sizes a node's dispatch channel: the default ChannelSize
+// raised to the largest inbound edge buffer. A per-edge BufferMax acts as
+// surge capacity (§6.2), so it only participates while it stays below 4x the
+// running capacity — an outlier edge must not dominate memory sizing. Shared
+// by sink and transform channels so both follow one rule (review-2026-09).
+func channelCapacity(base int, in []ir.Edge) int {
+	capacity := base
+	for _, edge := range in {
+		if edge.BufferMax > 0 && edge.BufferMax < capacity*4 {
+			capacity = maxInt(capacity, edge.BufferMax)
+		}
+	}
+	return capacity
 }
 
 // onCommit releases the backpressure slot of one committed message, counts
@@ -500,10 +504,14 @@ func (e *Engine) codec(name string, reg *registry.Registry) (registry.Codec, err
 }
 
 // Run replays the spool beyond the checkpoint, starts sources and workers,
-// and blocks until ctx is done.
+// and blocks until ctx is done. A second call on the same Engine is a
+// programming error (it would replay the spool and duplicate workers) and
+// returns an error instead (review-2026-09).
 func (e *Engine) Run(ctx context.Context) error {
+	if !e.started.CompareAndSwap(false, true) {
+		return errors.New("engine: Run called twice")
+	}
 	e.ctx, e.cancel = context.WithCancel(ctx)
-	e.started.Store(true)
 
 	// Crash recovery: replay everything beyond the checkpoint (invariant 3).
 	cp, err := e.Store.Checkpoint(e.IR.Config.Name)
@@ -511,8 +519,19 @@ func (e *Engine) Run(ctx context.Context) error {
 		return fmt.Errorf("engine: read checkpoint: %w", err)
 	}
 	if err := e.Store.ReplayFrom(e.IR.Config.Name, cp, func(seq int64, msg registry.Message, ingestTime time.Time) error {
+		// Internal injections re-enter INTO their node (injected_at wins over
+		// source — review-2026-09): fanning OUT of a transform would skip its
+		// script and deliver raw to downstream, and a sink has no out-edges so
+		// the row would be dropped as NoMatch.
+		injected, _ := msg.Meta["injected_at"].(string)
+		if _, known := e.IR.Nodes[injected]; !known {
+			injected = ""
+		}
 		node, _ := msg.Meta["source"].(string)
 		if _, known := e.IR.Nodes[node]; !known {
+			node = ""
+		}
+		if injected == "" && node == "" {
 			// Spooled but never dispatched and not attributable: release it
 			// instead of wedging the contiguous prefix.
 			e.commit.arrived(seq, "", 0)
@@ -520,6 +539,10 @@ func (e *Engine) Run(ctx context.Context) error {
 			return nil
 		}
 		e.commit.arrived(seq, "", 0)
+		if injected != "" {
+			e.dispatchInternal(injected, seq, msg)
+			return nil
+		}
 		e.dispatchFrom(node, seq, msg)
 		return nil
 	}); err != nil {
@@ -697,8 +720,11 @@ func (e *Engine) Quiesced() bool {
 // the checkpoint's contiguous prefix forever). Ordering preserves the
 // invariants: the dead letter is written first, and only then does the
 // tracker clear the message (any leftover branches from a mid-flight fan-out
-// are force-terminated after the durable record exists).
-func (e *Engine) Abandon(reason string) int {
+// are force-terminated after the durable record exists). It returns the
+// number abandoned plus a store error — a failed page means the spool may
+// still hold outstanding rows, so callers must not treat the run as clean
+// (review-2026-09).
+func (e *Engine) Abandon(reason string) (int, error) {
 	abandoned := 0
 	_, committedThrough, _ := e.commit.snapshot()
 	after := committedThrough
@@ -714,7 +740,7 @@ func (e *Engine) Abandon(reason string) int {
 				return nil
 			})
 		if ferr != nil {
-			break
+			return abandoned, fmt.Errorf("engine: abandon: %w", ferr)
 		}
 		for _, seq := range seqs {
 			msg := msgs[seq]
@@ -727,7 +753,7 @@ func (e *Engine) Abandon(reason string) int {
 		}
 		after = last
 	}
-	return abandoned
+	return abandoned, nil
 }
 
 func firstNonEmpty(a, b string) string {
@@ -976,25 +1002,36 @@ func (e *Engine) injectAt(node string, raw []byte, meta map[string]any, keepID s
 	e.acquired[seq] = true
 	e.acquiredMu.Unlock()
 	e.commit.arrived(seq, "", 0)
-	// Decode once so the sink's encoder can re-encode (writeBatch encodes
-	// from Decoded; Raw is the spooled truth and stays untouched).
-	codec, cerr := e.codec("json", e.Reg)
-	if cerr != nil {
-		e.deadLetterMsg(seq, msg, node, "", "codec: "+cerr.Error(), "")
-		return seq, nil
-	}
-	v, derr := codec.Decode(msg.Raw)
-	if derr != nil {
-		e.deadLetterMsg(seq, msg, node, "", "decode: "+derr.Error(), "")
-		return seq, nil
-	}
-	msg.Decoded = v
-	// Injection enters INTO the node: transforms run their script (a replay
-	// after a script fix re-executes it), sinks batch and write under their
-	// delivery policy (M2 review R4: replay can target any node). The single
-	// outstanding branch registered by arrived is exactly this one delivery.
-	e.deliver(&ir.Edge{From: node, To: node}, seq, msg)
+	e.dispatchInternal(node, seq, msg)
 	return seq, nil
+}
+
+// dispatchInternal delivers a message INTO a node instead of fanning out of
+// it: it decodes with the message's codec (so sink encoders can re-encode;
+// Raw is the spooled truth and stays untouched) and hands the node its own
+// entry — transforms run their script (a replay after a script fix
+// re-executes it), sinks batch and write under their delivery policy (M2
+// review R4: replay can target any node). Live InjectAt and Run's crash
+// replay of injected rows share this path so both replay semantics match
+// (review-2026-09). The single outstanding branch registered by arrived is
+// exactly this one delivery.
+func (e *Engine) dispatchInternal(node string, seq int64, msg registry.Message) {
+	codec, err := e.codec(msg.Codec, e.Reg)
+	if err != nil {
+		e.deadLetterMsg(seq, msg, node, "", "codec: "+err.Error(), "")
+		return
+	}
+	if msg.Decoded == nil {
+		v, derr := codec.Decode(msg.Raw)
+		if derr != nil {
+			e.Metrics.DecodeErrors.Add(1)
+			e.Opts.Obs.RecordDecodeError(e.IR.Config.Name, node)
+			e.deadLetterMsg(seq, msg, node, "", "decode: "+derr.Error(), "")
+			return
+		}
+		msg.Decoded = v
+	}
+	e.deliver(&ir.Edge{From: node, To: node}, seq, msg)
 }
 
 // WaitCommit blocks until no outstanding branches remain and every commit

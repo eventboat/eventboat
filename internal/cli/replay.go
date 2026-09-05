@@ -161,7 +161,7 @@ func cmdReplay(args []string, jsonOut bool) int {
 	var dlIDs []int64
 
 	if *ephemeral {
-		st = store.NewMemory(pip.Config.Name)
+		st = store.NewMemory()
 	} else {
 		if err := os.MkdirAll(*dataDir, 0o755); err != nil {
 			fmt.Fprintf(os.Stderr, "replay: data dir: %v\n", err)

@@ -149,7 +149,7 @@ func TestTickerPluginRun(t *testing.T) {
 
 	opts := engine.DefaultOptions()
 	opts.Logf = t.Logf
-	eng, err := engine.New(pip, store.NewMemory("ticker-acceptance"), reg, opts)
+	eng, err := engine.New(pip, store.NewMemory(), reg, opts)
 	if err != nil {
 		t.Fatal(err)
 	}

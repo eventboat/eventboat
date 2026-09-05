@@ -207,7 +207,7 @@ func irHasErr(diags []config.Diagnostic) bool {
 func TestJobTriggerRunLifecycle(t *testing.T) {
 	testkit.ResetFakePull()
 	h := newJobHarness(t, "", "skip", "0s", false, "")
-	st := store.NewMemory("nightly")
+	st := store.NewMemory()
 	m := h.buildManager(st, testkit.FixedClock(time.Date(2026, 9, 3, 12, 0, 0, 0, time.UTC)))
 
 	feed := testkit.FakePull("feed")
@@ -370,7 +370,7 @@ func TestJobKill9ResumeFromWatermark(t *testing.T) {
 func TestJobOverlapSkip(t *testing.T) {
 	testkit.ResetFakePull()
 	h := newJobHarness(t, "", "skip", "0s", false, "")
-	st := store.NewMemory("nightly")
+	st := store.NewMemory()
 	m := h.buildManager(st, time.Now)
 
 	gate := make(chan struct{})
@@ -404,7 +404,7 @@ func TestJobOverlapSkip(t *testing.T) {
 func TestJobOverlapLatestCancelsAndReruns(t *testing.T) {
 	testkit.ResetFakePull()
 	h := newJobHarness(t, "", "latest", "0s", false, "")
-	st := store.NewMemory("nightly")
+	st := store.NewMemory()
 	m := h.buildManager(st, time.Now)
 
 	gate := make(chan struct{})
@@ -518,7 +518,7 @@ sinks:
 
 	testkit.FakePull("feed").StageJSON(`{"i":5}`, "c1")
 
-	st := store.NewMemory("backfill")
+	st := store.NewMemory()
 	m := h.buildManager(st, time.Now)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -558,7 +558,7 @@ func TestJobCatchupWindow(t *testing.T) {
 	// ticks are 12:26..12:30 — 12:26/12:27 fall outside the window (skipped,
 	// counted), 12:28..12:30 are inside, and only the LATEST (12:30) runs.
 	h := newJobHarness(t, "* * * * *", "skip", "2m", false, "")
-	st := store.NewMemory("nightly")
+	st := store.NewMemory()
 
 	now := time.Date(2026, 9, 3, 12, 30, 0, 0, time.UTC)
 	// Pretend a run for the 12:25 tick succeeded before the outage.
@@ -607,7 +607,7 @@ func TestJobCatchupWindow(t *testing.T) {
 func TestJobSkipIfSuccessful(t *testing.T) {
 	testkit.ResetFakePull()
 	h := newJobHarness(t, "* * * * *", "skip", "0s", true, "")
-	st := store.NewMemory("nightly")
+	st := store.NewMemory()
 	// Now is 12:29:50: the scheduler's next activation is the 12:30 tick,
 	// which already has a successful run — it must be skipped.
 	now := time.Date(2026, 9, 3, 12, 29, 50, 0, time.UTC)
@@ -649,7 +649,7 @@ func TestJobSourceFailureFailsRunAndFiresHook(t *testing.T) {
 
 	h := newJobHarness(t, "", "skip", "0s", false,
 		fmt.Sprintf("{ failure: { http: { url: %q } } }", srv.URL))
-	st := store.NewMemory("nightly")
+	st := store.NewMemory()
 	m := h.buildManager(st, time.Now)
 
 	feed := testkit.FakePull("feed")
@@ -729,7 +729,7 @@ sinks:
 	feed.StageJSON(`{"i":0}`, "c0")
 	feed.StageJSON(`{"i":1}`, "c1") // script fails → dead letter
 
-	st := store.NewMemory("partial")
+	st := store.NewMemory()
 	m := h.buildManager(st, time.Now)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -767,7 +767,7 @@ sinks:
 func TestAdmissionPoolSharedAndStable(t *testing.T) {
 	testkit.ResetFakePull()
 	h := newJobHarness(t, "", "all", "0s", false, "")
-	m := h.buildManager(store.NewMemory("nightly"), time.Now)
+	m := h.buildManager(store.NewMemory(), time.Now)
 
 	first := m.admissionPool(4)
 	second := m.admissionPool(1000)

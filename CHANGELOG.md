@@ -4,6 +4,66 @@ All notable changes to Eventboat. The format follows
 [Keep a Changelog](https://keepachangelog.com/); versions follow semver
 (pre-1.0: the API surface may still shift between minor versions).
 
+## Unreleased
+
+The architecture review pass (review-2026-09): one proven P0 concurrency
+defect, two engine correctness fixes, an admin security hardening, and the
+hygiene findings.
+
+### Fixed
+
+- **Branch isolation (new invariant 8, `TestInvariant_BranchIsolation`)**:
+  fan-out siblings share the underlying `msg.Decoded` / `msg.Meta` maps, and
+  the Starlark `remove()` host glue's lazy path deleted from that shared Go
+  map in place — a sibling branch encoding the same map concurrently hit the
+  unrecoverable `fatal error: concurrent map iteration and map write` (PoC:
+  a source fanned out to a `remove`-script transform and a json sink; first
+  batch crashed the process). `deleteKey` now materializes the copy-on-write
+  tree before deleting, like every other mutation path; the message-ownership
+  contract (transforms must replace, never mutate in place) is documented on
+  `registry.Message` and `pkg/plugin`.
+- **Crash-replay of injected messages** (`replay_inject_test.go`): a spooled
+  internal injection (testkit capture, DLQ reinjection) replayed after a
+  crash was dispatched as a fan-out from its node — skipping the transform,
+  or silently counting as *filtered* when injected at a sink. Replay now
+  re-enters the node through the same `dispatchInternal` path as `InjectAt`,
+  honoring the previously write-only `meta.injected_at`.
+- **Mixed sink-batch timeout**: `writeBatch` took the strictest retry count
+  across edges but let the LAST edge's `timeout_ms` win — now the maximum
+  explicit timeout wins (the default applies only when no edge sets one).
+- **`engine.New` normalizes `WasmSlowCallWarnMs`** like every other option
+  (0 → 5000ms; negative = explicitly disabled) — a hand-built `Options{}` no
+  longer silently loses the wasm slow-call watchdog.
+- **Windows checkouts**: the repository now has `.gitattributes`
+  (`* text=auto eol=lf`, binary marks for .descr/.wasm/.db); golden-file
+  tests (`TestSchemaGoldens`, `TestHelpSnapshots`) previously failed on any
+  autocrlf checkout.
+
+### Changed
+
+- **Admin security hardening**: the `?token=` query form is accepted on
+  `/admin/sse` only (EventSource cannot set headers); every other endpoint is
+  header-only, so a token leaked in a URL no longer unlocks the write
+  surface. All responses carry `X-Content-Type-Options: nosniff`.
+- **`Engine.Run` is single-shot** (CAS on `started`): a second call returns
+  an error instead of re-replaying the spool and duplicating workers.
+- **`Engine.Abandon` returns `(int, error)`**: a store failure mid-abandon is
+  propagated (the job runner fails the run) instead of silently reporting a
+  clean cancel.
+- Transform channels size their buffer with the same surge-cap rule as sink
+  channels (`BufferMax` participates only below 4× the base capacity).
+- **Dead-letter records drop the never-populated `origin_node` and
+  `retry_count` fields** (and their JSON shape); the SQLite columns remain
+  (defaulted) for old databases.
+- `store.NewMemory()` takes no pipeline argument — the in-memory store was
+  effectively pipeline-agnostic and the parameter suggested otherwise.
+
+### Removed
+
+- Dead code: the hand-rolled insertion sort in `internal/ir`, the
+  `var _ = strings.TrimSpace` placeholder in `internal/admin`, the unused
+  `workers` computation in `engine.New`.
+
 ## v0.3.0 (2026-09-05)
 
 The post-rc release line: transforms join the registry as first-class

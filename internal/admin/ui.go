@@ -45,9 +45,10 @@ let mermaidReady = false;
 if (window.mermaid) { mermaid.initialize({ startOnLoad: false, theme: 'dark' }); mermaidReady = true; }
 
 // When the server runs with a token (internal/admin/security.go), the
-// sign-in page forwards it here as ?token=; it is kept in sessionStorage and
-// stripped from the URL. Data fetches then use the Authorization header; the
-// SSE stream uses ?token= because EventSource cannot set headers (the
+// sign-in page keeps it in sessionStorage (shared within this tab); the
+// ?token= adoption below is only a fallback. Data fetches use the
+// Authorization header; the SSE stream uses ?token= because EventSource
+// cannot set headers — the query form is accepted on /admin/sse only (the
 // leakage caveat is documented in security.go).
 const qpToken = new URLSearchParams(location.search).get('token');
 if (qpToken) { sessionStorage.setItem('eb_admin_token', qpToken); history.replaceState(null, '', '/admin/'); }

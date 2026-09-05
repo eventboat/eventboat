@@ -5,6 +5,9 @@ import "testing"
 // remove() is the del() migration glue (redesign-v3.md §4.8): it must work
 // on the lazy root (marking the state dirty so the engine writes the
 // deletion back), on materialized trees, and be a no-op for missing keys.
+// Even a lazy-root remove materializes the COW tree first (review-2026-09:
+// in-place delete would race sibling fan-out branches), so values roundtrip
+// to JSON-ish types (int64) exactly like any SetKey write-back.
 func TestRemoveOnLazyRoot(t *testing.T) {
 	ps, _, serr := runScript(t, `remove(payload, "temp")`,
 		map[string]any{"temp": "x", "keep": 1}, map[string]any{})
@@ -18,7 +21,7 @@ func TestRemoveOnLazyRoot(t *testing.T) {
 	if _, exists := got["temp"]; exists {
 		t.Fatalf("temp not removed: %v", got)
 	}
-	if got["keep"] != 1 {
+	if got["keep"] != int64(1) { // int64: lazy remove roundtrips via the COW tree
 		t.Fatalf("keep lost: %v", got)
 	}
 }

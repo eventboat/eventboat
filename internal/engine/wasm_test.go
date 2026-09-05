@@ -51,7 +51,7 @@ sinks:
     from: [stats]
     mem: { id: out }
 `)
-	eng, _ := runEngine(t, pip, store.NewMemory("wasm"), h.reg, fastOptions())
+	eng, _ := runEngine(t, pip, store.NewMemory(), h.reg, fastOptions())
 
 	src := h.source("wasm")
 	src.Emit([]byte(`{"samples":[1,2,3]}`), "")
@@ -88,7 +88,7 @@ sinks:
     from: [stats]
     mem: { id: outf }
 `)
-	eng, _ := runEngine(t, pip, store.NewMemory("wasm-fail"), h.reg, fastOptions())
+	eng, _ := runEngine(t, pip, store.NewMemory(), h.reg, fastOptions())
 
 	src := h.source("wasmf")
 	// Empty values: the guest reports a domain error → retry → dead letter.

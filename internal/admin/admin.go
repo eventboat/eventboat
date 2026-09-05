@@ -13,7 +13,6 @@ import (
 	"io"
 	"net/http"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/eventboat/eventboat/internal/ops"
@@ -233,5 +232,3 @@ func Serve(ctx context.Context, listen string, handler http.Handler) error {
 		return err
 	}
 }
-
-var _ = strings.TrimSpace

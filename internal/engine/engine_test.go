@@ -34,7 +34,7 @@ sinks:
 func TestEngineLinearFlow(t *testing.T) {
 	h := newHarness(t)
 	pip := h.build(linearYAML)
-	st := store.NewMemory("linear")
+	st := store.NewMemory()
 	eng, _ := runEngine(t, pip, st, h.reg, fastOptions())
 
 	h.source("in").Emit([]byte(`{"id":"A1","price":20,"qty":6}`), "")
@@ -82,7 +82,7 @@ sinks:
     from: [stamp]
     mem: { id: audit }
 `)
-	eng, _ := runEngine(t, pip, store.NewMemory("fanin"), h.reg, fastOptions())
+	eng, _ := runEngine(t, pip, store.NewMemory(), h.reg, fastOptions())
 
 	h.source("orders").Emit([]byte(`{"kind":"order"}`), "")
 	h.source("refunds").Emit([]byte(`{"kind":"refund"}`), "")
@@ -120,7 +120,7 @@ sinks:
     from: [explode]
     mem: { id: out }
 `)
-	eng, _ := runEngine(t, pip, store.NewMemory("split"), h.reg, fastOptions())
+	eng, _ := runEngine(t, pip, store.NewMemory(), h.reg, fastOptions())
 
 	h.source("in").Emit([]byte(`[{"i":1},{"i":2},{"i":3}]`), "")
 	waitCommit(t, eng)
@@ -157,7 +157,7 @@ sinks:
     from: { enrich: { when: 'payload.region == "us"' } }
     mem: { id: us }
 `)
-	eng, _ := runEngine(t, pip, store.NewMemory("branch"), h.reg, fastOptions())
+	eng, _ := runEngine(t, pip, store.NewMemory(), h.reg, fastOptions())
 
 	h.source("in").Emit([]byte(`{"region":"eu","price":1,"qty":1}`), "")
 	h.source("in").Emit([]byte(`{"region":"us","price":2,"qty":2}`), "")
@@ -189,7 +189,7 @@ sinks:
     from: [in]
     mem: { id: out }
 `)
-	st := store.NewMemory("dlq")
+	st := store.NewMemory()
 	eng, _ := runEngine(t, pip, st, h.reg, fastOptions())
 
 	h.source("in").Emit([]byte(`{not json`), "")
@@ -229,7 +229,7 @@ sinks:
     from: [t]
     mem: { id: out }
 `)
-	st := store.NewMemory("scriptfail")
+	st := store.NewMemory()
 	eng, _ := runEngine(t, pip, st, h.reg, fastOptions())
 
 	h.source("in").Emit([]byte(`{"a":1}`), "")
@@ -270,7 +270,7 @@ sinks:
     from: [in]
     mem: { id: out }
 `)
-	eng, _ := runEngine(t, pip, store.NewMemory("retry"), h.reg, fastOptions())
+	eng, _ := runEngine(t, pip, store.NewMemory(), h.reg, fastOptions())
 	h.sink("out").fail = func(attempt int) error {
 		if attempt <= 2 {
 			return errString("transient")
@@ -311,7 +311,7 @@ sinks:
 	}
 	opts := fastOptions()
 	opts.HighWatermark = 1
-	eng, _ := runEngine(t, pip, store.NewMemory("bp"), h.reg, opts)
+	eng, _ := runEngine(t, pip, store.NewMemory(), h.reg, opts)
 
 	// First message wedges the sink; the admission gate fills up.
 	h.source("in").Emit([]byte(`{"i":1}`), "")
@@ -359,7 +359,7 @@ sinks:
     from: { in: { when: 'payload.label == "x"' } }
     mem: { id: b }
 `)
-	eng, _ := runEngine(t, pip, store.NewMemory("celerr"), h.reg, fastOptions())
+	eng, _ := runEngine(t, pip, store.NewMemory(), h.reg, fastOptions())
 
 	// payload.total is a string (type error) and payload.label is absent
 	// (unknown map key): both predicates fail at evaluation, count as
@@ -401,7 +401,7 @@ sinks:
     from: [t]
     mem: { id: out }
 `)
-	eng, _ := runEngine(t, pip, store.NewMemory("replayid"), h.reg, fastOptions())
+	eng, _ := runEngine(t, pip, store.NewMemory(), h.reg, fastOptions())
 
 	// Re-inject "at the transform" — exactly what replay --dlq does after a
 	// script bug is fixed.
@@ -498,7 +498,7 @@ sinks:
 	if opts.DrainTimeout != 50*time.Millisecond {
 		t.Fatalf("drain timeout not applied: %v", opts.DrainTimeout)
 	}
-	st := store.NewMemory("drainlim")
+	st := store.NewMemory()
 	eng, stop := runEngine(t, pip, st, h.reg, opts)
 	h.source("in").Emit([]byte(`{"i":1}`), "")
 

@@ -954,21 +954,13 @@ func lint(p *Pipeline, file string, add func(config.Diagnostic)) {
 	for name := range p.Config.Constants {
 		names = append(names, name)
 	}
-	sortStrings(names)
+	sort.Strings(names)
 	for _, name := range names {
 		if !used[name] {
 			hint := fmt.Sprintf("remove it or reference it via constants.%s / ${constants.%s}", name, name)
 			add(config.Diagnostic{Severity: "warning", Code: "lint_constant_unused", File: file, Line: 0,
 				Message: fmt.Sprintf("constant %q is never referenced", name),
 				Hint:    hint})
-		}
-	}
-}
-
-func sortStrings(s []string) {
-	for i := 1; i < len(s); i++ {
-		for j := i; j > 0 && s[j] < s[j-1]; j-- {
-			s[j], s[j-1] = s[j-1], s[j]
 		}
 	}
 }

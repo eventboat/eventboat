@@ -42,6 +42,9 @@ CREATE TABLE IF NOT EXISTS source_state (
   PRIMARY KEY (pipeline, source)
 );
 
+-- The origin_node and retry_count columns are deprecated and never written;
+-- they only exist in databases created before review-2026-09 (kept there
+-- harmlessly via their NOT NULL DEFAULTs, no DROP migration).
 CREATE TABLE IF NOT EXISTS dead_letter (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
   pipeline    TEXT    NOT NULL,
@@ -51,14 +54,12 @@ CREATE TABLE IF NOT EXISTS dead_letter (
   edge        TEXT    NOT NULL DEFAULT '',
   reason      TEXT    NOT NULL,
   backtrace   TEXT    NOT NULL DEFAULT '',
-  origin_node TEXT    NOT NULL DEFAULT '',
   raw         BLOB    NOT NULL,
   codec       TEXT    NOT NULL DEFAULT '',
   meta        TEXT    NOT NULL DEFAULT '{}',
   cursor      TEXT    NOT NULL DEFAULT '',
   src_name    TEXT    NOT NULL DEFAULT '',
   src_seq     INTEGER NOT NULL DEFAULT 0,
-  retry_count INTEGER NOT NULL DEFAULT 0,
   created_at  TEXT    NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_dlq_pipeline_time ON dead_letter(pipeline, id);
@@ -315,10 +316,10 @@ func (s *SQLite) WriteDeadLetter(dl DeadLetter) error {
 	}
 	_, err := s.db.Exec(
 		`INSERT INTO dead_letter
-		   (pipeline, message_id, job_run_id, node, edge, reason, backtrace, origin_node, raw, codec, meta, cursor, src_name, src_seq, retry_count, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		dl.Pipeline, dl.MessageID, dl.RunID, dl.Node, dl.Edge, dl.Reason, dl.Backtrace, dl.OriginNode,
-		dl.Raw, dl.Codec, string(marshalMeta(dl.Meta)), dl.Cursor, dl.SrcName, dl.SrcSeq, dl.RetryCount,
+		   (pipeline, message_id, job_run_id, node, edge, reason, backtrace, raw, codec, meta, cursor, src_name, src_seq, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		dl.Pipeline, dl.MessageID, dl.RunID, dl.Node, dl.Edge, dl.Reason, dl.Backtrace,
+		dl.Raw, dl.Codec, string(marshalMeta(dl.Meta)), dl.Cursor, dl.SrcName, dl.SrcSeq,
 		createdAt.UTC().Format(time.RFC3339Nano))
 	if err != nil {
 		return fmt.Errorf("store: dead letter: %w", err)
@@ -326,7 +327,9 @@ func (s *SQLite) WriteDeadLetter(dl DeadLetter) error {
 	return nil
 }
 
-const dlqColumns = `id, pipeline, message_id, job_run_id, node, edge, reason, backtrace, origin_node, raw, codec, meta, cursor, src_name, src_seq, retry_count, created_at`
+// dlqColumns excludes the deprecated origin_node/retry_count columns, which
+// only exist (empty) in pre-review-2026-09 databases.
+const dlqColumns = `id, pipeline, message_id, job_run_id, node, edge, reason, backtrace, raw, codec, meta, cursor, src_name, src_seq, created_at`
 
 func (s *SQLite) scanDeadLetters(query string, args ...any) ([]DeadLetter, error) {
 	rows, err := s.db.Query(query, args...)
@@ -342,7 +345,7 @@ func (s *SQLite) scanDeadLetters(query string, args ...any) ([]DeadLetter, error
 			created string
 		)
 		if err := rows.Scan(&dl.ID, &dl.Pipeline, &dl.MessageID, &dl.RunID, &dl.Node, &dl.Edge, &dl.Reason, &dl.Backtrace,
-			&dl.OriginNode, &dl.Raw, &dl.Codec, &meta, &dl.Cursor, &dl.SrcName, &dl.SrcSeq, &dl.RetryCount, &created); err != nil {
+			&dl.Raw, &dl.Codec, &meta, &dl.Cursor, &dl.SrcName, &dl.SrcSeq, &created); err != nil {
 			return nil, fmt.Errorf("store: scan dead letter: %w", err)
 		}
 		dl.Meta = unmarshalMeta([]byte(meta))

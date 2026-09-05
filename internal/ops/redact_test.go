@@ -70,7 +70,7 @@ func TestTailWrapperAppliesRedaction(t *testing.T) {
 	svc := New(Options{
 		DataDir:  t.TempDir(),
 		Reg:      registry.New(),
-		StoreFor: func(pipeline string) (store.Store, error) { return store.NewMemory(pipeline), nil },
+		StoreFor: func(pipeline string) (store.Store, error) { return store.NewMemory(), nil },
 		Clock:    time.Now,
 	})
 	t.Cleanup(svc.Stop)
@@ -111,7 +111,7 @@ func TestDeadLetterQueryAppliesRedaction(t *testing.T) {
 	if err := testkit.RegisterFakePull(reg); err != nil {
 		t.Fatal(err)
 	}
-	stores := map[string]store.Store{"redact-dlq": store.NewMemory("redact-dlq")}
+	stores := map[string]store.Store{"redact-dlq": store.NewMemory()}
 	svc := New(Options{
 		DataDir:  t.TempDir(),
 		Reg:      reg,

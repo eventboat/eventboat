@@ -29,7 +29,7 @@ sinks:
         when: { lang: cesql, expr: "data.region = 'US'" }
     mem: { id: us }
 `)
-	eng, _ := runEngine(t, pip, store.NewMemory("cesql-edges"), h.reg, fastOptions())
+	eng, _ := runEngine(t, pip, store.NewMemory(), h.reg, fastOptions())
 
 	src := h.source("cesql")
 	src.Emit([]byte(`{"region":"EU","amount":250}`), "")

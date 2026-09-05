@@ -502,8 +502,10 @@ func (m *Manager) runOnce(ctx context.Context, jr *store.JobRun, triggerParams, 
 			// terminal-dead-letter the outstanding set (R2), then stop the
 			// engine with a bounded wait — a wedged writer goroutine may
 			// outlive the run by design (the process is "gone" from the
-			// run's perspective; the store stays consistent).
-			eng.Abandon("job canceled")
+			// run's perspective; the store stays consistent). A store failure
+			// mid-abandon means outstanding rows may survive: escalate to
+			// JobFailed instead of reporting a clean cancel (review-2026-09).
+			_, abandonErr := eng.Abandon("job canceled")
 			eng.Close()
 			engineCancel()
 			select {
@@ -513,6 +515,10 @@ func (m *Manager) runOnce(ctx context.Context, jr *store.JobRun, triggerParams, 
 			jr.RowsRead = eng.Metrics.MessagesIn.Load()
 			jr.Delivered = eng.Metrics.CommittedCount.Load() - eng.Metrics.DeadLettered.Load()
 			jr.DeadLettered = eng.Metrics.DeadLettered.Load()
+			if abandonErr != nil {
+				fail(store.JobFailed, "run: "+abandonErr.Error())
+				return
+			}
 			fail(store.JobCanceled, "run canceled")
 			return
 		case <-time.After(5 * time.Millisecond):

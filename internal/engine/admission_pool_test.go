@@ -59,9 +59,9 @@ sinks:
 	optsA.Admission = pool
 	optsB := fastOptions()
 	optsB.Admission = pool
-	engA, stopA := runEngine(t, pipA, store.NewMemory("poola"), h.reg, optsA)
+	engA, stopA := runEngine(t, pipA, store.NewMemory(), h.reg, optsA)
 	defer stopA()
-	engB, stopB := runEngine(t, pipB, store.NewMemory("poolb"), h.reg, optsB)
+	engB, stopB := runEngine(t, pipB, store.NewMemory(), h.reg, optsB)
 	defer stopB()
 
 	// One wedged in-flight message per engine: both pool slots are held.

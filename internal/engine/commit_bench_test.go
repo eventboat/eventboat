@@ -43,7 +43,7 @@ sinks:
 		b.Run(tc.name, func(b *testing.B) {
 			h := newHarness(b)
 			pip := h.build(benchYAML)
-			st := store.NewMemory("bench")
+			st := store.NewMemory()
 			if tc.fsyn {
 				wrapped := &testkit.StoreWrapper{Inner: st}
 				wrapped.SetCheckpointHook = func(seq int64) error {

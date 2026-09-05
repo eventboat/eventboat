@@ -35,6 +35,12 @@ const (
 // engine computes for sinks from the sink's encoder, and Meta carries
 // engine-stamped metadata (message_id, ingest_time, source) plus
 // source-provided metadata.
+//
+// Fan-out branches share the underlying Decoded/Meta maps (deliver
+// shallow-copies the struct), until a branch replaces the value wholesale.
+// Transforms must therefore never mutate the maps msg.Decoded/msg.Meta point
+// to in place; assign a fresh value instead (the built-in script plugin's
+// copy-on-write binding does exactly this).
 type Message struct {
 	ID      string
 	Codec   string

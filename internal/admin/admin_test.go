@@ -32,7 +32,7 @@ func newService(t *testing.T) *ops.Service {
 	return ops.New(ops.Options{
 		DataDir:  t.TempDir(),
 		Reg:      reg,
-		StoreFor: func(pipeline string) (store.Store, error) { return store.NewMemory(pipeline), nil },
+		StoreFor: func(pipeline string) (store.Store, error) { return store.NewMemory(), nil },
 		Clock:    func() time.Time { return time.Now() },
 	})
 }
@@ -141,7 +141,10 @@ func TestAdminRESTSurface(t *testing.T) {
 // A configured token guards EVERY endpoint on the listener (the write
 // surface can deploy pipeline YAML that executes plugin commands): missing
 // or wrong Authorization → 401, the correct bearer passes. The ?token=
-// query form is the equivalent UI/EventSource credential.
+// query form is accepted on the SSE endpoint only — EventSource cannot set
+// headers — and rejected everywhere else (review-2026-09: a token leaked in
+// a URL must not unlock the write surface). Every response carries
+// X-Content-Type-Options: nosniff.
 func TestAdminTokenAuth(t *testing.T) {
 	svc := newService(t)
 	t.Cleanup(svc.Stop)
@@ -170,12 +173,41 @@ func TestAdminTokenAuth(t *testing.T) {
 			b, _ := io.ReadAll(res.Body)
 			t.Fatalf("GET %s (auth %q): status %d, want %d: %s", path, auth, res.StatusCode, want, b)
 		}
+		if h := res.Header.Get("X-Content-Type-Options"); h != "nosniff" {
+			t.Errorf("GET %s: X-Content-Type-Options = %q, want nosniff", path, h)
+		}
 	}
 	get("/admin/status.json", "", http.StatusUnauthorized)
 	get("/admin/status.json", "Bearer wrong", http.StatusUnauthorized)
 	get("/admin/status.json", "Bearer s3cret", http.StatusOK)
-	get("/admin/?token=s3cret", "", http.StatusOK)
-	get("/admin/?token=s3cret", "Bearer wrong", http.StatusOK)
+	// The query form is narrowed to /admin/sse: anywhere else it does not
+	// authenticate, even with the correct token (header-only surface).
+	get("/admin/status.json?token=s3cret", "", http.StatusUnauthorized)
+	get("/admin/?token=s3cret", "", http.StatusUnauthorized)
+
+	// SSE keeps the query form (EventSource cannot set headers) and streams
+	// once authorized by it.
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/admin/sse?token=s3cret", nil)
+	res, err := srv.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = res.Body.Close() }()
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("GET /admin/sse?token=: status %d, want 200", res.StatusCode)
+	}
+	if h := res.Header.Get("X-Content-Type-Options"); h != "nosniff" {
+		t.Errorf("SSE: X-Content-Type-Options = %q, want nosniff", h)
+	}
+	buf := make([]byte, 512)
+	n, _ := res.Body.Read(buf)
+	if !strings.Contains(string(buf[:n]), "event: hello") {
+		t.Fatalf("SSE via ?token= did not stream events: %s", buf[:n])
+	}
+	// A wrong query token is still rejected on SSE itself.
+	get("/admin/sse?token=wrong", "", http.StatusUnauthorized)
 
 	// Deploy is denied before ops.Deploy runs; with the token it reaches
 	// verify (and fails there on the bogus config — 400, not 401).
@@ -201,9 +233,9 @@ func TestAdminTokenAuth(t *testing.T) {
 
 	// Browser navigations get the sign-in prompt as the 401 body (no data);
 	// machine clients get plain text.
-	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/admin/", nil)
+	req, _ = http.NewRequest(http.MethodGet, srv.URL+"/admin/", nil)
 	req.Header.Set("Accept", "text/html,application/xhtml+xml")
-	res, err := srv.Client().Do(req)
+	res, err = srv.Client().Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -301,7 +333,7 @@ func TestAdminDeployRejectsTraversalName(t *testing.T) {
 	svc := ops.New(ops.Options{
 		DataDir:  dir,
 		Reg:      reg,
-		StoreFor: func(pipeline string) (store.Store, error) { return store.NewMemory(pipeline), nil },
+		StoreFor: func(pipeline string) (store.Store, error) { return store.NewMemory(), nil },
 	})
 	t.Cleanup(svc.Stop)
 	h := Handler(svc, nil, nil, Security{Listen: "127.0.0.1:7788"})

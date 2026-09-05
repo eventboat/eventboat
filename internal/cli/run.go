@@ -93,7 +93,7 @@ func cmdRun(args []string, jsonOut bool) int {
 
 	var st store.Store
 	if *ephemeral {
-		st = store.NewMemory(pip.Config.Name)
+		st = store.NewMemory()
 	} else {
 		if err := os.MkdirAll(*dataDir, 0o755); err != nil {
 			fmt.Fprintf(os.Stderr, "run: data dir: %v\n", err)
@@ -184,7 +184,7 @@ func storeLabel(ephemeral bool, dataDir string) string {
 func runJobPipeline(configPath string, pip *ir.Pipeline, reg *registry.Registry, storage runtimecfg.Storage, jsonOut bool, observer *obs.Obs) int {
 	var st store.Store
 	if storage.Ephemeral {
-		st = store.NewMemory(pip.Config.Name)
+		st = store.NewMemory()
 	} else {
 		if err := os.MkdirAll(storage.DataDir, 0o755); err != nil {
 			fmt.Fprintf(os.Stderr, "run: data dir: %v\n", err)
