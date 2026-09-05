@@ -16,3 +16,4 @@ tools/sitegen/bin/
 examples/job-sync/out/
 .idea/*.test.exe
 test_output.txt
+"tools/sitegen/sitegen.exe"  
