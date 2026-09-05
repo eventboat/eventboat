@@ -216,7 +216,13 @@ type Engine struct {
 	ctx     context.Context
 	cancel  context.CancelFunc
 	wg      sync.WaitGroup
-	started atomic.Bool
+	// runCalled guards against a second Run (CAS first, before Run mutates
+	// anything); started is the readiness publication and is set only AFTER
+	// ctx/cancel are assigned, so injectAt's started gate (and Ready()) also
+	// observes the live context — CAS on started alone would race the ctx
+	// assignment (review follow-up, -race repro on TestEngineInjectReplay).
+	runCalled atomic.Bool
+	started   atomic.Bool
 }
 
 // instance is one in-flight message positioned at a node.
@@ -508,10 +514,14 @@ func (e *Engine) codec(name string, reg *registry.Registry) (registry.Codec, err
 // programming error (it would replay the spool and duplicate workers) and
 // returns an error instead (review-2026-09).
 func (e *Engine) Run(ctx context.Context) error {
-	if !e.started.CompareAndSwap(false, true) {
+	if !e.runCalled.CompareAndSwap(false, true) {
 		return errors.New("engine: Run called twice")
 	}
 	e.ctx, e.cancel = context.WithCancel(ctx)
+	// Readiness publication comes after the ctx assignment: injectAt and
+	// Ready() gate on this flag, so it must never be observable before the
+	// context it promises is live.
+	e.started.Store(true)
 
 	// Crash recovery: replay everything beyond the checkpoint (invariant 3).
 	cp, err := e.Store.Checkpoint(e.IR.Config.Name)

@@ -45,8 +45,10 @@ hygiene findings.
   `/admin/sse` only (EventSource cannot set headers); every other endpoint is
   header-only, so a token leaked in a URL no longer unlocks the write
   surface. All responses carry `X-Content-Type-Options: nosniff`.
-- **`Engine.Run` is single-shot** (CAS on `started`): a second call returns
-  an error instead of re-replaying the spool and duplicating workers.
+- **`Engine.Run` is single-shot** (a dedicated guard flag): a second call
+  returns an error instead of re-replaying the spool and duplicating workers;
+  the readiness flag `started` remains a post-ctx-assignment publication so
+  `Ready()`/`injectAt` never observe a not-yet-assigned context.
 - **`Engine.Abandon` returns `(int, error)`**: a store failure mid-abandon is
   propagated (the job runner fails the run) instead of silently reporting a
   clean cancel.
