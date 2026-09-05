@@ -91,6 +91,42 @@ func TestEvalString(t *testing.T) {
 	}
 }
 
+// The runtime cost limit bounds payload-driven blowups: a size-driven
+// operation over a huge payload (regex matches charge ~0.1 cost units per
+// input byte, so a 16 MiB subject costs ~1.7e6) exceeds the budget and the
+// evaluation is cancelled on the EXISTING error path — error == condition
+// does not pass — while ordinary predicates on the same payload still
+// evaluate.
+func TestEvalCostLimit(t *testing.T) {
+	env := newTestEnv(t)
+	pred, err := env.Compile(`payload.s.matches("y*")`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	big := strings.Repeat("x", 16<<20)
+	ok, evalErr := pred.Eval(map[string]any{"s": big}, map[string]any{})
+	if evalErr == nil {
+		t.Fatalf("size-driven predicate should exceed the cost limit, got ok=%v", ok)
+	}
+	if ok {
+		t.Fatal("an evaluation error must never pass the condition")
+	}
+	if !strings.Contains(evalErr.Error(), "cost") {
+		t.Errorf("error should name the cost limit: %v", evalErr)
+	}
+
+	// An ordinary predicate over the same large payload stays far under the
+	// budget and evaluates normally.
+	normal, err := env.Compile(`size(payload.s) > 1024 && meta.region == "eu"`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ok, evalErr = normal.Eval(map[string]any{"s": big}, map[string]any{"region": "eu"})
+	if evalErr != nil || !ok {
+		t.Fatalf("normal predicate: ok=%v err=%v", ok, evalErr)
+	}
+}
+
 func BenchmarkPredicateEval(b *testing.B) {
 	env, _ := NewEnv(map[string]any{"vip": float64(10000)}, nil)
 	pred, err := env.Compile(`meta.region == "eu" && payload.total > constants.vip`)

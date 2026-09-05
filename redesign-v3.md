@@ -567,7 +567,7 @@ sinks:
 - 生成的 schema 由 golden 测试钉住（`testdata/schemas/`，`-update-schemas` 重生成）——schema 变更必须以可审阅的 diff 呈现；
 - `default` 标签同时驱动 schema 注记与解码后的零值注入（嵌套结构体同样适用），schema 里声明的默认值即运行时真实行为。
 
-v1.19 起 **transform 与 source/sink 同级**：插件名即键对 `transforms:` 段生效，script/split/wasm 是三个内置 transform 插件（`explain-safe` capability 标记可被 explain 干跑；wasm 不标记——explain 不执行 guest），`version:` 版本钉同样适用。transform 插件的配置块**允许非 mapping 根**（script 的配置即源文本，唯一刻意的不对称，为保存量 YAML）；`TransformEnv`（constants/parameters/节点日志/慢调用阈值）经 `Init` 注入；1→0 输出 = settle-as-filtered。gRPC 进程外 transform 协议暂未开放（编译内注册先行）。
+v1.19 起 **transform 与 source/sink 同级**：插件名即键对 `transforms:` 段生效，script/split/wasm 是三个内置 transform 插件（`explain-safe` capability 标记可被 explain 干跑；wasm 不标记——explain 不执行 guest），`version:` 版本钉同样适用。transform 插件的配置块**允许非 mapping 根**（script 的配置即源文本，唯一刻意的不对称，为保存量 YAML）；`TransformEnv`（constants/parameters/节点日志/慢调用阈值）经 `Init` 注入；1→0 输出 = commit-as-filtered（v1.18 Settled→Commit 更名后的措辞）。gRPC 进程外 transform 协议暂未开放（编译内注册先行）。
 
 这是"Agent 不发明不存在的插件/字段"的机制性保证——v2 靠 SKILL.md 里一句"不要发明插件类型"的口头约定。
 

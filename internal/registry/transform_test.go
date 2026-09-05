@@ -44,7 +44,7 @@ func TestTransformRegistrationLifecycle(t *testing.T) {
 }
 
 // The script plugin's contract: scalar-root schemas validate non-mapping
-// configs (the plugin block's value is the config itself, spec v1.18).
+// configs (the plugin block's value is the config itself, spec v1.19).
 func TestTransformScalarRootSchema(t *testing.T) {
 	r := New()
 	strSchema := `{"type":"string","minLength":1}`

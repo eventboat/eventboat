@@ -10,7 +10,8 @@
     "properties": {
       "symbol": { "type": "string", "description": "instrument symbol to emit" },
       "events": { "type": "integer", "minimum": 1, "default": 10, "description": "events per pull run" },
-      "interval_ms": { "type": "integer", "minimum": 1, "default": 100, "description": "milliseconds between events" }
+      "interval_ms": { "type": "integer", "minimum": 1, "default": 100, "description": "milliseconds between events" },
+      "pad_bytes": { "type": "integer", "minimum": 0, "default": 0, "description": "pad each payload to roughly this many bytes (transport tests)" }
     },
     "additionalProperties": false
   }

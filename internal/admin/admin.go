@@ -8,6 +8,7 @@ package admin
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -18,9 +19,17 @@ import (
 	"github.com/eventboat/eventboat/internal/ops"
 )
 
+// maxBodyBytes caps every JSON request body on the admin surface (deploy
+// configs with inline Starlark scripts can reach tens of KB, base64-embedded
+// test fixtures more; 8 MiB leaves two orders of magnitude of headroom over
+// any realistic config while bounding the memory one request can pin).
+const maxBodyBytes = 8 << 20
+
 // Handler builds the admin mux (also serves /metrics when metricsHandler is
-// non-nil, and MCP at /mcp when mcpHandler is non-nil).
-func Handler(svc *ops.Service, metricsHandler http.Handler, mcpHandler http.Handler) http.Handler {
+// non-nil, and MCP at /mcp when mcpHandler is non-nil). The whole surface —
+// including those two — sits behind sec.Middleware, so a configured token
+// guards every endpoint.
+func Handler(svc *ops.Service, metricsHandler http.Handler, mcpHandler http.Handler, sec Security) http.Handler {
 	mux := http.NewServeMux()
 
 	writeJSON := func(w http.ResponseWriter, code int, v any) {
@@ -32,7 +41,15 @@ func Handler(svc *ops.Service, metricsHandler http.Handler, mcpHandler http.Hand
 		writeJSON(w, code, map[string]any{"error": err.Error()})
 	}
 	body := func(w http.ResponseWriter, r *http.Request, dst any) bool {
+		// MaxBytesReader also closes the connection on violation, so a
+		// malicious sender cannot keep streaming past the cap.
+		r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
 		if err := json.NewDecoder(r.Body).Decode(dst); err != nil {
+			var maxErr *http.MaxBytesError
+			if errors.As(err, &maxErr) {
+				fail(w, http.StatusRequestEntityTooLarge, fmt.Errorf("request body exceeds %d bytes: %w", maxBodyBytes, maxErr))
+				return false
+			}
 			fail(w, http.StatusBadRequest, fmt.Errorf("bad JSON body: %w", err))
 			return false
 		}
@@ -182,7 +199,7 @@ func Handler(svc *ops.Service, metricsHandler http.Handler, mcpHandler http.Hand
 	mux.HandleFunc("GET /admin", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/admin/", http.StatusFound)
 	})
-	return mux
+	return sec.Middleware(mux)
 }
 
 // Server runs the admin listener.
@@ -190,7 +207,17 @@ type Server struct{}
 
 // Serve starts the HTTP server (blocks until ctx is done).
 func Serve(ctx context.Context, listen string, handler http.Handler) error {
-	srv := &http.Server{Addr: listen, Handler: handler, ReadHeaderTimeout: 10 * time.Second}
+	srv := &http.Server{
+		Addr: listen, Handler: handler,
+		ReadHeaderTimeout: 10 * time.Second,
+		// Read/Idle bound slow clients; WriteTimeout is deliberately loose
+		// because SSE responses are long-lived streams — it caps their
+		// lifetime (the UI's EventSource reconnects) instead of erroring
+		// mid-request.
+		ReadTimeout:  60 * time.Second,
+		WriteTimeout: 15 * time.Minute,
+		IdleTimeout:  120 * time.Second,
+	}
 	errCh := make(chan error, 1)
 	go func() { errCh <- srv.ListenAndServe() }()
 	select {

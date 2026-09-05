@@ -84,11 +84,11 @@ type Sink interface {
 // from `workers` concurrent goroutines (unless the plugin also implements
 // TransformCloner, in which case each worker applies on its own clone). Apply
 // turns one message into zero or more messages: zero outputs filter the
-// message (settled, counted as no-match — the same semantics as an edge
-// predicate with no matching edge); one or more outputs fan out downstream
-// and the engine expands the commit accounting for the extra branches. A
-// non-nil error retries per the incoming edge's delivery policy, then dead
-// letters the message; it never fails the node.
+// message (committed as filtered, counted as no-match — the same semantics
+// as an edge predicate with no matching edge); one or more outputs fan out
+// downstream and the engine expands the commit accounting for the extra
+// branches. A non-nil error retries per the incoming edge's delivery policy,
+// then dead letters the message; it never fails the node.
 type Transform interface {
 	Init(env *TransformEnv) error
 	Apply(msg *Message) ([]*Message, error)
@@ -150,7 +150,7 @@ type Codec interface {
 // reservedNames may not be used as plugin names: they collide with node-level
 // framework fields or edge attributes (redesign-v3-review.md R5). script,
 // split and wasm are NOT reserved — they are the built-in transform plugin
-// names, ordinary members of the transform namespace (spec v1.18).
+// names, ordinary members of the transform namespace (spec v1.19).
 var reservedNames = map[string]bool{
 	"from": true, "decoder": true, "encoder": true, "workers": true,
 	"order_key": true, "batch": true,

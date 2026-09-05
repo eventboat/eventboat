@@ -309,14 +309,22 @@ func Build(cfg *config.Pipeline, reg *registry.Registry, starOpts starhost.Optio
 		switch n.Section {
 		case config.SectionTransform:
 			// Transforms are registry plugins like sources and sinks (spec
-			// v1.18): lookup, version pin, schema validation, factory
+			// v1.19): lookup, version pin, schema validation, factory
 			// instantiation. The factory compiles script (Starlark resolve)
 			// and wasm (module + ABI export check) at verify time — gate-1
 			// findings, not first-message failures.
 			if _, ok := reg.LookupTransform(n.Config.Plugin); !ok {
+				hint := "run `eventboat plugin catalog` against a binary that registers this plugin"
+				if n.Config.Plugin == "grpc" {
+					// A grpc: block under a transform parses as a plugin named
+					// "grpc" (out-of-process blocks are source/sink-only);
+					// the catalog hint would send the user hunting for a
+					// plugin that cannot exist.
+					hint = "out-of-process gRPC transforms are future work (docs/plugins.md); transforms register in-process for now"
+				}
 				add(config.Diagnostic{Severity: "error", Code: "plugin_unknown", File: file, Line: n.Config.Line,
 					Message: fmt.Sprintf("unknown transform plugin %q", n.Config.Plugin),
-					Hint:    "run `eventboat plugin catalog` against a binary that registers this plugin"})
+					Hint:    hint})
 			} else {
 				meta, _ := reg.LookupTransform(n.Config.Plugin)
 				checkDeclaredVersion(p, n, meta.Version, file, add)

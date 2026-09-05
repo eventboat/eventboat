@@ -1,9 +1,11 @@
 package engine
 
 import (
+	"context"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/eventboat/eventboat/internal/registry"
 	"github.com/eventboat/eventboat/internal/store"
@@ -12,7 +14,7 @@ import (
 
 // Third-party transform plugins ride the same generic path as the builtins:
 // registry instantiation, delivery retries per the incoming edge, and the
-// 1→0 filter contract (settle-as-filtered + NoMatch, like a zero-match edge).
+// 1→0 filter contract (commit-as-filtered + NoMatch, like a zero-match edge).
 func TestEnginePluginTransformFilters(t *testing.T) {
 	h := newHarness(t)
 	if err := testkit.RegisterFakeTransform(h.reg, "sieve", func(msg *registry.Message) ([]*registry.Message, error) {
@@ -144,6 +146,64 @@ sinks:
 	}
 	if got := eng.Metrics.Retries.Load(); got != 1 {
 		t.Errorf("retries = %d, want 1", got)
+	}
+}
+
+// cloneFailTransform implements TransformCloner with an always-failing Clone.
+type cloneFailTransform struct{ applies *atomic.Int32 }
+
+func (c *cloneFailTransform) Init(env *registry.TransformEnv) error { return nil }
+func (c *cloneFailTransform) Apply(msg *registry.Message) ([]*registry.Message, error) {
+	c.applies.Add(1)
+	return []*registry.Message{msg}, nil
+}
+func (c *cloneFailTransform) Close() error                       { return nil }
+func (c *cloneFailTransform) Clone() (registry.Transform, error) { return nil, errString("clone boom") }
+
+// A failed Clone is worker-fatal: the plugin implemented TransformCloner
+// precisely because its instance is not goroutine-safe (wasm module
+// instances), so the engine must shut down with the error instead of
+// silently racing `workers` goroutines on the shared master.
+func TestEngineTransformCloneFailureFailsPipeline(t *testing.T) {
+	h := newHarness(t)
+	var applies atomic.Int32
+	fake := &cloneFailTransform{applies: &applies}
+	if err := h.reg.RegisterTransform("cloner", 1,
+		`{"type": ["object", "array", "string", "integer", "number", "boolean", "null"]}`, nil,
+		func(cfg any, dir string) (registry.Transform, error) { return fake, nil }); err != nil {
+		t.Fatal(err)
+	}
+	pip := h.build(`
+apiVersion: eventboat/v3
+kind: Pipeline
+metadata: { name: cloner }
+sources:
+  in: { decoder: json, manual: { id: in } }
+transforms:
+  t:
+    from: [in]
+    workers: 3
+    cloner: {}
+sinks:
+  out: { from: [t], mem: { id: out } }
+`)
+	st := store.NewMemory("cloner")
+	eng, err := New(pip, st, h.reg, fastOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- eng.Run(context.Background()) }()
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "clone boom") || !strings.Contains(err.Error(), `"t"`) {
+			t.Fatalf("Run = %v, want node-annotated clone failure", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("engine kept running after a failed transform clone")
+	}
+	if got := applies.Load(); got != 0 {
+		t.Errorf("Apply ran %d times on the shared master instance, want 0", got)
 	}
 }
 

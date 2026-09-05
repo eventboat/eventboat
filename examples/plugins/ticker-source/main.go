@@ -55,7 +55,14 @@ func main() {
 	})
 	fmt.Println(string(handshake))
 
-	srv := grpc.NewServer(grpc.ChainUnaryInterceptor(authUnary(token)), grpc.ChainStreamInterceptor(authStream(token)))
+	// MaxRecv/MaxSend mirror the host's transport contract: 64 MiB messages
+	// both ways (docs/plugins.md) — above grpc-go's 4 MiB default so legal
+	// large Events pass, still bounded.
+	srv := grpc.NewServer(
+		grpc.MaxRecvMsgSize(64<<20),
+		grpc.MaxSendMsgSize(64<<20),
+		grpc.ChainUnaryInterceptor(authUnary(token)),
+		grpc.ChainStreamInterceptor(authStream(token)))
 	pluginv1.RegisterSourceServer(srv, src)
 	healthpb.RegisterHealthServer(srv, health.NewServer())
 
@@ -74,6 +81,7 @@ type config struct {
 	Symbol     string `json:"symbol"`
 	Events     int    `json:"events"`
 	IntervalMs int    `json:"interval_ms"`
+	PadBytes   int    `json:"pad_bytes"` // test hook: pad each payload (big-message transport tests)
 }
 
 // tickerSource emits Events events per pull, one every IntervalMs, resuming
@@ -101,6 +109,9 @@ func (t *tickerSource) Init(ctx context.Context, req *pluginv1.InitRequest) (*pl
 		}
 		if c.IntervalMs > 0 {
 			t.cfg.IntervalMs = c.IntervalMs
+		}
+		if c.PadBytes > 0 {
+			t.cfg.PadBytes = c.PadBytes
 		}
 	}
 	if len(req.State) > 0 {
@@ -172,7 +183,9 @@ func (t *tickerSource) Close(ctx context.Context, req *pluginv1.CloseRequest) (*
 }
 
 // event builds one wire Event. The sequence is deterministic: the price is a
-// stable function of the tick number.
+// stable function of the tick number. pad_bytes (when configured) appends a
+// filler field so the payload crosses a chosen size — used by transport
+// tests to exercise large messages.
 func (t *tickerSource) event(seq int64) *pluginv1.Event {
 	payload, _ := json.Marshal(map[string]any{
 		"symbol": t.cfg.Symbol,
@@ -180,6 +193,11 @@ func (t *tickerSource) event(seq int64) *pluginv1.Event {
 		"price":  100 + float64((seq*37)%1000)/10.0,
 		"time":   time.Now().UTC().Format(time.RFC3339Nano),
 	})
+	if t.cfg.PadBytes > len(payload) {
+		padding := make([]byte, t.cfg.PadBytes-len(payload)-len(`,"pad":""`))
+		padded := append(payload[:len(payload)-1], []byte(`,"pad":"`+string(padding)+`"}`)...)
+		payload = padded
+	}
 	return &pluginv1.Event{
 		Payload: payload,
 		Meta: map[string]*pluginv1.MetaValue{

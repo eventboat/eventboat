@@ -99,6 +99,29 @@ func IsSuite(path string) (isSuite bool, parseErr error) {
 	return probe.Suite != "", nil
 }
 
+// resolveUnder resolves a suite-relative path (pipeline file, inject fixture)
+// and enforces containment within the suite ROOT — the parent of the suite
+// file's own directory, matching the documented project layout
+// <root>/pipeline.yaml + <root>/tests/<suite>.yaml (+ tests/fixtures/), so
+// the conventional `pipeline: ../pipeline.yaml` resolves inside it. Suite
+// YAML is agent-supplied on the MCP test surface, so an unchecked `../`
+// chain — or an absolute path that Windows joins as a volume-less element —
+// could otherwise point the daemon at arbitrary files whose contents failure
+// summaries echo back. The check works on the resolved relationship, never a
+// string prefix: filepath.Rel yields the path relative to the root, and only
+// a result that neither escapes upward (a leading `..`) nor is itself
+// absolute (a second volume on Windows, e.g. root on D: and the element
+// spelling C:\x) counts as inside.
+func resolveUnder(baseDir, rel string) (string, error) {
+	root := filepath.Dir(baseDir)
+	resolved := filepath.Clean(filepath.Join(baseDir, rel))
+	under, err := filepath.Rel(root, resolved)
+	if err != nil || under == ".." || strings.HasPrefix(under, ".."+string(filepath.Separator)) || filepath.IsAbs(under) {
+		return "", fmt.Errorf("path %q escapes the test suite root %s", rel, root)
+	}
+	return resolved, nil
+}
+
 // RunFile executes one contract test file (redesign-v3.md §3.2). The pipeline
 // runs in-process against the real engine with an ephemeral store, a fixed
 // clock and capture-wrapped sinks.
@@ -119,7 +142,10 @@ func RunFile(testFile string, reg *registry.Registry) (*Report, error) {
 	}
 
 	baseDir := filepath.Dir(testFile)
-	pipelinePath := filepath.Clean(filepath.Join(baseDir, spec.Pipeline))
+	pipelinePath, err := resolveUnder(baseDir, spec.Pipeline)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", testFile, err)
+	}
 
 	lr := config.LoadFile(pipelinePath)
 	if lr.HasErrors() {
@@ -203,7 +229,12 @@ func runCase(baseDir, pipelinePath string, pip *ir.Pipeline, c specCase, reg *re
 		}
 	case len(c.Inject.Messages) > 0:
 		for _, mf := range c.Inject.Messages {
-			raw, err := os.ReadFile(filepath.Clean(filepath.Join(baseDir, mf)))
+			fixture, err := resolveUnder(baseDir, mf)
+			if err != nil {
+				fail("%v", err)
+				continue
+			}
+			raw, err := os.ReadFile(fixture)
 			if err != nil {
 				fail("read fixture %s: %v", mf, err)
 				continue

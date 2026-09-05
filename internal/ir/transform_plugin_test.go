@@ -6,7 +6,7 @@ import (
 )
 
 // Transforms resolve through the registry exactly like sources and sinks
-// (spec v1.18): unknown names, version pins and schema violations are verify
+// (spec v1.19): unknown names, version pins and schema violations are verify
 // findings with the same diagnostic codes.
 func TestTransformPluginUnknown(t *testing.T) {
 	_, diags := build(t, `
@@ -23,6 +23,35 @@ sinks:
 	if !hasCode(diags, "plugin_unknown") {
 		t.Fatalf("want plugin_unknown, got %+v", diags)
 	}
+}
+
+// A grpc: block under a transform parses as a plugin named "grpc" (the
+// out-of-process block syntax is source/sink-only): the plugin_unknown hint
+// must say out-of-process transforms are future work, not send the user to
+// the plugin catalog for a plugin that cannot exist.
+func TestTransformGrpcBlockHintFutureWork(t *testing.T) {
+	_, diags := build(t, `
+apiVersion: eventboat/v3
+kind: Pipeline
+metadata: { name: x }
+sources:
+  in: { file: { path: a } }
+transforms:
+  t:
+    from: [in]
+    grpc: { command: ["./t"], schema: "t/manifest.json" }
+sinks:
+  out: { from: [t], file: { path: b } }
+`)
+	for _, d := range diags {
+		if d.Code == "plugin_unknown" && strings.Contains(d.Message, `"grpc"`) {
+			if !strings.Contains(d.Hint, "future work") {
+				t.Fatalf("hint = %q, want the future-work wording", d.Hint)
+			}
+			return
+		}
+	}
+	t.Fatalf("expected plugin_unknown for grpc, got %+v", diags)
 }
 
 func TestTransformVersionPin(t *testing.T) {

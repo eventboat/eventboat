@@ -60,13 +60,30 @@ type Predicate struct {
 	parameters map[string]any
 }
 
+// maxEvalCostUnits bounds the runtime cost of one predicate evaluation —
+// the CEL counterpart of Starlark's 100k step budget. cel-go's runtime cost
+// model charges ~1 per arithmetic/logical step, per element for
+// comprehensions, and input length × 0.1 for size-driven operations
+// (equality/comparison on strings, regex matches, contains), so a realistic
+// predicate over a KB-scale message lands in the low hundreds and even a
+// 10k-iteration comprehension stays near 1e5; 1e6 leaves an order of
+// magnitude of headroom over that while cancelling payload-driven blowups
+// (a regex or equality over a >10 MB string trips it, as does a >100k-wide
+// comprehension fan-out). Exceeding the limit rides the ordinary eval-error
+// path (EvalError → "condition does not pass" + counter), the same contract
+// as every other runtime failure.
+const maxEvalCostUnits = 1_000_000
+
 // Compile parses, checks and plans one predicate.
 func (e *Env) Compile(src string) (*Predicate, error) {
 	ast, issues := e.env.Compile(src)
 	if issues != nil && issues.Err() != nil {
 		return nil, &CompileError{Expr: src, Detail: issues.Err().Error()}
 	}
-	program, err := e.env.Program(ast)
+	// CostLimit implies OptTrackCost; the interpreter checks the budget as
+	// it observes steps and cancels the evaluation with an "operation
+	// cancelled: actual cost limit exceeded" error.
+	program, err := e.env.Program(ast, cel.CostLimit(maxEvalCostUnits))
 	if err != nil {
 		return nil, &CompileError{Expr: src, Detail: err.Error()}
 	}

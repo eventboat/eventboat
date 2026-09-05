@@ -44,9 +44,20 @@ const uiHTML = `<!doctype html>
 let mermaidReady = false;
 if (window.mermaid) { mermaid.initialize({ startOnLoad: false, theme: 'dark' }); mermaidReady = true; }
 
+// When the server runs with a token (internal/admin/security.go), the
+// sign-in page forwards it here as ?token=; it is kept in sessionStorage and
+// stripped from the URL. Data fetches then use the Authorization header; the
+// SSE stream uses ?token= because EventSource cannot set headers (the
+// leakage caveat is documented in security.go).
+const qpToken = new URLSearchParams(location.search).get('token');
+if (qpToken) { sessionStorage.setItem('eb_admin_token', qpToken); history.replaceState(null, '', '/admin/'); }
+const TOKEN = sessionStorage.getItem('eb_admin_token');
+const AUTH = TOKEN ? {headers: {Authorization: 'Bearer ' + TOKEN}} : {};
+
 async function refresh() {
   try {
-    const res = await fetch('/admin/status.json');
+    const res = await fetch('/admin/status.json', AUTH);
+    if (res.status === 401) { document.getElementById('conn').textContent = 'unauthorized (token required)'; return; }
     const pipelines = await res.json();
     render(pipelines);
     document.getElementById('conn').textContent = 'live';
@@ -101,7 +112,7 @@ function sprintf(fmt, args) { return fmt.replace('%s', () => args[0]); }
 
 refresh();
 setInterval(refresh, 2000);
-const ev = new EventSource('/admin/sse');
+const ev = new EventSource('/admin/sse' + (TOKEN ? '?token=' + encodeURIComponent(TOKEN) : ''));
 ev.addEventListener('status', e => render(JSON.parse(e.data)));
 ev.onerror = () => { document.getElementById('events').textContent = 'event stream disconnected; retrying…'; };
 ev.addEventListener('deploy', e => logEvent('deploy', e.data));

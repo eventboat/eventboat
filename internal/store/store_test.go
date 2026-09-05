@@ -2,6 +2,9 @@ package store
 
 import (
 	"database/sql"
+	"fmt"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -104,6 +107,70 @@ func TestSQLiteStore(t *testing.T) {
 		t.Fatal(err)
 	}
 	exerciseStore(t, st)
+}
+
+// The DSN pragmas must land on every pooled connection: WAL journaling plus
+// synchronous=NORMAL is the durability/throughput contract (a silent fallback
+// to the rollback journal or FULL sync would resurrect the per-write fsync
+// convoy). NORMAL is 1 on the 0=OFF/1=NORMAL/2=FULL scale.
+func TestSQLitePragmasApplied(t *testing.T) {
+	st, err := OpenSQLite(t.TempDir() + "/pragmas.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+	db := st.DB()
+	var journal string
+	if err := db.QueryRow(`PRAGMA journal_mode`).Scan(&journal); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.EqualFold(journal, "wal") {
+		t.Errorf("journal_mode = %q, want wal", journal)
+	}
+	var sync int
+	if err := db.QueryRow(`PRAGMA synchronous`).Scan(&sync); err != nil {
+		t.Fatal(err)
+	}
+	if sync != 1 {
+		t.Errorf("synchronous = %d, want 1 (NORMAL)", sync)
+	}
+}
+
+// WAL allows one writer plus concurrent readers: with two pooled connections,
+// status-style reads must proceed while spool writes land (the admin/jobs
+// queries used to convoy behind writes on the single connection).
+func TestSQLiteConcurrentReadWrite(t *testing.T) {
+	st, err := OpenSQLite(t.TempDir() + "/concurrent.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+	if err := st.CreateJobRun(JobRun{RunID: "r0", Pipeline: "p", Status: JobSuccess, TriggerType: "manual"}); err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	for w := 0; w < 2; w++ {
+		wg.Add(1)
+		go func(w int) {
+			defer wg.Done()
+			for i := 0; i < 50; i++ {
+				if _, err := st.AppendSpool("p", registry.Message{ID: "m", Raw: []byte(`{}`)}, time.Now()); err != nil {
+					t.Errorf("writer %d: %v", w, err)
+					return
+				}
+				if _, err := st.JobRuns("p", 5); err != nil {
+					t.Errorf("reader %d: %v", w, err)
+					return
+				}
+			}
+		}(w)
+	}
+	wg.Wait()
+	var n int
+	_ = st.DB().QueryRow(`SELECT COUNT(*) FROM spool WHERE pipeline = 'p'`).Scan(&n)
+	if n != 100 {
+		t.Fatalf("spool rows = %d, want 100", n)
+	}
 }
 
 // exerciseJobStore covers the M2 surface: job run history, run-attributed
@@ -234,6 +301,81 @@ func TestSQLiteJobStore(t *testing.T) {
 		t.Fatal(err)
 	}
 	exerciseJobStore(t, st)
+}
+
+// exerciseSpoolRetention covers the retention sweep on both backends: rows
+// at or below the cutoff vanish, rows above it survive, seq assignment stays
+// monotonic after a trim, and windowed pagination resumes across the cut.
+func exerciseSpoolRetention(t *testing.T, st Store) {
+	t.Helper()
+	defer func() { _ = st.Close() }()
+	now := time.Date(2026, 9, 3, 12, 0, 0, 0, time.UTC)
+	const n = 30
+	for i := 0; i < n; i++ {
+		if _, err := st.AppendSpool("p", registry.Message{ID: fmt.Sprintf("m-%d", i+1), Raw: []byte(`{}`)}, now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	spoolLen := func() int {
+		count := 0
+		_ = st.ReplayFrom("p", 0, func(int64, registry.Message, time.Time) error { count++; return nil })
+		return count
+	}
+	firstSeq := func() int64 {
+		first := int64(-1)
+		_ = st.ReplayFrom("p", 0, func(seq int64, m registry.Message, ts time.Time) error {
+			if first < 0 {
+				first = seq
+			}
+			return nil
+		})
+		return first
+	}
+	if got := spoolLen(); got != n {
+		t.Fatalf("spool = %d rows, want %d", got, n)
+	}
+
+	if removed, err := st.DeleteSpoolThrough("p", 10); err != nil || removed != 10 {
+		t.Fatalf("trim: removed=%d err=%v, want 10", removed, err)
+	}
+	if got := spoolLen(); got != 20 {
+		t.Fatalf("spool after trim = %d rows, want 20", got)
+	}
+	if got := firstSeq(); got != 11 {
+		t.Fatalf("first surviving seq = %d, want 11", got)
+	}
+
+	// Seq assignment must not restart after a trim (a len(spool)+1 style
+	// counter would hand out seq 1 again and collide with history).
+	seq, err := st.AppendSpool("p", registry.Message{ID: "m-new", Raw: []byte(`{}`)}, now)
+	if err != nil || seq != n+1 {
+		t.Fatalf("append after trim: seq=%d err=%v, want %d", seq, err, n+1)
+	}
+
+	last, more, err := st.ReplayPage("p", 0, 10, func(int64, registry.Message, time.Time) error { return nil })
+	if err != nil || last != 20 || !more {
+		t.Fatalf("page1: last=%d more=%v err=%v, want 20/true", last, more, err)
+	}
+	last, more, err = st.ReplayPage("p", last, 10, func(int64, registry.Message, time.Time) error { return nil })
+	if err != nil || last != 30 || !more {
+		t.Fatalf("page2: last=%d more=%v err=%v, want 30/true", last, more, err)
+	}
+	last, more, err = st.ReplayPage("p", last, 10, func(int64, registry.Message, time.Time) error { return nil })
+	if err != nil || last != 31 || more {
+		t.Fatalf("page3: last=%d more=%v err=%v, want 31/false", last, more, err)
+	}
+}
+
+func TestMemorySpoolRetention(t *testing.T) {
+	exerciseSpoolRetention(t, NewMemory("p"))
+}
+
+func TestSQLiteSpoolRetention(t *testing.T) {
+	st, err := OpenSQLite(t.TempDir() + "/retention.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	exerciseSpoolRetention(t, st)
 }
 
 // A database created by the M1 schema (no job_run_id column) migrates in

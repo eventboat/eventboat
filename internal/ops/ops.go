@@ -34,6 +34,10 @@ type Options struct {
 	// StoreFor returns the durable store for one pipeline (shared SQLite by
 	// default; tests may inject per-pipeline memory stores).
 	StoreFor func(pipeline string) (store.Store, error)
+	// SpoolRetention bounds spool rows behind the checkpoint
+	// (storage.spool_retention; 0 = the engine default) — passed through to
+	// every managed engine.
+	SpoolRetention int64
 	// Clock for rate windows (tests).
 	Clock func() time.Time
 	// Obs receives telemetry (nil disables).
@@ -165,12 +169,24 @@ func (s *Service) Test(suiteContent, pipelineContent string) (*testrun.Report, e
 		return nil, err
 	}
 	defer func() { _ = os.RemoveAll(dir) }()
-	suitePath := filepath.Join(dir, "suite.yaml")
+	// The suite sits one level below its root (the documented
+	// <root>/tests/<suite>.yaml layout) so the containment check in testrun
+	// bounds agent-supplied suite paths to THIS fresh temp dir. The pipeline
+	// is written at both spellings' targets: sibling of the suite (the MCP
+	// tool contract `pipeline: pipeline.yaml`) and one level up (the
+	// README/spec convention `pipeline: ../pipeline.yaml`).
+	suiteDir := filepath.Join(dir, "tests")
+	if err := os.MkdirAll(suiteDir, 0o755); err != nil {
+		return nil, err
+	}
 	if pipelineContent != "" {
-		if err := os.WriteFile(filepath.Join(dir, "pipeline.yaml"), []byte(pipelineContent), 0o644); err != nil {
-			return nil, err
+		for _, p := range []string{filepath.Join(suiteDir, "pipeline.yaml"), filepath.Join(dir, "pipeline.yaml")} {
+			if err := os.WriteFile(p, []byte(pipelineContent), 0o644); err != nil {
+				return nil, err
+			}
 		}
 	}
+	suitePath := filepath.Join(suiteDir, "suite.yaml")
 	if err := os.WriteFile(suitePath, []byte(suiteContent), 0o644); err != nil {
 		return nil, err
 	}
@@ -251,6 +267,7 @@ func (s *Service) startManaged(ctx context.Context, cfg *config.Pipeline, file s
 		opts.EngineOptions = engine.DefaultOptions().WithLimits(cfg.Limits)
 		opts.EngineOptions.SinkWrapper = s.tailWrapper(cfg)
 		opts.EngineOptions.Obs = s.opts.Obs
+		opts.EngineOptions.SpoolRetention = s.opts.SpoolRetention
 		if cfg.Telemetry != nil {
 			opts.EngineOptions.SpanSampleRate = cfg.Telemetry.SpanSampleRate
 		}
@@ -282,6 +299,7 @@ func (s *Service) startManaged(ctx context.Context, cfg *config.Pipeline, file s
 		opts := engine.DefaultOptions().WithLimits(cfg.Limits)
 		opts.SinkWrapper = s.tailWrapper(cfg)
 		opts.Obs = s.opts.Obs
+		opts.SpoolRetention = s.opts.SpoolRetention
 		if cfg.Telemetry != nil {
 			opts.SpanSampleRate = cfg.Telemetry.SpanSampleRate
 		}
@@ -549,7 +567,8 @@ func (s *Service) recordTail(node string, msgs []registry.Message, redact []reda
 // DeadLetterQuery filters dead letters; where is a CEL predicate over
 // {payload, meta}.
 func (s *Service) DeadLetterQuery(pipeline, since, where string, limit int) ([]store.DeadLetter, error) {
-	if _, err := s.of(pipeline); err != nil {
+	m, err := s.of(pipeline)
+	if err != nil {
 		return nil, err
 	}
 	st, err := s.opts.StoreFor(pipeline)
@@ -590,7 +609,31 @@ func (s *Service) DeadLetterQuery(pipeline, since, where string, limit int) ([]s
 	if limit > 0 && len(dls) > limit {
 		dls = dls[:limit]
 	}
-	return dls, nil
+	return redactDeadLetters(m.cfg, dls), nil
+}
+
+// redactDeadLetters masks telemetry.redact-matched values in dead letters
+// about to cross an ops surface (admin REST + MCP tools): the SAME compiled
+// patterns the tail wrapper uses, applied to both roots — the payload
+// patterns against the raw document, the meta.* patterns against the meta
+// map. Presentation-only, like the tail: the stored rows stay raw so
+// DeadLetterReplay re-injects the original bytes (the data path is never
+// altered).
+func redactDeadLetters(cfg *config.Pipeline, dls []store.DeadLetter) []store.DeadLetter {
+	var payloadRedact, metaRedact []redactor
+	if cfg != nil && cfg.Telemetry != nil {
+		payloadRedact = compileRedactForRoot(cfg.Telemetry.Redact, "payload")
+		metaRedact = compileRedactForRoot(cfg.Telemetry.Redact, "meta")
+	}
+	for i := range dls {
+		dls[i].Raw = []byte(redactJSON(string(dls[i].Raw), payloadRedact))
+		if len(metaRedact) > 0 {
+			if masked, ok := redactValue(dls[i].Meta, metaRedact).(map[string]any); ok {
+				dls[i].Meta = masked
+			}
+		}
+	}
+	return dls
 }
 
 // DeadLetterReplay re-injects selected dead letters into the RUNNING

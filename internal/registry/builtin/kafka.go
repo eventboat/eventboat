@@ -30,10 +30,11 @@ type kafkaSource struct {
 	topics  []string
 	group   string
 
-	mu      sync.Mutex
-	reader  *kafka.Reader
-	pending map[int64]kafka.Message // srcSeq -> uncommitted message
-	nextSeq int64
+	mu            sync.Mutex
+	reader        *kafka.Reader
+	pending       map[int64]kafka.Message // srcSeq -> uncommitted message
+	nextSeq       int64
+	lastCommitted int64 // highest srcSeq already folded by Commit
 }
 
 func (s *kafkaSource) Init(state []byte) error { return nil } // offsets live in the consumer group
@@ -73,11 +74,20 @@ func (s *kafkaSource) Run(ctx context.Context, emit func(registry.Message)) {
 func (s *kafkaSource) Commit(ctx context.Context, throughSrcSeq int64) ([]byte, error) {
 	s.mu.Lock()
 	var toCommit []kafka.Message
-	for seq := int64(1); seq <= throughSrcSeq; seq++ {
+	// Commit runs on every frontier advance (~per message), so the scan must
+	// start at the watermark, not at 1: the scan itself deletes every seq it
+	// visits, which keeps each call O(new work) instead of O(all emissions).
+	// The watermark advances even on the early-return paths below — pending
+	// is drained by the scan itself, so a stale watermark would only regrow
+	// the scan window, never recover entries.
+	for seq := s.lastCommitted + 1; seq <= throughSrcSeq; seq++ {
 		if m, ok := s.pending[seq]; ok {
 			toCommit = append(toCommit, m)
 			delete(s.pending, seq)
 		}
+	}
+	if throughSrcSeq > s.lastCommitted {
+		s.lastCommitted = throughSrcSeq
 	}
 	r := s.reader
 	s.mu.Unlock()

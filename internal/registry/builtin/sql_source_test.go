@@ -164,6 +164,62 @@ func TestSQLSourceEmitPage(t *testing.T) {
 	}
 }
 
+// Commit scans only the unscanned tail of the seq space, and Pull — which
+// re-numbers srcSeqs from 1 per session — must reset the scan watermark with
+// them: a stale watermark from the previous session would sit above the new
+// session's frontier and skip its commits entirely, freezing the persisted
+// watermark.
+func TestSQLSourceCommitWatermarkAcrossPullSessions(t *testing.T) {
+	path := t.TempDir() + "/wm.db"
+	db := openTestDB(t, path)
+	insertOrders(t, db, 0, 20)
+
+	src := newSQLSource(t, map[string]any{
+		"driver": "sqlite", "dsn": "file:" + path,
+		"query":      "SELECT id FROM orders",
+		"cursor":     map[string]any{"column": "id"},
+		"pagination": map[string]any{"key": []any{"id"}, "page_size": 10},
+	})
+	pulled := 0
+	if err := src.Pull(context.Background(), func(m registry.Message) { pulled++ }); err != nil {
+		t.Fatal(err)
+	}
+	if pulled != 20 {
+		t.Fatalf("pulled %d rows, want 20", pulled)
+	}
+	// Per-message frontier advances: each call folds exactly the new seq and
+	// reports the frontier row's cursor (row ids are 0-based).
+	for seq := int64(1); seq <= 20; seq++ {
+		state, err := src.Commit(context.Background(), seq)
+		if err != nil {
+			t.Fatalf("commit through %d: %v", seq, err)
+		}
+		if want := fmt.Sprintf(`"watermark":"%d"`, seq-1); !strings.Contains(string(state), want) {
+			t.Fatalf("commit through %d: state = %s, want %s", seq, state, want)
+		}
+	}
+
+	// Session 2: crash replay — Init restored an older checkpoint, so the
+	// pull re-emits rows 10..19 numbered 1..10 again.
+	if err := src.Init([]byte(`{"watermark":"9","last_key":[9]}`)); err != nil {
+		t.Fatal(err)
+	}
+	pulled = 0
+	if err := src.Pull(context.Background(), func(m registry.Message) { pulled++ }); err != nil {
+		t.Fatal(err)
+	}
+	if pulled != 10 {
+		t.Fatalf("replayed pull got %d rows, want 10", pulled)
+	}
+	state, err := src.Commit(context.Background(), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(state), `"watermark":"19"`) {
+		t.Fatalf("replayed session commit state = %s, want watermark 19 (a stale scan watermark skipped the session)", state)
+	}
+}
+
 // Factory validation paths.
 func TestSQLSourceFactoryValidation(t *testing.T) {
 	reg := registry.New()

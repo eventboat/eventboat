@@ -83,6 +83,35 @@ All notable changes to Eventboat. The format follows
   remains available as an escape hatch. Transforms (script/split/wasm)
   keep their line-precise hand parsing.
 
+- **The spool is now bounded by retention** (third performance finding:
+  nothing ever deleted spool rows, so SQLite disk and `--ephemeral`
+  memory grew linearly with total messages). Once the DURABLE checkpoint
+  reaches C, rows at or below `C - spool_retention` are deleted in one
+  batched sweep per window of checkpoint progress (piggybacked on the
+  checkpoint flush path — never per message; the cutoff derives from the
+  persisted position, so a stretch of failing checkpoint writes cannot
+  trim into the replay window). New Runtime config knob
+  `storage.spool_retention` (rows kept behind the checkpoint; default
+  10,000, `0` = default, negative rejected). Crash recovery is
+  unaffected — it replays only beyond the checkpoint, always above the
+  cutoff — and `replay --spool` keeps the retained window as queryable
+  history: replaying older-than-retention seqs now finds nothing (raise
+  the knob for deeper backfills; dead letters are a separate table and
+  never trimmed). The in-memory store mirrors the bound so `--ephemeral`
+  runs stop growing too, and its `ReplayPage` windows the slice instead
+  of copying the whole spool per page (replay was O(N²) in total
+  pages).
+- **The SQLite store now pairs WAL with `synchronous=NORMAL`** (DSN
+  pragma; it previously left SQLite's default FULL in place): commits
+  stop fsyncing the WAL per write and fsync at WAL checkpoints instead.
+  At-least-once semantics are preserved — NORMAL survives a process
+  crash intact (the primary failure model), and a power loss can only
+  widen the replay window (duplicates on re-emit, never loss, the same
+  contract as a checkpoint write that never reached disk). The store
+  also opens two connections now (WAL = one writer + concurrent
+  readers), so admin/jobs status reads stop convoying behind spool and
+  checkpoint writes.
+
 ### Added
 
 - **Container image, published to GHCR as
@@ -100,6 +129,41 @@ All notable changes to Eventboat. The format follows
 
 ### Fixed
 
+- **`explain --message` prints the wasm disclosure line again.** The
+  transform-plugin refactor left non-explain-safe transforms silent in
+  message traces: a pipeline with a wasm transform showed downstream
+  MATCH/no-match output that read as if it were based on the transformed
+  payload while it actually evaluated the pre-transform one. The trace now
+  prints `transform.wasm (module ..., entrypoint ...) — guest not dry-run;
+  downstream sees the pre-transform payload` (third-party transforms
+  without the explain-safe capability get the same disclosure); the guest
+  is still never executed in explain.
+- **A failed transform `Clone()` now fails the pipeline instead of sharing
+  one instance across workers.** When a plugin implements
+  `TransformCloner` (the contract for instances that are not
+  goroutine-safe — wasm module instances) but `Clone()` errors, the engine
+  used to log and continue with `workers` goroutines on the shared master:
+  a data race on exactly the state the plugin declared unsafe. The failure
+  is now worker-fatal — the engine cancels and drains, `Run` returns the
+  error (`node "x": transform worker clone: ...`), anything already in
+  flight stays uncommitted for replay (at-least-once holds), and job runs
+  fail instead of being marked successful. `Apply` never runs on the
+  shared instance; plugins that do not implement `TransformCloner` still
+  share one Init'ed instance by design (the author opted into sharing).
+- **Two hot-path defects that degraded long runs** (performance review):
+  - The commit tracker's per-source bookkeeping (`srcTracker.arrivedAt` /
+    `committedAt`) was write-only — nothing ever deleted entries, so both
+    maps grew linearly with the total messages processed and a long-running
+    pipeline (10k msg/s for days) drifted toward OOM. The frontier sweep now
+    deletes the seqs it passes; the maps stay bounded by the in-flight
+    window instead of the emission history.
+  - The kafka, file and sql sources rescanned `srcSeq` 1..N on every `Commit`
+    call, and the engine calls `Commit` on each frontier advance (~per
+    message) — O(N²) total, so throughput decayed over runtime. Each source
+    now keeps a per-run watermark of already-scanned seqs and scans only the
+    new tail (`toCommit` order, pending deletion and state semantics are
+    unchanged; the sql source resets the watermark per pull session, which
+    re-numbers seqs from 1).
 - **SIGTERM now triggers graceful shutdown** in every long-running verb
   (`run` single-pipeline and `--config-dir`, `mcp`, `replay`,
   `trigger`). Previously only SIGINT was registered, so `docker stop`
@@ -109,6 +173,106 @@ All notable changes to Eventboat. The format follows
   both signals; the others now match it. Verified against the published
   image shape: `docker stop` now logs the settle status line and exits
   0.
+- **A third hot-path defect from the same performance review**: the
+  commit tracker's advance sweep scanned the ENTIRE in-flight srcRefs map
+  (up to the 10k high watermark) on every frontier advance (~per
+  message) while a hole pinned the prefix. Source refs are now a FIFO
+  ordered by spool seq — arrival is near-ordered (each source goroutine
+  registers back-to-back), and the rare cross-source inversion splices
+  into place — so the sweep pops the committed prefix from the head
+  instead of rescanning everything above it (~28,500ns → ~37ns per
+  advance at a full 10k window; `BenchmarkCommitTrackerSweep` locks it
+  in). The `committed`/`frontiers` callback maps are unchanged: they
+  escape the tracker lock into persistence and reuse would be visible to
+  concurrent observers. `snapshot()` is O(1) as well now (the outstanding
+  total is maintained incrementally instead of summing the in-flight map
+  under the lock on every poll).
+
+### Security
+
+- **The admin HTTP surface (Admin REST + SSE + UI + `/metrics` + `/mcp`)
+  now authenticates and validates Host headers** (security review P0: the
+  listener previously had no auth and no DNS-rebinding defense, while its
+  write endpoints — `POST /admin/deploy` above all — accept pipeline YAML
+  whose grpc plugin `command:` executes on the host). New
+  `internal/admin.Security` middleware:
+  - Optional bearer token, resolved `--admin-token` flag >
+    `EVENTBOAT_ADMIN_TOKEN` env > `admin.token` in the Runtime config.
+    When set, every request on the listener requires
+    `Authorization: Bearer <token>` (constant-time compare) or the UI's
+    `?token=` form — EventSource cannot set headers — and gets 401
+    otherwise. The read-only console gains a sign-in prompt (token kept
+    in sessionStorage); agents and curl should use the header.
+  - **Non-loopback binds now REQUIRE a token**: `admin.listen` addresses
+    other than 127.0.0.1/localhost/::1 refuse to start without one
+    (loopback without a token is unchanged — backward compatible for
+    local use).
+  - Host header allowlist (DNS-rebinding defense): loopback binds answer
+    only the loopback spellings of the configured port; a token-secured
+    wildcard bind (`0.0.0.0`/`:port`) skips Host checking since the
+    header carries no signal there — the token is the gate.
+  - Conservative server timeouts beyond the existing
+    `ReadHeaderTimeout`: ReadTimeout 60s, IdleTimeout 120s, and a
+    deliberately loose 15m WriteTimeout (SSE responses are long-lived
+    streams; the UI's EventSource reconnects).
+- **`metadata.name` is validated at the config loader** (security review
+  P1: the deployed YAML was written to
+  `<data-dir>/pipelines/<name>.yaml` with the name taken verbatim from
+  user-supplied YAML, so `../../evil` escaped the pipelines directory).
+  Names must now match `^[a-zA-Z0-9][a-zA-Z0-9._-]*$`, be at most 64
+  characters and contain no `..`; violations are the new `cfg_name_invalid`
+  error (empty names keep `cfg_metadata_name`). The loader is the single
+  gate, so CLI, LSP, MCP tools and the Admin REST surface are all covered,
+  and verify-first means no file is written for a rejected name.
+  **Behavior change**: previously-loadable configs with unusual names are
+  now rejected; renames are confined to the `metadata.name` field.
+- **Defense-in-depth round two** (the same security review's P2/P3
+  findings):
+  - Admin request bodies are capped at 8 MiB via `http.MaxBytesReader` in
+    the one `body()` helper every JSON endpoint funnels through; oversized
+    requests get 413 (two orders of magnitude over any realistic deploy
+    config — inline Starlark scripts are tens of KB — while bounding the
+    memory one request can pin; server timeouts alone bounded time, not
+    bytes).
+  - The dead-letter query (Admin REST `GET /admin/dlq/{pipeline}` and the
+    MCP `deadletter_query` tool) now applies the SAME `telemetry.redact`
+    patterns as the tail — payload patterns against the raw document,
+    `meta.*` patterns against the meta map — at the ops layer where both
+    surfaces meet. Presentation-only, like the tail: the stored rows stay
+    raw so `DeadLetterReplay` re-injects the original bytes.
+  - CEL predicates evaluate under a runtime cost limit of 1e6 cost units
+    (cel-go `CostLimit`), the CEL counterpart of Starlark's 100k step
+    budget: realistic predicates cost O(100) and even a 10k-iteration
+    comprehension stays near 1e5, while payload-driven blowups (regex or
+    equality over a >10 MB string, >100k-wide comprehension fan-out) are
+    cancelled on the EXISTING error path (eval error == condition does not
+    pass + counter, no new behavior). CESQL was checked and needs no
+    mirror: its host uses the CloudEvents SDK's own parser/evaluator and
+    never builds CEL programs.
+  - Contract-test suite paths (`pipeline:` and `inject.messages:` fixture
+    files) are containment-checked against the suite ROOT — the parent of
+    the suite's directory, i.e. the documented
+    `<root>/pipeline.yaml` + `<root>/tests/<suite>.yaml` project layout, so
+    the conventional `pipeline: ../pipeline.yaml` keeps working
+    (`filepath.Rel`-based, volume-aware on Windows): references escaping
+    above the root are rejected with an error naming the offending path.
+    On the MCP test surface the suite now runs from a fresh
+    `<tmp>/tests/` directory, which bounds agent-supplied paths to that
+    one temp dir — an MCP client can no longer point the daemon at
+    arbitrary files whose contents failure summaries echo back.
+  - The LSP server caps one framed message at 16 MiB (four orders of
+    magnitude over real document-sync payloads) and treats an oversized
+    `Content-Length` as a transport error (connection closed) instead of
+    pre-allocating the claimed size.
+  - The gRPC plugin transport sets explicit message caps on both sides:
+    `rpcplugin.MaxMessageSize` = 64 MiB, applied as dial call options on
+    the host and `MaxRecvMsgSize`/`MaxSendMsgSize` on the reference
+    plugin server, and documented in docs/plugins.md as part of the
+    transport contract. The engine bounds messages by COUNT
+    (`limits.max_in_flight`), never by bytes, so grpc-go's 4 MiB default
+    would have failed legal large Events with opaque ResourceExhausted
+    errors; 64 MiB sits above anything the engine produces today while
+    bounding a buggy or hostile plugin's per-message memory.
 
 ## v0.2.0-rc1 (2026-09-05)
 

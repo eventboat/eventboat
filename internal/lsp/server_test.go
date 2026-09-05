@@ -4,7 +4,9 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
+	"strings"
 	"testing"
 	"time"
 )
@@ -280,7 +282,7 @@ transforms:
 	items := completionAt(t, h, doc, 5, 6)
 	got := labels(items)
 	// Framework fields plus the registered transform plugins (script/split/
-	// wasm arrive through the catalog like any plugin, spec v1.18).
+	// wasm arrive through the catalog like any plugin, spec v1.19).
 	for _, want := range []string{"from", "workers", "version", "script", "split", "wasm"} {
 		if !got[want] {
 			t.Errorf("missing completion %q; got %v", want, got)
@@ -469,5 +471,29 @@ func TestShutdownExit(t *testing.T) {
 	h.notify("exit", nil)
 	if err := h.waitExit(5 * time.Second); err != nil {
 		t.Fatalf("exit returned error: %v", err)
+	}
+}
+
+// An oversized Content-Length is rejected before any allocation — a
+// malicious client cannot OOM the server by claiming a huge frame — and the
+// server treats it as a transport error and stops serving (connection
+// closed).
+func TestOversizedContentLengthRejected(t *testing.T) {
+	r := bufio.NewReader(strings.NewReader(
+		fmt.Sprintf("Content-Length: %d\r\n\r\n", maxMessageBytes+1)))
+	if _, err := readMessage(r); err == nil {
+		t.Fatal("oversized Content-Length should be rejected")
+	} else if !strings.Contains(err.Error(), "Content-Length") {
+		t.Fatalf("error should name the header: %v", err)
+	}
+
+	// The full server loop surfaces it as a transport error (no response is
+	// possible for a frame that was never parsed).
+	h := newHarness(t)
+	if _, err := h.w.Write([]byte(fmt.Sprintf("Content-Length: %d\r\n\r\n", maxMessageBytes+1))); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.waitExit(5 * time.Second); err == nil || !strings.Contains(err.Error(), "Content-Length") {
+		t.Fatalf("server should stop with the cap error, got %v", err)
 	}
 }

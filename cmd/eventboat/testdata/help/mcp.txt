@@ -1,6 +1,8 @@
 usage: eventboat mcp (--stdio | --http) [--config-dir <dir>] [--data-dir DIR]
 
 flags:
+  -admin-token string
+    	bearer token for the admin/MCP HTTP surface (required for non-loopback binds; also EVENTBOAT_ADMIN_TOKEN / admin.token)
   -config-dir string
     	directory of pipeline YAML files to deploy at startup
   -data-dir string

@@ -39,13 +39,14 @@ type fileSource struct {
 	pollEvery time.Duration
 	startAt   string
 
-	mu           sync.Mutex
-	f            *os.File
-	reader       *bufio.Reader
-	nextOffset   int64 // offset of the next unread byte
-	committedOff int64
-	pending      map[int64]int64 // srcSeq -> emitted end offset
-	nextSeq      int64
+	mu            sync.Mutex
+	f             *os.File
+	reader        *bufio.Reader
+	nextOffset    int64 // offset of the next unread byte
+	committedOff  int64
+	pending       map[int64]int64 // srcSeq -> emitted end offset
+	nextSeq       int64
+	lastCommitted int64 // highest srcSeq already folded by Commit
 }
 
 func (s *fileSource) Init(state []byte) error {
@@ -139,13 +140,19 @@ func (s *fileSource) pump(ctx context.Context, emit func(registry.Message)) {
 func (s *fileSource) Commit(ctx context.Context, throughSrcSeq int64) ([]byte, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for seq := int64(1); seq <= throughSrcSeq; seq++ {
+	// Watermark-bounded scan (see kafkaSource.Commit): Commit runs on every
+	// frontier advance and pending entries are deleted during the scan, so
+	// everything below lastCommitted is already drained.
+	for seq := s.lastCommitted + 1; seq <= throughSrcSeq; seq++ {
 		if end, ok := s.pending[seq]; ok {
 			delete(s.pending, seq)
 			if end > s.committedOff {
 				s.committedOff = end
 			}
 		}
+	}
+	if throughSrcSeq > s.lastCommitted {
+		s.lastCommitted = throughSrcSeq
 	}
 	st, _ := json.Marshal(struct {
 		Offset int64 `json:"offset"`

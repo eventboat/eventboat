@@ -26,11 +26,19 @@ type Config struct {
 type Storage struct {
 	DataDir   string
 	Ephemeral bool
+	// SpoolRetention is how many spool rows stay behind the checkpoint
+	// (spool_retention): rows older than that are history and get deleted as
+	// the checkpoint advances, bounding SQLite disk and --ephemeral memory on
+	// long runs. 0 = engine default (10_000).
+	SpoolRetention int64
 }
 
 type Admin struct {
 	Listen string
 	Enable bool
+	// Token is the bearer token of the admin HTTP surface (empty = none;
+	// mandatory for non-loopback binds — see internal/admin.Security).
+	Token string
 }
 
 type MCP struct {
@@ -46,7 +54,7 @@ type Telemetry struct {
 // Default returns the defaults used when no file exists.
 func Default() Config {
 	return Config{
-		Storage:   Storage{DataDir: "data"},
+		Storage:   Storage{DataDir: "data", SpoolRetention: 10_000},
 		Admin:     Admin{Listen: "127.0.0.1:7788", Enable: true},
 		MCP:       MCP{Enable: true},
 		Telemetry: Telemetry{SampleRatio: 0.1, Prometheus: true},
@@ -89,7 +97,7 @@ func Load(path string) (Config, error) {
 	if m, ok := doc["storage"].(map[string]any); ok {
 		for k := range m {
 			switch k {
-			case "data_dir", "ephemeral":
+			case "data_dir", "ephemeral", "spool_retention":
 			default:
 				return cfg, fmt.Errorf("runtime config %s: unknown storage key %q", file, k)
 			}
@@ -100,11 +108,17 @@ func Load(path string) (Config, error) {
 		if v, ok := m["ephemeral"].(bool); ok {
 			cfg.Storage.Ephemeral = v
 		}
+		if v, ok := anyInt(m["spool_retention"]); ok {
+			if v < 0 {
+				return cfg, fmt.Errorf("runtime config %s: storage.spool_retention must be >= 0 (rows kept behind the checkpoint)", file)
+			}
+			cfg.Storage.SpoolRetention = v
+		}
 	}
 	if m, ok := doc["admin"].(map[string]any); ok {
 		for k := range m {
 			switch k {
-			case "listen", "enable":
+			case "listen", "enable", "token":
 			default:
 				return cfg, fmt.Errorf("runtime config %s: unknown admin key %q", file, k)
 			}
@@ -114,6 +128,9 @@ func Load(path string) (Config, error) {
 		}
 		if v, ok := m["enable"].(bool); ok {
 			cfg.Admin.Enable = v
+		}
+		if v, ok := m["token"].(string); ok {
+			cfg.Admin.Token = strings.TrimSpace(v)
 		}
 	}
 	if m, ok := doc["mcp"].(map[string]any); ok {
@@ -147,4 +164,19 @@ func Load(path string) (Config, error) {
 		}
 	}
 	return cfg, nil
+}
+
+// anyInt reads a YAML scalar that yaml.v3 decoded as int (whole numbers) or
+// float64 (decimals) — `spool_retention: 2500` arrives as int, unlike the
+// ratio-style floats elsewhere in this file.
+func anyInt(v any) (int64, bool) {
+	switch n := v.(type) {
+	case int:
+		return int64(n), true
+	case int64:
+		return n, true
+	case float64:
+		return int64(n), true
+	}
+	return 0, false
 }

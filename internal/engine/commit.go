@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"sort"
 	"sync"
 )
 
@@ -13,11 +14,19 @@ type commitTracker struct {
 	pipeline string
 
 	outstanding  map[int64]int // spool seq -> outstanding branch count
+	openBranches int           // running sum of positive outstanding values (keeps snapshot O(1))
 	arrivedMax   int64         // highest seq appended (and pre-registered)
 	committedPtr int64         // next candidate seq for the contiguous prefix
 
-	srcRefs map[int64]srcRef // spool seq -> source emission (this run only)
-	srcs    map[string]*srcTracker
+	// srcRefs is the FIFO of source emissions awaiting their commit sweep,
+	// ordered by spool seq (this run only). Arrival is near-ordered: each
+	// source goroutine appends and registers back-to-back, but two sources
+	// racing through accept can register out of order — addSrcRef splices
+	// those rare inversions into place, so the head is always the lowest
+	// outstanding seq and the sweep pops a contiguous prefix.
+	srcRefs []srcRefEntry
+
+	srcs map[string]*srcTracker
 
 	onCommit  func(seq int64) // per-message commit hook (backpressure release)
 	onAdvance func(committedThrough int64, frontiers map[string]int64)
@@ -28,11 +37,17 @@ type srcRef struct {
 	srcSeq int64
 }
 
+// srcRefEntry is one source emission tagged with its spool seq (the FIFO
+// ordering key; the payload is the srcRef it resolves to at sweep time).
+type srcRefEntry struct {
+	seq int64
+	srcRef
+}
+
 func newCommitTracker(pipeline string, sources []string, onCommit func(int64), onAdvance func(int64, map[string]int64)) *commitTracker {
 	t := &commitTracker{
 		pipeline:    pipeline,
 		outstanding: map[int64]int{},
-		srcRefs:     map[int64]srcRef{},
 		srcs:        map[string]*srcTracker{},
 		onCommit:    onCommit,
 		onAdvance:   onAdvance,
@@ -49,6 +64,7 @@ func newCommitTracker(pipeline string, sources []string, onCommit func(int64), o
 func (t *commitTracker) arrived(seq int64, node string, srcSeq int64) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	t.openBranches += 1 - posBranches(t.outstanding[seq])
 	t.outstanding[seq] = 1
 	if seq > t.arrivedMax {
 		t.arrivedMax = seq
@@ -56,9 +72,30 @@ func (t *commitTracker) arrived(seq int64, node string, srcSeq int64) {
 	if node != "" {
 		if st, ok := t.srcs[node]; ok {
 			st.arrived(srcSeq)
-			t.srcRefs[seq] = srcRef{node: node, srcSeq: srcSeq}
+			t.addSrcRef(seq, node, srcSeq)
 		}
 	}
+}
+
+// addSrcRef records one source emission in the srcRefs FIFO. The common case
+// is an append (spool seqs from a monotonic counter, registered per source
+// goroutine back-to-back); a concurrent accept from another source can
+// register a lower seq after a higher one, so that rare inversion splices
+// into its sorted position — the queue stays ordered, which is what lets the
+// commit sweep pop from the head instead of scanning the whole in-flight
+// window on every advance (the old map scan was O(high watermark) per
+// message; the pop is O(messages swept)).
+func (t *commitTracker) addSrcRef(seq int64, node string, srcSeq int64) {
+	entry := srcRefEntry{seq: seq, srcRef: srcRef{node: node, srcSeq: srcSeq}}
+	n := len(t.srcRefs)
+	if n == 0 || seq > t.srcRefs[n-1].seq {
+		t.srcRefs = append(t.srcRefs, entry)
+		return
+	}
+	i := sort.Search(n, func(i int) bool { return t.srcRefs[i].seq >= seq })
+	t.srcRefs = append(t.srcRefs, srcRefEntry{})
+	copy(t.srcRefs[i+1:], t.srcRefs[i:])
+	t.srcRefs[i] = entry
 }
 
 // add applies a delta to the outstanding count of a message (fan-out adds,
@@ -71,7 +108,9 @@ func (t *commitTracker) add(seq int64, delta int) {
 		t.mu.Unlock()
 		return
 	}
+	before := t.outstanding[seq]
 	t.outstanding[seq] += delta
+	t.openBranches += posBranches(t.outstanding[seq]) - posBranches(before)
 	justCommit, advanced, through, frontiers := t.advanceLocked()
 	t.mu.Unlock()
 	t.invoke(justCommit, advanced, through, frontiers)
@@ -87,6 +126,7 @@ func (t *commitTracker) forceTerminal(seq int64) bool {
 		t.mu.Unlock()
 		return false
 	}
+	t.openBranches -= posBranches(t.outstanding[seq])
 	delete(t.outstanding, seq)
 	justCommit, advanced, through, frontiers := t.advanceLocked()
 	t.mu.Unlock()
@@ -117,12 +157,14 @@ func (t *commitTracker) advanceLocked() (justCommit []int64, advanced bool, thro
 	}
 	through = t.committedPtr - 1
 	committed := map[string][]int64{}
-	for seq := range t.srcRefs {
-		if seq <= through {
-			ref := t.srcRefs[seq]
-			committed[ref.node] = append(committed[ref.node], ref.srcSeq)
-			delete(t.srcRefs, seq)
-		}
+	// Pop the swept prefix off the srcRefs FIFO (head-first; addSrcRef keeps
+	// the queue ordered). Re-slicing drops the entry without a second
+	// structure, and append reclaims the consumed capacity on its next
+	// reallocation, so the queue stays bounded by the in-flight window.
+	for len(t.srcRefs) > 0 && t.srcRefs[0].seq <= through {
+		ref := t.srcRefs[0].srcRef
+		t.srcRefs = t.srcRefs[1:]
+		committed[ref.node] = append(committed[ref.node], ref.srcSeq)
 	}
 	for node, seqs := range committed {
 		if st, ok := t.srcs[node]; ok {
@@ -167,17 +209,27 @@ func (t *commitTracker) isOutstanding(seq int64) bool {
 	return open && n > 0
 }
 
-// snapshot reports counters for tests and status output.
+// posBranches is one seq's contribution to openBranches: only positive
+// counts are open work (a 0 entry awaits its sweep; a negative value would
+// be a double-terminal bug, and reads as closed either way). Every mutation
+// of t.outstanding adjusts openBranches by the change in this quantity, all
+// under t.mu.
+func posBranches(v int) int {
+	if v > 0 {
+		return v
+	}
+	return 0
+}
+
+// snapshot reports counters for tests and status output. The outstanding
+// total is maintained incrementally (openBranches): snapshot is polled from
+// the hot path (WaitCommit's 2ms loop, Quiesced, ops status), so it must not
+// walk the in-flight map under the lock. TestCommitTrackerOpenCountMatchesMap
+// pins it to the map it summarizes.
 func (t *commitTracker) snapshot() (outstanding int, committedThrough int64, arrivedMax int64) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	open := 0
-	for _, n := range t.outstanding {
-		if n > 0 {
-			open += n
-		}
-	}
-	return open, t.committedPtr - 1, t.arrivedMax
+	return t.openBranches, t.committedPtr - 1, t.arrivedMax
 }
 
 // srcTracker tracks per-source commit frontiers for emissions of THIS run.
@@ -208,6 +260,7 @@ func (s *srcTracker) committed(seqs []int64) {
 	for _, seq := range seqs {
 		s.committedAt[seq] = true
 	}
+	from := s.front + 1
 	for {
 		next := s.front + 1
 		if s.committedAt[next] && s.arrivedAt[next] {
@@ -215,6 +268,17 @@ func (s *srcTracker) committed(seqs []int64) {
 			continue
 		}
 		break
+	}
+	// The swept range is dead state: front only ever passes seqs present in
+	// both maps and never revisits them, so dropping them here keeps the maps
+	// bounded by the in-flight window instead of growing with every message
+	// the run processes. Emission seqs are monotonic within a run (sources
+	// number them from a per-run counter; replayed spool rows never reach the
+	// tracker), so no key at or below front can appear after the sweep —
+	// commits landing above front simply wait for the frontier.
+	for seq := from; seq <= s.front; seq++ {
+		delete(s.arrivedAt, seq)
+		delete(s.committedAt, seq)
 	}
 }
 

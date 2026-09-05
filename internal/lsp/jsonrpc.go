@@ -42,6 +42,15 @@ const (
 	codeInternal       = -32603
 )
 
+// maxMessageBytes caps one framed LSP message. Real payloads are small —
+// document syncs for pipeline YAML of a few hundred lines stay in the tens of
+// KB — so 16 MiB is four orders of magnitude of headroom while preventing a
+// malicious/compromised client from claiming a huge Content-Length and
+// OOMing the server before a single byte is read. Violations are transport
+// errors: Serve closes the connection (no response is possible for a
+// request that was never framed).
+const maxMessageBytes = 16 << 20
+
 // IsRequest reports whether the message expects a response (has an id).
 func (m *Message) IsRequest() bool { return len(m.ID) > 0 && m.Method != "" }
 
@@ -77,6 +86,9 @@ func readMessage(r *bufio.Reader) (*Message, error) {
 	}
 	if contentLength < 0 {
 		return nil, fmt.Errorf("lsp: missing Content-Length header")
+	}
+	if contentLength > maxMessageBytes {
+		return nil, fmt.Errorf("lsp: Content-Length %d exceeds the %d-byte message cap", contentLength, maxMessageBytes)
 	}
 	body := make([]byte, contentLength)
 	if _, err := io.ReadFull(r, body); err != nil {

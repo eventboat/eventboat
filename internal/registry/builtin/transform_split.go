@@ -14,7 +14,7 @@ type splitConfig struct{}
 // splitTransform turns an array payload into one message per element
 // (redesign-v3-review R8). Children are shallow copies sharing the parent's
 // spool identity, message_id and metadata; only Decoded is replaced. An
-// empty array yields zero outputs, which the engine settles as filtered.
+// empty array yields zero outputs, which the engine commits as filtered.
 type splitTransform struct{}
 
 func registerSplitTransform(reg *registry.Registry) error {

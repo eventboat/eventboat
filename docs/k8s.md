@@ -27,8 +27,12 @@ ready manifest. The essentials:
   PersistentVolumeClaim when the spool/dead-letter history must survive
   rescheduling (the common case for job pipelines with watermarks).
 - **Admin surface.** Binds 127.0.0.1 by default (`kind: Runtime` config
-  changes the listener); the POC build has **no authentication** on it —
-  keep it out of the cluster network or behind your own boundary.
+  changes the listener). It authenticates with a bearer token
+  (`--admin-token` / `EVENTBOAT_ADMIN_TOKEN` / `admin.token` in the Runtime
+  config): with a token set, every request — including `/admin/deploy` —
+  needs `Authorization: Bearer <token>`. Non-loopback listens (the usual
+  in-cluster shape) **refuse to start without a token**; keep the token out
+  of the ConfigMap (an env var from a Secret fits the resolution order).
 
 ## Why no Operator (recorded trim, M4 review R14)
 

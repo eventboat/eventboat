@@ -32,6 +32,18 @@ import (
 // "eventboat_plugin").
 const ProtocolVersion = 1
 
+// MaxMessageSize is the explicit gRPC message cap on the plugin transport,
+// both directions and both roles. grpc-go's default receive limit is 4 MiB,
+// which a legitimate Event can exceed (the engine bounds messages by COUNT —
+// limits.max_in_flight / the 10k spool high watermark — never by bytes, and
+// sink Write batches several Events into one message), so leaving the
+// default would fail legal workloads with opaque ResourceExhausted errors.
+// 64 MiB is deliberately above any message the engine can produce today
+// (payloads of a few MB plus a batch of siblings) while still bounding a
+// buggy or hostile plugin's per-message memory. The number is part of the
+// transport contract — documented in docs/plugins.md.
+const MaxMessageSize = 64 << 20
+
 // handshakeTimeout bounds the wait for the handshake line; stopGrace bounds
 // the wait for voluntary exit after stdin closes.
 const (
@@ -156,6 +168,13 @@ func spawn(ctx context.Context, cfg *config.GrpcConfig, manifest *config.PluginM
 
 	conn, err := grpc.NewClient(p.hs.Listen,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		// Explicit message caps (see MaxMessageSize): raise the client-side
+		// receive/send limits above grpc-go's 4 MiB default so legal large
+		// Events pass, while keeping the per-message bound defined.
+		grpc.WithDefaultCallOptions(
+			grpc.MaxCallRecvMsgSize(MaxMessageSize),
+			grpc.MaxCallSendMsgSize(MaxMessageSize),
+		),
 		grpc.WithUnaryInterceptor(authInterceptor(p.hs.Auth)),
 		grpc.WithStreamInterceptor(authStreamInterceptor(p.hs.Auth)))
 	if err != nil {

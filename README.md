@@ -335,7 +335,12 @@ Other recorded trims:
 - **Deployment-level config** (open question #10): `kind: Runtime` YAML
   (storage/admin/mcp/telemetry) resolved from `--runtime`, then
   `./eventboat.yaml`, then defaults; `--data-dir`/`--ephemeral` remain as
-  overrides.
+  overrides. `storage.spool_retention` bounds the spool (rows kept behind
+  the checkpoint, default 10,000): older rows are batch-deleted as the
+  checkpoint advances, so disk (SQLite) and memory (`--ephemeral`) stay
+  bounded on long runs — crash recovery replays only beyond the checkpoint
+  and `replay --spool` keeps the retained window; raise it if deeper spool
+  backfills matter.
 
 ### The operations surface (M2, §3.4) — rulings
 
@@ -375,9 +380,20 @@ Other recorded trims:
   incremental run → tail.
 - **Runtime config** (open question #10, review R13): `kind: Runtime` YAML
   (storage/admin/mcp/telemetry), resolved from `--runtime`, then
-  `./eventboat.yaml`, then defaults; CLI flags override. The admin listener
-  binds 127.0.0.1 by default and has NO authentication (POC boundary —
-  recorded).
+  `./eventboat.yaml`, then defaults; CLI flags override.
+- **Admin surface security** (security review P0): the admin listener
+  (Admin REST + SSE + UI, `/metrics`, `/mcp` — one mux, one gate) takes an
+  optional bearer token — `--admin-token` flag > `EVENTBOAT_ADMIN_TOKEN`
+  env > `admin.token` in the Runtime config. With a token set, every
+  request needs `Authorization: Bearer <token>` (the read-only console
+  prompts and keeps it in sessionStorage; its SSE stream and first
+  navigation use `?token=`, which therefore may appear in browser history
+  and proxy logs — use the header from curl/agents). Non-loopback
+  `admin.listen` binds **refuse to start without a token** (the write
+  surface can deploy pipeline YAML whose grpc plugin `command:` executes on
+  the host); loopback without a token is unchanged. Loopback binds also
+  enforce a Host allowlist (DNS-rebinding defense); wildcard binds skip it
+  and rely on the mandatory token.
 
 ### Observability (M2, §6.6)
 
@@ -728,7 +744,7 @@ scalar root configs — the script plugin's config is the Starlark source
 itself): script/split/wasm register like every other builtin, the
 plugin-name-as-key convention and `version:` pins apply to `transforms:`
 nodes, and third-party compile-in transforms use the same API. A plugin
-transform returning zero outputs filters the message (settle-as-filtered +
+transform returning zero outputs filters the message (commit-as-filtered +
 NoMatch counter). Out-of-process gRPC transforms remain future work.
 
 ## Repository layout

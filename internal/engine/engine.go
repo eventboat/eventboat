@@ -47,6 +47,14 @@ type Options struct {
 	DrainTimeout   time.Duration // graceful drain bound before hard cancel
 	StarOptions    starhost.Options
 
+	// SpoolRetention bounds the spool: once the DURABLE checkpoint reaches C,
+	// rows at or below C - SpoolRetention are history and get deleted (one
+	// batched sweep per window of advance, on the checkpoint flush path).
+	// 0 = DefaultSpoolRetention. Crash recovery replays only beyond the
+	// checkpoint, so the replay tail is never trimmed; manual replay keeps
+	// the retained window.
+	SpoolRetention int64
+
 	// Admission optionally replaces the per-engine admission semaphore with a
 	// SHARED pool (same capacity semantics: one slot per uncommitted message).
 	// The jobs manager hands one pool to every concurrent run of a pipeline
@@ -94,6 +102,12 @@ type Options struct {
 // pipeline's limits section nor Options set one. Exported so pool owners
 // (the jobs manager's aggregated admission) size identically to engine.New.
 const DefaultHighWatermark = 10_000
+
+// DefaultSpoolRetention is how many spool rows stay behind the checkpoint
+// when neither the Runtime config nor Options set spool retention: enough
+// recent history for `replay --spool` disaster drills, while bounding disk
+// (SQLite) and memory (--ephemeral) on long runs.
+const DefaultSpoolRetention = 10_000
 
 // DefaultOptions returns production defaults.
 func DefaultOptions() Options {
@@ -184,6 +198,7 @@ type Engine struct {
 	persistMu        sync.Mutex
 	persistedThrough int64 // highest checkpoint successfully written
 	flushAttempted   int64 // highest advance whose persistence was attempted
+	retentionDue     int64 // persistedThrough that triggers the next spool trim
 	srcPersisted     map[string]int64
 
 	srcWG    sync.WaitGroup // live source goroutines (exhaustion tracking)
@@ -192,6 +207,9 @@ type Engine struct {
 	srcDone  map[string]bool  // sources that returned (exhausted or failed)
 	srcTotal int
 	srcStart atomic.Bool // Run counted the sources; SourcesDone is meaningful
+
+	fatalMu  sync.Mutex
+	fatalErr error // first worker-fatal error (transform clone failure); stops the engine
 
 	ctx     context.Context
 	cancel  context.CancelFunc
@@ -236,6 +254,9 @@ func New(p *ir.Pipeline, st store.Store, reg *registry.Registry, opts Options) (
 	}
 	if opts.DrainTimeout <= 0 {
 		opts.DrainTimeout = 10 * time.Second
+	}
+	if opts.SpoolRetention <= 0 {
+		opts.SpoolRetention = DefaultSpoolRetention
 	}
 
 	e := &Engine{
@@ -312,7 +333,7 @@ func New(p *ir.Pipeline, st store.Store, reg *registry.Registry, opts Options) (
 			e.chans[name] = make(chan *instance, capacity)
 		case config.SectionTransform:
 			// Transforms instantiate through the registry like sources and
-			// sinks (spec v1.18); Init hands the plugin its constants,
+			// sinks (spec v1.19); Init hands the plugin its constants,
 			// parameters, node logger and the slow-call advisory threshold
 			// before workers start.
 			t, err := reg.NewTransform(n.Config.Plugin, n.Config.PluginConfig, filepath.Dir(p.Config.File))
@@ -403,6 +424,21 @@ func (e *Engine) persistCheckpoint(committedThrough int64, frontiers map[string]
 	}
 	if committedThrough > e.flushAttempted {
 		e.flushAttempted = committedThrough
+	}
+	// Spool retention: one batched trim per window of durable progress, not
+	// per advance — piggybacking here keeps the delete rate off the message
+	// path entirely. The cutoff is derived from persistedThrough (NOT
+	// committedThrough): while checkpoint writes fail, the durable position
+	// lags the in-memory one, and trimming ahead of what a restart would
+	// replay from would turn at-least-once into loss. A failed trim is
+	// logged and retried by the next window (the sweep range only grows).
+	if pt := e.persistedThrough; pt >= e.retentionDue {
+		if cutoff := pt - e.Opts.SpoolRetention; cutoff > 0 {
+			if _, err := e.Store.DeleteSpoolThrough(e.IR.Config.Name, cutoff); err != nil && e.Opts.Logf != nil {
+				e.Opts.Logf("engine: spool retention: %v", err)
+			}
+		}
+		e.retentionDue = pt + e.Opts.SpoolRetention
 	}
 	for name, src := range e.sources {
 		frontier := frontiers[name]
@@ -555,7 +591,24 @@ func (e *Engine) Run(ctx context.Context) error {
 
 	<-e.ctx.Done()
 	e.drain()
-	return nil
+	e.fatalMu.Lock()
+	defer e.fatalMu.Unlock()
+	return e.fatalErr
+}
+
+// failNode records a worker-fatal error and stops the engine: per-message
+// failures dead-letter, but a node that cannot run at all (a transform whose
+// Clone fails — the master instance is not goroutine-safe, the very reason
+// TransformCloner exists) must not degrade into sharing it across workers.
+// The first error wins; anything already in flight stays uncommitted and is
+// replayed on restart (invariant 3). Run reports the error after draining.
+func (e *Engine) failNode(node string, err error) {
+	e.fatalMu.Lock()
+	if e.fatalErr == nil {
+		e.fatalErr = fmt.Errorf("node %q: %w", node, err)
+	}
+	e.fatalMu.Unlock()
+	e.cancel()
 }
 
 // drain waits up to DrainTimeout for in-flight work, then hard-cancels.

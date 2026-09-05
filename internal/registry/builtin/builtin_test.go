@@ -13,6 +13,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/segmentio/kafka-go"
+
 	"github.com/eventboat/eventboat/internal/registry"
 )
 
@@ -256,5 +258,79 @@ func TestKafkaSchemaGatesWithoutBroker(t *testing.T) {
 		"brokers": []any{"localhost:9092"}, "topic": "out",
 	}); err != nil {
 		t.Fatalf("valid kafka sink config rejected offline: %v", err)
+	}
+}
+
+// --- kafka/file source Commit scans: the engine calls Commit on every
+// frontier advance (~per message), so the scan starts at the per-source
+// watermark of already-folded seqs, never at 1 — a full rescan per call made
+// total Commit cost O(N²) and throughput decayed over runtime. Without a
+// reader attached, kafka Commit still drains pending and advances the
+// watermark (the broker flush is the only reader-dependent step). ---
+
+func TestKafkaSourceCommitScanBoundedByWatermark(t *testing.T) {
+	s := &kafkaSource{pending: map[int64]kafka.Message{}}
+	for seq := int64(1); seq <= 200; seq++ {
+		s.pending[seq] = kafka.Message{Offset: seq}
+	}
+	ctx := context.Background()
+	for seq := int64(1); seq <= 200; seq++ {
+		if _, err := s.Commit(ctx, seq); err != nil {
+			t.Fatalf("commit through %d: %v", seq, err)
+		}
+	}
+	if len(s.pending) != 0 {
+		t.Fatalf("pending holds %d entries after a full drain, want 0", len(s.pending))
+	}
+	if s.lastCommitted != 200 {
+		t.Fatalf("lastCommitted = %d, want 200", s.lastCommitted)
+	}
+	// A regressed frontier must not walk the watermark back.
+	if _, err := s.Commit(ctx, 7); err != nil {
+		t.Fatal(err)
+	}
+	if s.lastCommitted != 200 {
+		t.Fatalf("lastCommitted = %d after a regressed call, want 200", s.lastCommitted)
+	}
+	// Later emissions are scanned from the watermark onward.
+	s.pending[201] = kafka.Message{Offset: 201}
+	if _, err := s.Commit(ctx, 201); err != nil {
+		t.Fatal(err)
+	}
+	if len(s.pending) != 0 || s.lastCommitted != 201 {
+		t.Fatalf("pending=%d lastCommitted=%d, want 0/201", len(s.pending), s.lastCommitted)
+	}
+}
+
+func TestFileSourceCommitScanBoundedByWatermark(t *testing.T) {
+	reg := newReg(t)
+	src, err := reg.NewSource("file", map[string]any{"path": filepath.Join(t.TempDir(), "in.jsonl")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fs := src.(*fileSource)
+	fs.pending = map[int64]int64{1: 10, 2: 25, 3: 40}
+	ctx := context.Background()
+	var state []byte
+	for seq := int64(1); seq <= 3; seq++ {
+		if state, err = fs.Commit(ctx, seq); err != nil {
+			t.Fatalf("commit through %d: %v", seq, err)
+		}
+	}
+	if !strings.Contains(string(state), `"offset":40`) {
+		t.Fatalf("commit state = %s, want offset 40", state)
+	}
+	if len(fs.pending) != 0 {
+		t.Fatalf("pending holds %d entries after a full drain, want 0", len(fs.pending))
+	}
+	if fs.lastCommitted != 3 {
+		t.Fatalf("lastCommitted = %d, want 3", fs.lastCommitted)
+	}
+	// A regressed frontier neither rescans nor regresses the offset.
+	if state, err = fs.Commit(ctx, 1); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(state), `"offset":40`) {
+		t.Fatalf("commit state = %s after a regressed call, want offset 40 still", state)
 	}
 }

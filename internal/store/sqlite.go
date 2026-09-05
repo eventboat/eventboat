@@ -132,15 +132,30 @@ func (s *SQLite) DB() *sql.DB { return s.db }
 
 // OpenSQLite opens (creating if needed) the SQLite database at path with WAL
 // journaling and a busy timeout.
+//
+// synchronous=NORMAL (the WAL pairing) trades one durability nuance for write
+// throughput: commits stop fsyncing the WAL on every transaction and fsync
+// at WAL checkpoints instead. At-least-once semantics hold — NORMAL still
+// survives a process crash intact (the primary failure model: the OS keeps
+// the WAL), so the uncommitted tail replayed on restart never loses
+// acknowledged-but-uncommitted state ordering. A power loss (OS crash) can
+// only lose the most recent WAL frames, which widens the replay window —
+// duplicates on re-emit, never loss, the same contract as a checkpoint write
+// that never made it to disk. FULL would restore per-commit fsync at the
+// cost of the per-write convoy this pragma removes.
 func OpenSQLite(path string) (*SQLite, error) {
-	dsn := fmt.Sprintf("file:%s?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)", path)
+	dsn := fmt.Sprintf("file:%s?_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)", path)
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("store: open sqlite: %w", err)
 	}
-	// modernc sqlite is happiest with a single connection; the engine's store
-	// access is modest and serialized in practice.
-	db.SetMaxOpenConns(1)
+	// Two connections: WAL allows one writer plus concurrent readers, so the
+	// admin/jobs status reads stop convoying behind spool and checkpoint
+	// writes. Writes still serialize engine-side and SQLite-side (one writer
+	// at a time); busy_timeout absorbs the rare writer-writer collision.
+	// ReplayPage drains its rows before invoking callbacks, so nothing holds
+	// a read across a callback that writes.
+	db.SetMaxOpenConns(2)
 	if _, err := db.Exec(schema); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("store: migrate: %w", err)
@@ -231,6 +246,16 @@ func (s *SQLite) ReplayPage(pipeline string, afterSeq int64, limit int, fn func(
 		last = r.seq
 	}
 	return last, len(collected) == limit, nil
+}
+
+// DeleteSpoolThrough removes spooled messages with seq <= through (retention
+// sweep; idx_spool_pipeline covers the range scan).
+func (s *SQLite) DeleteSpoolThrough(pipeline string, through int64) (int64, error) {
+	res, err := s.db.Exec(`DELETE FROM spool WHERE pipeline = ? AND seq <= ?`, pipeline, through)
+	if err != nil {
+		return 0, fmt.Errorf("store: spool retention: %w", err)
+	}
+	return res.RowsAffected()
 }
 
 func (s *SQLite) SetCheckpoint(pipeline string, seq int64) error {

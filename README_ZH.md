@@ -67,6 +67,22 @@ eventboat run --config examples/linear/pipeline.yaml
 eventboat run --config my.yaml --ephemeral
 ```
 
+### 管理面（Admin/MCP HTTP）安全
+
+`run --config-dir` / `mcp --http` 的 HTTP 面（Admin REST + SSE + UI、
+`/metrics`、`/mcp` 共用一个监听器）支持 Bearer token，来源优先级：
+`--admin-token` 标志 > `EVENTBOAT_ADMIN_TOKEN` 环境变量 > Runtime 配置的
+`admin.token`。配置了 token 后，所有请求都要求
+`Authorization: Bearer <token>`（只读控制台会弹登录提示并存入
+sessionStorage；其 SSE 流与首次跳转使用 `?token=`，因此可能出现在浏览器
+历史与代理日志中——curl/Agent 请用请求头）。规则：
+
+- **非回环（non-loopback）的 `admin.listen` 绑定必须配置 token，否则拒绝
+  启动**（写面可部署含 grpc 插件 `command:` 的管道 YAML，即在宿主机执行
+  命令）；回环地址不加 token 的本地用法保持不变。
+- 回环绑定同时校验 Host 头（防 DNS rebinding，仅放行回环拼写）；通配
+  绑定（`0.0.0.0` / `:port`）跳过 Host 校验、由强制 token 把关。
+
 ## M3：扩展阶梯（WASM / gRPC 插件 / CESQL）
 
 - **gRPC 进程外插件**：任意语言实现 source/sink——stdout 单行 JSON 握手 +
@@ -133,7 +149,7 @@ eventboat run --config my.yaml --ephemeral
 - 内置 script/split/wasm 迁移为注册插件，**YAML 形状不变**（`script: |`、
   `split: {}`、`wasm: {...}` 继续可用）；"插件名即键"与 `version:` 版本钉
   对 `transforms:` 段生效；第三方可在自己的构建里编译内注册 transform。
-  插件 transform 单次调用返回 0 条输出 = settle-as-filtered + NoMatch 计数
+  插件 transform 单次调用返回 0 条输出 = commit-as-filtered + NoMatch 计数
   （与边谓词零匹配同语义）。
 - **supersede v1.17 的"transforms 维持手工解析"裁决**（同构优先）：字段级
   错误改以 plugin_schema JSON-pointer 呈现，诊断码 `cfg_script_type`/
@@ -216,7 +232,11 @@ cases:
   ≈ 1.4 µs/op，开发机实测；`repl` 已随 M4 回归）。`explain`、`replay`、
   作业管道（`run`/`parameters`）、MCP server 与可观测性栈已随 M2 落地。
 - **部署级配置**（开放问题 #10）暂以 CLI 标志代替：`--data-dir`、
-  `--ephemeral`。
+  `--ephemeral`。spool 保留窗口随 Runtime 配置 `storage.spool_retention`
+  可调（checkpoint 之后的保留行数，默认 10,000）：更早的行随 checkpoint
+  推进批量删除，长跑下磁盘（SQLite）与内存（`--ephemeral`）有界；崩溃恢复
+  只重放 checkpoint 之后，`replay --spool` 保留窗口内可查，需要更深的
+  spool 回放时调大即可。
 - **模块：** load 白名单为 `json` + `math`；go-starlark 无可 load 的
   `strings` 模块——字符串方法是 string 类型内建（审查 R3）。
 - **transform 失败**按入边 delivery 策略重试后死信（审查 R6）；fan-out 零

@@ -488,6 +488,15 @@ func (m *Manager) runOnce(ctx context.Context, jr *store.JobRun, triggerParams, 
 	// nothing outstanding (committing phase).
 	for !m.quiesced(eng) {
 		select {
+		case runErr := <-runDone:
+			// Run returned before quiescence: the engine stopped itself on a
+			// worker-fatal error (e.g. a transform clone failure). Outstanding
+			// messages stay uncommitted for the next run's replay.
+			if runErr == nil {
+				runErr = fmt.Errorf("engine stopped before quiescence")
+			}
+			fail(store.JobFailed, "run: "+runErr.Error())
+			return
 		case <-ctx.Done():
 			// Canceled (overlap: latest, manager stop, or trigger ctx):
 			// terminal-dead-letter the outstanding set (R2), then stop the

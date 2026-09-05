@@ -6,7 +6,7 @@ import (
 
 // TransformFunc adapts a function to registry.Transform: identity Init and
 // Close, stateless Apply shared by all workers. Returning a nil slice
-// filters the message (settle-as-filtered); an error dead-letters after the
+// filters the message (commit-as-filtered); an error dead-letters after the
 // edge's delivery retries — both engine contracts, exercised by tests.
 type TransformFunc func(msg *registry.Message) ([]*registry.Message, error)
 

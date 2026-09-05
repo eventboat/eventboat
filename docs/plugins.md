@@ -129,6 +129,16 @@ Sinks use the same shape under `sinks:`.
 | `cursor` | pull sources: the cursor value of this row (`""` if none) — set it and it flows into `meta.cursor` bindings |
 | `src_seq` / `src_name` | per-source monotonic sequence / source node name |
 
+**Transport limit**: one gRPC message is capped at **64 MiB** in each
+direction (the host dials with explicit send/receive limits, and the example
+plugin mirrors them on its server). That is deliberately above any message
+the engine can legally produce — the engine bounds messages by count
+(`limits.max_in_flight`, default 10k in flight), never by bytes — while
+keeping the per-message memory a buggy or hostile plugin can pin bounded.
+A `Write` batch carries several Events in one message, so size your batches
+accordingly; oversized messages fail with gRPC `ResourceExhausted` (a sink
+write error / a failed pull, per the delivery policy).
+
 ### Source service
 
 - `Init(InitRequest{state bytes, config_json string})` — called once before
@@ -218,7 +228,9 @@ func main() {
         "listen": lis.Addr().String(), "auth": token,
     })
     fmt.Println(string(hs))
-    srv := grpc.NewServer(grpc.ChainUnaryInterceptor(authUnary(token)),
+    srv := grpc.NewServer(
+        grpc.MaxRecvMsgSize(64<<20), grpc.MaxSendMsgSize(64<<20), // the transport cap above
+        grpc.ChainUnaryInterceptor(authUnary(token)),
         grpc.ChainStreamInterceptor(authStream(token)))
     pluginv1.RegisterSourceServer(srv, &mySource{})
     go func() { _, _ = io.Copy(io.Discard, os.Stdin); srv.GracefulStop() }() // stop on stdin EOF

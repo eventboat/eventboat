@@ -8,7 +8,9 @@ import (
 
 	"github.com/eventboat/eventboat/internal/config"
 	"github.com/eventboat/eventboat/internal/registry"
+	"github.com/eventboat/eventboat/internal/registry/builtin"
 	"github.com/eventboat/eventboat/internal/store"
+	"github.com/eventboat/eventboat/internal/testkit"
 )
 
 // nopSink records the last written payload (the "real" sink under the tail
@@ -95,5 +97,85 @@ func TestTailWrapperAppliesRedaction(t *testing.T) {
 	}
 	if inner.last != secret {
 		t.Fatalf("the DELIVERED message must never be redacted: %q", inner.last)
+	}
+}
+
+// The dead-letter query is an ops surface like the tail: the same
+// telemetry.redact patterns mask payload AND meta in the results, while the
+// stored rows stay raw (replay re-injects the original bytes).
+func TestDeadLetterQueryAppliesRedaction(t *testing.T) {
+	reg := registry.New()
+	if err := builtin.RegisterAll(reg); err != nil {
+		t.Fatal(err)
+	}
+	if err := testkit.RegisterFakePull(reg); err != nil {
+		t.Fatal(err)
+	}
+	stores := map[string]store.Store{"redact-dlq": store.NewMemory("redact-dlq")}
+	svc := New(Options{
+		DataDir:  t.TempDir(),
+		Reg:      reg,
+		StoreFor: func(pipeline string) (store.Store, error) { return stores[pipeline], nil },
+		Clock:    time.Now,
+	})
+	t.Cleanup(svc.Stop)
+
+	if _, err := svc.Deploy(context.Background(), `
+apiVersion: eventboat/v3
+kind: Pipeline
+metadata: { name: redact-dlq }
+telemetry:
+  redact: [payload.user.email, meta.authorization]
+sources:
+  in:
+    decoder: json
+    fakepull: { id: redact-feed }
+sinks:
+  out:
+    from: [in]
+    file: { path: out.jsonl }
+`); err != nil {
+		t.Fatal(err)
+	}
+	st, err := svc.opts.StoreFor("redact-dlq")
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := `{"user":{"email":"a@b.example","id":"u-1"}}`
+	if err := st.WriteDeadLetter(store.DeadLetter{
+		Pipeline: "redact-dlq", Node: "in", Reason: "test",
+		Raw:  []byte(raw),
+		Meta: map[string]any{"authorization": "Bearer sekrit", "keep": "x"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	dls, err := svc.DeadLetterQuery("redact-dlq", "", "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(dls) != 1 {
+		t.Fatalf("dead letters = %d, want 1", len(dls))
+	}
+	if strings.Contains(string(dls[0].Raw), "a@b.example") {
+		t.Fatalf("secret survived into the dead-letter payload: %s", dls[0].Raw)
+	}
+	if !strings.Contains(string(dls[0].Raw), "***") {
+		t.Fatalf("mask missing from the dead-letter payload: %s", dls[0].Raw)
+	}
+	if got := dls[0].Meta["authorization"]; got != "***" {
+		t.Fatalf("meta secret survived: %v", dls[0].Meta)
+	}
+	if got := dls[0].Meta["keep"]; got != "x" {
+		t.Fatalf("unmatched meta value lost: %v", dls[0].Meta)
+	}
+
+	// The STORED row is the data path: still raw for replay.
+	stored, err := st.DeadLetters("redact-dlq")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(stored[0].Raw) != raw || stored[0].Meta["authorization"] != "Bearer sekrit" {
+		t.Fatalf("stored dead letter must never be altered: %s %v", stored[0].Raw, stored[0].Meta)
 	}
 }

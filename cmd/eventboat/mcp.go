@@ -34,6 +34,7 @@ func cmdMCP(args []string, jsonOut bool) int {
 	runtimeFile := fs.String("runtime", "", "Runtime configuration file (default: ./eventboat.yaml)")
 	dataDir := fs.String("data-dir", "", "override storage.data_dir")
 	ephemeral := fs.Bool("ephemeral", false, "override storage.ephemeral (in-memory stores)")
+	adminToken := fs.String("admin-token", "", "bearer token for the admin/MCP HTTP surface (required for non-loopback binds)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -52,6 +53,11 @@ func cmdMCP(args []string, jsonOut bool) int {
 	}
 	if *ephemeral {
 		rt.Storage.Ephemeral = true
+	}
+	sec, err := admin.NewSecurity(resolveAdminToken(*adminToken, rt), rt.Admin.Listen)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "mcp: %v\n", err)
+		return 2
 	}
 
 	reg, err := commandRegistry()
@@ -85,7 +91,7 @@ func cmdMCP(args []string, jsonOut bool) int {
 	}
 
 	handler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server }, nil)
-	adminH := admin.Handler(svc, metricsHandler, handler)
+	adminH := admin.Handler(svc, metricsHandler, handler, sec)
 	fmt.Printf("eventboat: admin + MCP listening on %s (UI: http://%s/admin/)\n", rt.Admin.Listen, rt.Admin.Listen)
 	if err := admin.Serve(ctx, rt.Admin.Listen, adminH); err != nil {
 		fmt.Fprintf(os.Stderr, "mcp: %v\n", err)
@@ -107,9 +113,10 @@ func newOpsService(reg *registry.Registry, rt runtimecfg.Config) (svc *ops.Servi
 		observer = nil // telemetry must never take the runtime down
 	}
 	svc = ops.New(ops.Options{
-		Obs:     observer,
-		DataDir: dir,
-		Reg:     reg,
+		Obs:            observer,
+		DataDir:        dir,
+		Reg:            reg,
+		SpoolRetention: rt.Storage.SpoolRetention,
 		StoreFor: func(pipeline string) (store.Store, error) {
 			if rt.Storage.Ephemeral {
 				return store.NewMemory(pipeline), nil
@@ -136,6 +143,19 @@ func sanitize(name string) string {
 			return '_'
 		}
 	}, name)
+}
+
+// resolveAdminToken picks the admin bearer token, most explicit first: the
+// --admin-token flag, then EVENTBOAT_ADMIN_TOKEN, then admin.token from the
+// Runtime config (the same flag > env > file order as the other overrides).
+func resolveAdminToken(flagToken string, rt runtimecfg.Config) string {
+	if flagToken != "" {
+		return flagToken
+	}
+	if env := os.Getenv("EVENTBOAT_ADMIN_TOKEN"); env != "" {
+		return env
+	}
+	return rt.Admin.Token
 }
 
 // deployDir verifies and deploys every pipeline YAML in a directory.
@@ -168,6 +188,7 @@ func cmdRunDir(args []string, jsonOut bool) int {
 	runtimeFile := fs.String("runtime", "", "Runtime configuration file")
 	dataDir := fs.String("data-dir", "", "override storage.data_dir")
 	ephemeral := fs.Bool("ephemeral", false, "in-memory stores")
+	adminToken := fs.String("admin-token", "", "bearer token for the admin/MCP HTTP surface (required for non-loopback binds)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -185,6 +206,17 @@ func cmdRunDir(args []string, jsonOut bool) int {
 	}
 	if *ephemeral {
 		rt.Storage.Ephemeral = true
+	}
+	// The security combination is checked before any pipeline starts: a bad
+	// bind/token mix must not come up halfway (only when the surface is
+	// actually enabled — default on).
+	var sec admin.Security
+	if rt.Admin.Enable {
+		sec, err = admin.NewSecurity(resolveAdminToken(*adminToken, rt), rt.Admin.Listen)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "run: %v\n", err)
+			return 2
+		}
 	}
 	reg, err := commandRegistry()
 	if err != nil {
@@ -212,7 +244,7 @@ func cmdRunDir(args []string, jsonOut bool) int {
 	if rt.Admin.Enable {
 		server := mcpserver.NewServer(svc, "eventboat", "v3")
 		mcpHandler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server }, nil)
-		handler := admin.Handler(svc, metricsHandler, mcpHandler)
+		handler := admin.Handler(svc, metricsHandler, mcpHandler, sec)
 		go func() {
 			fmt.Printf("eventboat: admin + MCP on http://%s/admin/\n", rt.Admin.Listen)
 			_ = admin.Serve(ctx, rt.Admin.Listen, handler)

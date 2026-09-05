@@ -76,7 +76,9 @@ func Trace(pip *ir.Pipeline, opts Options) (string, error) {
 // walk visits one node's out-edges (message mode): explain-safe transforms
 // dry-run first so downstream conditions see the transformed payload; other
 // transforms (wasm: guest code must not execute in explain) pass the payload
-// through unchanged (documented).
+// through unchanged and say so — the disclosure keeps downstream MATCH/
+// no-match output honest about evaluating the pre-transform payload
+// (documented, docs/wasm.md).
 func walk(pip *ir.Pipeline, node *ir.Node, payload any, meta map[string]any, b *strings.Builder) {
 	if node.Transform != nil {
 		msg := &registry.Message{Decoded: payload, Meta: meta}
@@ -102,6 +104,19 @@ func walk(pip *ir.Pipeline, node *ir.Node, payload any, meta map[string]any, b *
 			fmt.Fprintf(b, "%s: %s ✓\n", node.Name, transformLabel(node))
 		}
 		payload, meta = outs[0].Decoded, outs[0].Meta
+	} else if node.Section == config.SectionTransform {
+		// Not explain-safe (wasm — explain must not execute guest code; any
+		// third-party plugin that skips the capability): say so instead of
+		// silently evaluating downstream edges, which would read as
+		// post-transform output. The payload passes through unchanged
+		// (documented, docs/wasm.md).
+		if node.Config.Plugin == "wasm" {
+			fmt.Fprintf(b, "%s: transform.wasm (module %s, entrypoint %s) — guest not dry-run; downstream sees the pre-transform payload\n",
+				node.Name, wasmModule(node), wasmEntry(node))
+		} else {
+			fmt.Fprintf(b, "%s: %s — plugin not dry-run (not explain-safe); downstream sees the pre-transform payload\n",
+				node.Name, transformLabel(node))
+		}
 	}
 
 	matched := 0

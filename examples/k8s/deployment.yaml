@@ -54,6 +54,7 @@ spec:
 ---
 # The admin surface (REST + SSE + read-only UI) is bound to 127.0.0.1 by
 # default. To use the probes and deploy API from the cluster network, set
-# an explicit listener in a kind: Runtime config mounted alongside, and
-# keep it behind your own auth boundary — POC builds ship without one
-# (recorded in README).
+# an explicit listener in a kind: Runtime config mounted alongside AND a
+# token (admin.token, or EVENTBOAT_ADMIN_TOKEN from a Secret) — non-
+# loopback binds refuse to start without one, and every request then
+# needs Authorization: Bearer <token> (docs/k8s.md).

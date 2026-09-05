@@ -1,6 +1,8 @@
 usage: eventboat run --config <pipeline.yaml> [--data-dir DIR] [--ephemeral] | eventboat run --config-dir <dir> [--runtime runtime.yaml]
 
 flags:
+  -admin-token string
+    	bearer token for the admin/MCP HTTP surface in --config-dir mode (required for non-loopback binds; also EVENTBOAT_ADMIN_TOKEN / admin.token)
   -config string
     	pipeline configuration file
   -config-dir string

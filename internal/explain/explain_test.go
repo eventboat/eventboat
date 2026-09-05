@@ -118,6 +118,43 @@ sinks:
 	}
 }
 
+// A wasm transform is not explain-safe: the guest must not execute, so the
+// message trace discloses that explicitly — downstream MATCH/no-match output
+// is based on the PRE-transform payload, not silently presented as
+// post-transform (the disclosure the transform-plugin refactor dropped).
+func TestTraceMessageLevelWasmDisclosed(t *testing.T) {
+	pip := buildPipeline(t, `
+apiVersion: eventboat/v3
+kind: Pipeline
+metadata: { name: wasm-explain }
+sources:
+  in:
+    decoder: json
+    file: { path: in.jsonl }
+transforms:
+  heavy:
+    from: [in]
+    wasm:
+      module: ../wasmhost/testdata/aggregate.wasm
+      timeout_ms: 1000
+sinks:
+  out:
+    from: { heavy: { when: 'payload.amount > 10' } }
+    file: { path: out.jsonl }
+`)
+	out, err := Trace(pip, Options{Message: []byte(`{"amount": 42}`)})
+	if err != nil && out == "" {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "heavy: transform.wasm (module ../wasmhost/testdata/aggregate.wasm, entrypoint transform) — guest not dry-run; downstream sees the pre-transform payload") {
+		t.Errorf("wasm disclosure line missing:\n%s", out)
+	}
+	// Edges still evaluate — against the pre-transform payload, as disclosed.
+	if !strings.Contains(out, "✓ MATCH") {
+		t.Errorf("downstream edge not evaluated after the disclosure:\n%s", out)
+	}
+}
+
 // Symbolic mode never executes anything: script summary + condition texts.
 func TestTraceSymbolic(t *testing.T) {
 	pip := buildPipeline(t, branchingYAML)

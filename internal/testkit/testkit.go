@@ -238,6 +238,10 @@ func (w *StoreWrapper) ReplayPage(pipeline string, afterSeq int64, limit int, fn
 	return w.Inner.ReplayPage(pipeline, afterSeq, limit, fn)
 }
 
+func (w *StoreWrapper) DeleteSpoolThrough(pipeline string, through int64) (int64, error) {
+	return w.Inner.DeleteSpoolThrough(pipeline, through)
+}
+
 func (w *StoreWrapper) SetCheckpoint(pipeline string, seq int64) error {
 	if w.SetCheckpointHook != nil {
 		if err := w.SetCheckpointHook(seq); err != nil {

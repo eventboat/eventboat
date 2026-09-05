@@ -28,6 +28,7 @@ func cmdRun(args []string, jsonOut bool) int {
 	runtimeFile := fs.String("runtime", "", "Runtime configuration file (telemetry endpoints; default: ./eventboat.yaml)")
 	dataDir := fs.String("data-dir", "data", "SQLite storage directory (deployment-level concern, POC flag)")
 	ephemeral := fs.Bool("ephemeral", false, "in-memory store: nothing persists across restarts")
+	_ = fs.String("admin-token", "", "bearer token for the admin/MCP HTTP surface (required for non-loopback binds; directory mode only)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -72,6 +73,9 @@ func cmdRun(args []string, jsonOut bool) int {
 	if *dataDir != "" {
 		rt.Storage.DataDir = *dataDir
 	}
+	if *ephemeral {
+		rt.Storage.Ephemeral = true
+	}
 	observer, err := obs.Setup(context.Background(), obs.Config{
 		OTLPEndpoint: rt.Telemetry.OTLPEndpoint,
 		SampleRatio:  rt.Telemetry.SampleRatio,
@@ -84,7 +88,7 @@ func cmdRun(args []string, jsonOut bool) int {
 	defer func() { _ = observer.Shutdown(context.Background()) }()
 
 	if pip.Config.IsJob() {
-		return runJobPipeline(*configPath, pip, reg, rt.Storage.DataDir, *ephemeral || rt.Storage.Ephemeral, jsonOut, observer)
+		return runJobPipeline(*configPath, pip, reg, rt.Storage, jsonOut, observer)
 	}
 
 	var st store.Store
@@ -106,6 +110,7 @@ func cmdRun(args []string, jsonOut bool) int {
 
 	engOpts := engine.DefaultOptions().WithLimits(pip.Config.Limits)
 	engOpts.Obs = observer
+	engOpts.SpoolRetention = rt.Storage.SpoolRetention
 	eng, err := engine.New(pip, st, reg, engOpts)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "run: %v\n", err)
@@ -176,16 +181,16 @@ func storeLabel(ephemeral bool, dataDir string) string {
 // runJobPipeline executes a job pipeline under the jobs manager until the
 // context is canceled: crash recovery of in-flight runs, catchup for missed
 // schedule ticks, then the cron scheduler (§5.8).
-func runJobPipeline(configPath string, pip *ir.Pipeline, reg *registry.Registry, dataDir string, ephemeral bool, jsonOut bool, observer *obs.Obs) int {
+func runJobPipeline(configPath string, pip *ir.Pipeline, reg *registry.Registry, storage runtimecfg.Storage, jsonOut bool, observer *obs.Obs) int {
 	var st store.Store
-	if ephemeral {
+	if storage.Ephemeral {
 		st = store.NewMemory(pip.Config.Name)
 	} else {
-		if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		if err := os.MkdirAll(storage.DataDir, 0o755); err != nil {
 			fmt.Fprintf(os.Stderr, "run: data dir: %v\n", err)
 			return 2
 		}
-		sqlite, err := store.OpenSQLite(filepath.Join(dataDir, "eventboat.db"))
+		sqlite, err := store.OpenSQLite(filepath.Join(storage.DataDir, "eventboat.db"))
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "run: open store: %v\n", err)
 			return 2
@@ -197,6 +202,7 @@ func runJobPipeline(configPath string, pip *ir.Pipeline, reg *registry.Registry,
 	opts := jobs.Options{}
 	opts.EngineOptions = engine.DefaultOptions().WithLimits(pip.Config.Limits)
 	opts.EngineOptions.Obs = observer
+	opts.EngineOptions.SpoolRetention = storage.SpoolRetention
 	m, err := jobs.New(pip.Config, configPath, st, reg, opts)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "run: %v\n", err)
@@ -215,7 +221,7 @@ func runJobPipeline(configPath string, pip *ir.Pipeline, reg *registry.Registry,
 			schedule = "manual/trigger only"
 		}
 		fmt.Printf("eventboat: job pipeline %q (schedule: %s, overlap: %s, store: %s)\n",
-			pip.Config.Name, schedule, pip.Config.Run.Overlap, storeLabel(ephemeral, dataDir))
+			pip.Config.Name, schedule, pip.Config.Run.Overlap, storeLabel(storage.Ephemeral, storage.DataDir))
 	}
 	<-ctx.Done()
 	m.Stop()

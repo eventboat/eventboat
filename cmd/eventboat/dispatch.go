@@ -145,11 +145,12 @@ func (v *testVerb) Run(_ context.Context, env *commands.Environment, rest []stri
 
 type runVerb struct {
 	flaggy
-	config    string
-	configDir string
-	runtime   string
-	dataDir   string
-	ephemeral bool
+	config     string
+	configDir  string
+	runtime    string
+	dataDir    string
+	ephemeral  bool
+	adminToken string
 }
 
 func (v *runVerb) Name() string { return "run" }
@@ -167,6 +168,7 @@ func (v *runVerb) SetFlags(fs *flag.FlagSet) {
 	fs.StringVar(&v.runtime, "runtime", "", "Runtime configuration file (telemetry endpoints; default: ./eventboat.yaml)")
 	fs.StringVar(&v.dataDir, "data-dir", "data", "SQLite storage directory (deployment-level concern, POC flag)")
 	fs.BoolVar(&v.ephemeral, "ephemeral", false, "in-memory store: nothing persists across restarts")
+	fs.StringVar(&v.adminToken, "admin-token", "", "bearer token for the admin/MCP HTTP surface in --config-dir mode (required for non-loopback binds; also EVENTBOAT_ADMIN_TOKEN / admin.token)")
 }
 
 func (v *runVerb) Run(_ context.Context, env *commands.Environment, rest []string) error {
@@ -362,12 +364,13 @@ func (v *pluginVerb) Run(_ context.Context, env *commands.Environment, rest []st
 
 type mcpVerb struct {
 	flaggy
-	stdio     bool
-	httpMode  bool
-	configDir string
-	runtime   string
-	dataDir   string
-	ephemeral bool
+	stdio      bool
+	httpMode   bool
+	configDir  string
+	runtime    string
+	dataDir    string
+	ephemeral  bool
+	adminToken string
 }
 
 func (v *mcpVerb) Name() string { return "mcp" }
@@ -386,6 +389,7 @@ func (v *mcpVerb) SetFlags(fs *flag.FlagSet) {
 	fs.StringVar(&v.runtime, "runtime", "", "Runtime configuration file (default: ./eventboat.yaml)")
 	fs.StringVar(&v.dataDir, "data-dir", "", "override storage.data_dir")
 	fs.BoolVar(&v.ephemeral, "ephemeral", false, "override storage.ephemeral (in-memory stores)")
+	fs.StringVar(&v.adminToken, "admin-token", "", "bearer token for the admin/MCP HTTP surface (required for non-loopback binds; also EVENTBOAT_ADMIN_TOKEN / admin.token)")
 }
 
 func (v *mcpVerb) Run(_ context.Context, env *commands.Environment, rest []string) error {

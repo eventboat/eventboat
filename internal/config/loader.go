@@ -30,6 +30,21 @@ func (r *Result) HasErrors() bool {
 
 var envPattern = regexp.MustCompile(`\$\{(\??)([A-Za-z_][A-Za-z0-9_.]*)\}`)
 
+// namePattern is the metadata.name contract. The name flows into file paths
+// (<data-dir>/pipelines/<name>.yaml) and store keys, so it is a conservative
+// identifier: alphanumerics plus . _ -, starting with a letter or digit, no
+// ".." substring (path traversal defense) and capped at 64 characters. The
+// loader is the single gate — every consumer (CLI, LSP, MCP tools, Admin
+// REST) loads through it before a name reaches the filesystem.
+var namePattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]*$`)
+
+const maxNameLen = 64
+
+// validName reports whether a pipeline name satisfies namePattern.
+func validName(name string) bool {
+	return len(name) <= maxNameLen && !strings.Contains(name, "..") && namePattern.MatchString(name)
+}
+
 // LoadFile reads and parses a pipeline configuration file.
 func LoadFile(path string) *Result {
 	data, err := os.ReadFile(path)
@@ -166,6 +181,12 @@ func LoadBytes(file string, data []byte) *Result {
 		res.Diagnostics = append(res.Diagnostics, Diagnostic{
 			Severity: "error", Code: "cfg_metadata_name", File: file, Line: lines.line("metadata", "name"),
 			Message: "metadata.name is required", Hint: "add metadata: { name: <pipeline-name> }",
+		})
+	} else if !validName(p.Name) {
+		res.Diagnostics = append(res.Diagnostics, Diagnostic{
+			Severity: "error", Code: "cfg_name_invalid", File: file, Line: lines.line("metadata", "name"),
+			Message: fmt.Sprintf("metadata.name %q must be 1-64 characters of [a-zA-Z0-9._-], start with a letter or digit, and contain no \"..\"", p.Name),
+			Hint:    "the name becomes the deployed file name (<data-dir>/pipelines/<name>.yaml); e.g. orders-eu",
 		})
 	}
 

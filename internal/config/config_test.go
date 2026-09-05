@@ -90,7 +90,7 @@ sinks:
 }
 
 func TestTransformMultiplePluginBlocksRejected(t *testing.T) {
-	// script and split are plugin keys now (spec v1.18): two plugin blocks on
+	// script and split are plugin keys now (spec v1.19): two plugin blocks on
 	// one transform node is the same error as on a source.
 	res := LoadBytes("p.yaml", []byte(`
 apiVersion: eventboat/v3
@@ -576,6 +576,57 @@ func TestParseDurationWithDays(t *testing.T) {
 	for _, bad := range []string{"", "xd", "d", "1x"} {
 		if _, err := ParseDuration(bad); err == nil {
 			t.Errorf("ParseDuration(%q) unexpectedly ok", bad)
+		}
+	}
+}
+
+func TestMetadataNameValidation(t *testing.T) {
+	// metadata.name becomes a file path (<data-dir>/pipelines/<name>.yaml)
+	// and a store key, so traversal and friends are rejected at the loader —
+	// the single gate every consumer (CLI, LSP, MCP, Admin REST) passes
+	// through before the name reaches the filesystem.
+	pipeline := func(name string) string {
+		return "apiVersion: eventboat/v3\nkind: Pipeline\nmetadata: { name: " + name + " }\n" +
+			"sources:\n  in: { decoder: json, file: { path: a } }\n" +
+			"sinks:\n  out: { from: [in], file: { path: o } }\n"
+	}
+	for _, name := range []string{"orders", "orders-eu", "a.b_c-d", "x0", "p1.q2_r3-s4"} {
+		if res := LoadBytes("p.yaml", []byte(pipeline(name))); res.HasErrors() {
+			t.Errorf("name %q: unexpected errors: %+v", name, res.Diagnostics)
+		}
+	}
+	for _, tc := range []struct {
+		name string
+		code string
+	}{
+		{"../evil", "cfg_name_invalid"},               // escapes the pipelines dir
+		{"a/../b", "cfg_name_invalid"},                // traversal in the middle
+		{"..", "cfg_name_invalid"},                    // bare parent reference
+		{"/etc/passwd", "cfg_name_invalid"},           // absolute-ish
+		{`C:\evil`, "cfg_name_invalid"},               // windows drive + backslash
+		{".hidden", "cfg_name_invalid"},               // leading dot
+		{"-dash", "cfg_name_invalid"},                 // leading dash
+		{"has space", "cfg_name_invalid"},             // charset
+		{"订单", "cfg_name_invalid"},                    // charset (non-ASCII)
+		{strings.Repeat("a", 65), "cfg_name_invalid"}, // length cap
+		{"", "cfg_metadata_name"},                     // missing (pre-existing rule)
+	} {
+		var res *Result
+		if tc.name == "" {
+			res = LoadBytes("p.yaml", []byte("apiVersion: eventboat/v3\nkind: Pipeline\n"+
+				"sources:\n  in: { decoder: json, file: { path: a } }\n"+
+				"sinks:\n  out: { from: [in], file: { path: o } }\n"))
+		} else {
+			res = LoadBytes("p.yaml", []byte(pipeline(tc.name)))
+		}
+		found := false
+		for _, d := range res.Diagnostics {
+			if d.Code == tc.code {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("name %q: expected %s, got %+v", tc.name, tc.code, res.Diagnostics)
 		}
 	}
 }

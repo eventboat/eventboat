@@ -84,11 +84,12 @@ type sqlSource struct {
 	pageSize int
 	emit     string
 
-	mu        sync.Mutex
-	watermark string // max committed cursor value ("" = start)
-	lastKey   []any  // key values of the committed frontier row
-	pending   map[int64]pendingRow
-	nextSeq   int64
+	mu            sync.Mutex
+	watermark     string // max committed cursor value ("" = start)
+	lastKey       []any  // key values of the committed frontier row
+	pending       map[int64]pendingRow
+	nextSeq       int64
+	lastCommitted int64 // highest srcSeq already folded by Commit (this pull session)
 }
 
 type pullState struct {
@@ -153,6 +154,7 @@ func (s *sqlSource) Pull(ctx context.Context, emit func(registry.Message)) error
 	resumeKey := s.lastKey
 	s.nextSeq = 0
 	s.pending = map[int64]pendingRow{}
+	s.lastCommitted = 0 // seqs restart at 1; a stale watermark would skip the whole session's commits
 	s.mu.Unlock()
 
 	pageKeys := resumeKey // nil = from the beginning of the range
@@ -245,7 +247,10 @@ func (s *sqlSource) Commit(ctx context.Context, throughSrcSeq int64) ([]byte, er
 	defer s.mu.Unlock()
 	var maxSeq int64
 	var frontier pendingRow
-	for seq := int64(1); seq <= throughSrcSeq; seq++ {
+	// Watermark-bounded scan (see kafkaSource.Commit): rows below
+	// lastCommitted were drained by earlier calls, so the frontier row is
+	// found in the unscanned tail alone.
+	for seq := s.lastCommitted + 1; seq <= throughSrcSeq; seq++ {
 		if p, ok := s.pending[seq]; ok {
 			if seq > maxSeq {
 				maxSeq = seq
@@ -253,6 +258,9 @@ func (s *sqlSource) Commit(ctx context.Context, throughSrcSeq int64) ([]byte, er
 			}
 			delete(s.pending, seq)
 		}
+	}
+	if throughSrcSeq > s.lastCommitted {
+		s.lastCommitted = throughSrcSeq
 	}
 	if maxSeq > 0 {
 		s.watermark = frontier.cursor

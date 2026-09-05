@@ -15,7 +15,7 @@ const okSchema = `{
 func TestRegisterReservedNameRejected(t *testing.T) {
 	// review R5: plugin names colliding with framework fields are rejected at
 	// registration, not discovered at verify time. script/split/wasm are NOT
-	// reserved — they are the built-in transform plugin names (spec v1.18).
+	// reserved — they are the built-in transform plugin names (spec v1.19).
 	for _, name := range []string{"from", "when", "batch", "delivery"} {
 		r := New()
 		if err := r.RegisterSource(name, 1, okSchema, nil, func(map[string]any) (Source, error) { return nil, nil }); err == nil {

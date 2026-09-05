@@ -8,6 +8,7 @@ package store
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -86,6 +87,13 @@ type Store interface {
 	// returns the last sequence visited and whether more remain.
 	ReplayPage(pipeline string, afterSeq int64, limit int, fn func(seq int64, msg registry.Message, ingestTime time.Time) error) (lastSeq int64, more bool, err error)
 
+	// DeleteSpoolThrough removes spooled messages with seq <= through and
+	// returns how many were removed (spool retention). Rows at or below the
+	// checkpoint minus the retention window are pure history: crash recovery
+	// only ever replays beyond the checkpoint, and manual replay keeps the
+	// retained window above the cutoff.
+	DeleteSpoolThrough(pipeline string, through int64) (int64, error)
+
 	// SetCheckpoint persists the contiguous committed-through spool sequence
 	// (invariant 2: only after commit).
 	SetCheckpoint(pipeline string, seq int64) error
@@ -162,6 +170,7 @@ type memStore struct {
 	mu          sync.Mutex
 	pipeline    string
 	spool       []memRow
+	nextSeq     int64 // monotonic across trims: seqs never restart or collide
 	checkpoints map[string]int64
 	srcStates   map[string]memSrcState
 	deadLetters []DeadLetter
@@ -190,19 +199,32 @@ func (s *memStore) AppendSpool(pipeline string, msg registry.Message, ingestTime
 	if s.closed {
 		return 0, fmt.Errorf("store closed")
 	}
-	seq := int64(len(s.spool) + 1)
+	s.nextSeq++
+	seq := s.nextSeq
 	s.spool = append(s.spool, memRow{seq: seq, msg: msg, ingestTime: ingestTime})
 	return seq, nil
 }
 
+// spoolWindow locks out the page [afterSeq, afterSeq+limit] as a copy, so
+// callbacks run without the store lock and without materializing rows on
+// either side of the window (the old full-spool copy per page made replay
+// O(N^2)). more reports whether a row beyond the window exists.
+func (s *memStore) spoolWindow(afterSeq int64, limit int) (rows []memRow, more bool) {
+	start := sort.Search(len(s.spool), func(i int) bool { return s.spool[i].seq > afterSeq })
+	end := start + limit
+	if end > len(s.spool) {
+		end = len(s.spool)
+	} else if end < len(s.spool) {
+		more = true
+	}
+	return append([]memRow(nil), s.spool[start:end]...), more
+}
+
 func (s *memStore) ReplayFrom(pipeline string, afterSeq int64, fn func(int64, registry.Message, time.Time) error) error {
 	s.mu.Lock()
-	rows := append([]memRow(nil), s.spool...)
+	rows, _ := s.spoolWindow(afterSeq, len(s.spool))
 	s.mu.Unlock()
 	for _, r := range rows {
-		if r.seq <= afterSeq {
-			continue
-		}
 		if err := fn(r.seq, r.msg, r.ingestTime); err != nil {
 			return err
 		}
@@ -215,24 +237,29 @@ func (s *memStore) ReplayPage(pipeline string, afterSeq int64, limit int, fn fun
 		limit = 500
 	}
 	s.mu.Lock()
-	rows := append([]memRow(nil), s.spool...)
+	rows, more := s.spoolWindow(afterSeq, limit)
 	s.mu.Unlock()
 	last := afterSeq
-	count := 0
 	for _, r := range rows {
-		if r.seq <= afterSeq {
-			continue
-		}
-		if count >= limit {
-			return last, true, nil
-		}
 		if err := fn(r.seq, r.msg, r.ingestTime); err != nil {
 			return last, false, err
 		}
 		last = r.seq
-		count++
 	}
-	return last, false, nil
+	return last, more, nil
+}
+
+// DeleteSpoolThrough drops the sorted prefix at or below through, zeroing it
+// so the trimmed rows (payloads included) are reclaimable.
+func (s *memStore) DeleteSpoolThrough(pipeline string, through int64) (int64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cut := sort.Search(len(s.spool), func(i int) bool { return s.spool[i].seq > through })
+	for i := 0; i < cut; i++ {
+		s.spool[i] = memRow{}
+	}
+	s.spool = s.spool[cut:]
+	return int64(cut), nil
 }
 
 func (s *memStore) SetCheckpoint(pipeline string, seq int64) error {

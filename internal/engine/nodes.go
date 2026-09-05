@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/eventboat/eventboat/internal/ir"
@@ -15,18 +16,20 @@ import (
 // state implement TransformCloner and get an independent clone per goroutine
 // (wasm module instances are not goroutine-safe and die on traps,
 // review-m3 R4); stateless plugins (script programs are immutable, split has
-// no state) share one Init'ed instance.
+// no state) share one Init'ed instance. A failed Clone is worker-fatal: the
+// master instance is exactly what the plugin declared unsafe to share, so
+// the engine fails the pipeline instead of racing workers on it.
 func (e *Engine) runTransform(node *ir.Node) {
 	defer e.wg.Done()
 	t := e.transforms[node.Name]
 	if cloner, ok := t.(registry.TransformCloner); ok {
 		clone, err := cloner.Clone()
 		if err != nil {
-			e.Opts.Logf("[node %s] transform worker clone failed (%v); continuing on the shared instance — Apply will dead-letter per message", node.Name, err)
-		} else {
-			t = clone
-			defer func() { _ = t.Close() }()
+			e.failNode(node.Name, fmt.Errorf("transform worker clone: %w", err))
+			return
 		}
+		t = clone
+		defer func() { _ = t.Close() }()
 	}
 	ch := e.chans[node.Name]
 	for {
@@ -41,8 +44,9 @@ func (e *Engine) runTransform(node *ir.Node) {
 
 // processTransform applies the plugin to one message: delivery retries per
 // the incoming edge's policy (review R6), then dead letter — a transform
-// failure never fails the node. Zero outputs filter the message (settled,
-// NoMatch — the same semantics as an edge predicate with no matching edge);
+// failure never fails the node. Zero outputs filter the message (committed
+// as filtered, NoMatch — the same semantics as an edge predicate with no
+// matching edge);
 // N outputs fan out with the commit accounting expanded for the extra
 // branches, the split plugin's 1→N contract.
 func (e *Engine) processTransform(node *ir.Node, inst *instance, t registry.Transform) {
