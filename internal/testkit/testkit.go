@@ -75,7 +75,7 @@ func (s *ManualSource) Run(ctx context.Context, emit func(registry.Message)) {
 
 // Emit pushes a raw message and blocks until the engine has accepted it
 // (or the engine context is done). Cursor (when non-empty) participates in
-// the settle watermark via Settled. Across engine restarts sharing this
+// the commit watermark via Commit. Across engine restarts sharing this
 // source, Emit first waits for the (re)started engine's live run context —
 // otherwise the emission races Run's assignment and can be dropped against
 // the previous engine's canceled context.
@@ -124,9 +124,9 @@ func (s *ManualSource) liveRunCtxLocked() context.Context {
 	}
 }
 
-// Settled records the watermark: it persists the cursor of the highest
-// settled emission (mirrors how a future sql pull source would commit).
-func (s *ManualSource) Settled(ctx context.Context, throughSrcSeq int64) ([]byte, error) {
+// Commit records the watermark: it persists the cursor of the highest
+// committed emission (mirrors how a future sql pull source would commit).
+func (s *ManualSource) Commit(ctx context.Context, throughSrcSeq int64) ([]byte, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var maxCur string

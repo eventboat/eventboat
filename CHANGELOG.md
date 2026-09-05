@@ -8,6 +8,31 @@ All notable changes to Eventboat. The format follows
 
 ### Changed
 
+- **Vocabulary rename: Settled → Commit, everywhere.** The settle term was
+  unusual for stream processing and forced a translation step at every use
+  ("commit offsets HERE" was already how the docs explained it). The source
+  contract is now `registry.Source.Commit(ctx, throughSrcSeq)` — called, as
+  before, when the engine's contiguous committed frontier advances; sources
+  commit their offsets there. Semantics are unchanged: "committed" still
+  means a message reached a terminal state (sink ack, dead letter, filtered,
+  optional drop), so committing past a dead letter is by design (at-least-once,
+  never loss). Renamed across the whole stack: the gRPC plugin ABI
+  (`rpc Settled` → `rpc Commit`, `SettledRequest/SettledResponse` →
+  `CommitRequest/CommitResponse` — external plugins must be rebuilt),
+  engine internals (`settleTracker` → `commitTracker`, `WaitSettled` →
+  `WaitCommit`, `SettleSnapshot` → `CommitSnapshot`, `SettledCount` →
+  `CommittedCount`), observability (counters
+  `eventboat_messages_settled_total` → `eventboat_messages_committed_total`,
+  histogram `eventboat_settle_latency_seconds` →
+  `eventboat_commit_latency_seconds`, span terminal state `settled` →
+  `committed`, ops status field `settled` → `committed`), the run settle
+  report keys (`settled_through`/`settled` → `committed_through`/`committed`),
+  the job lifecycle status `settling` → `committing` (runs persisted with the
+  old `settling` status are no longer seen as active after the upgrade —
+  re-trigger them), and the throughput benchmark (`BenchmarkSettleThroughput`
+  → `BenchmarkCommitThroughput`, bench gate updated). Pre-1.0, no compat
+  shims; dated review documents keep the historical wording.
+
 - **Builtin plugin configs are now defined by typed structs.** Each plugin
   declares one config struct (`json` tags name keys, `schema` tags declare
   constraints and defaults) and registers through

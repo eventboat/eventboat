@@ -1,7 +1,7 @@
 // Package jobs implements the job-pipeline runtime (redesign-v3.md §5.8):
 // cron scheduling, catchup_window compensation, overlap admission,
 // skip_if_successful, per-run engine lifecycle (pending → running →
-// settling → success|partial|failed|canceled), typed parameters with the
+// committing → success|partial|failed|canceled), typed parameters with the
 // cursor/now engine bindings, failure/success hooks and run-history
 // retention. Scheduling lives here — never in source plugins.
 package jobs
@@ -114,7 +114,7 @@ func New(cfg *config.Pipeline, file string, st store.Store, reg *registry.Regist
 // Start resumes interrupted runs, performs catchup, and (when scheduled)
 // fires ticks until ctx is done.
 func (m *Manager) Start(ctx context.Context) error {
-	// Crash recovery: runs in pending/running/settling resume from the
+	// Crash recovery: runs in pending/running/committing resume from the
 	// persisted watermark + spool replay (invariants 3 & 7).
 	runnable, err := m.st.RunnableJobRuns(m.cfg.Name)
 	if err != nil {
@@ -320,7 +320,7 @@ func (m *Manager) spawn(ctx context.Context, params map[string]any, trigger, sch
 func (m *Manager) spawnResume(ctx context.Context, jr store.JobRun) {
 	// Resume with the trigger-time inputs (empty for scheduled defaults);
 	// cursor/now re-resolve against the CURRENT watermark so the source
-	// continues after the settled frontier instead of re-pulling it.
+	// continues after the committed frontier instead of re-pulling it.
 	params := map[string]any{}
 	for k, v := range jr.Parameters {
 		params[k] = v
@@ -485,7 +485,7 @@ func (m *Manager) runOnce(ctx context.Context, jr *store.JobRun, triggerParams, 
 	go func() { runDone <- eng.Run(engineCtx) }()
 
 	// Wait for quiescence: all sources stopped (exhausted or failed) and
-	// nothing outstanding (settling phase).
+	// nothing outstanding (committing phase).
 	for !m.quiesced(eng) {
 		select {
 		case <-ctx.Done():
@@ -502,7 +502,7 @@ func (m *Manager) runOnce(ctx context.Context, jr *store.JobRun, triggerParams, 
 			case <-time.After(opts.DrainTimeout + 2*time.Second):
 			}
 			jr.RowsRead = eng.Metrics.MessagesIn.Load()
-			jr.Delivered = eng.Metrics.SettledCount.Load() - eng.Metrics.DeadLettered.Load()
+			jr.Delivered = eng.Metrics.CommittedCount.Load() - eng.Metrics.DeadLettered.Load()
 			jr.DeadLettered = eng.Metrics.DeadLettered.Load()
 			fail(store.JobCanceled, "run canceled")
 			return
@@ -510,7 +510,7 @@ func (m *Manager) runOnce(ctx context.Context, jr *store.JobRun, triggerParams, 
 		}
 	}
 
-	// Sources done and settled: stop the engine gracefully.
+	// Sources done and committed: stop the engine gracefully.
 	engineCancel()
 	select {
 	case <-runDone:
@@ -520,7 +520,7 @@ func (m *Manager) runOnce(ctx context.Context, jr *store.JobRun, triggerParams, 
 	}
 
 	jr.RowsRead = eng.Metrics.MessagesIn.Load()
-	jr.Delivered = eng.Metrics.SettledCount.Load() - eng.Metrics.DeadLettered.Load()
+	jr.Delivered = eng.Metrics.CommittedCount.Load() - eng.Metrics.DeadLettered.Load()
 	jr.DeadLettered = eng.Metrics.DeadLettered.Load()
 	if sourceErr != nil {
 		fail(store.JobFailed, "source: "+sourceErr.Error())

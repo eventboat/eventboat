@@ -1,5 +1,5 @@
 // Package engine executes one compiled pipeline: source admission through a
-// durable spool, in-memory DAG execution with settle tracking, per-edge
+// durable spool, in-memory DAG execution with commit tracking, per-edge
 // delivery retries, dead lettering, checkpointing and backpressure
 // (redesign-v3.md §6.2). Every reliability property is phrased as one of the
 // seven invariants, each with a dedicated test.
@@ -32,7 +32,7 @@ type Options struct {
 	NewID          func() string
 	BackoffBase    time.Duration // delivery retry backoff base (exponential)
 	DLBackoff      time.Duration // dead letter write retry interval
-	HighWatermark  int           // unsettled messages before sources pause
+	HighWatermark  int           // uncommitted messages before sources pause
 	ChannelSize    int           // default per-node channel capacity
 	BatchFlush     time.Duration // sink batch flush interval
 	DefaultTimeout time.Duration // per sink-write attempt when unset on edge
@@ -40,7 +40,7 @@ type Options struct {
 	StarOptions    starhost.Options
 
 	// Admission optionally replaces the per-engine admission semaphore with a
-	// SHARED pool (same capacity semantics: one slot per unsettled message).
+	// SHARED pool (same capacity semantics: one slot per uncommitted message).
 	// The jobs manager hands one pool to every concurrent run of a pipeline
 	// so max_in_flight aggregates across overlap:all runs instead of
 	// multiplying per run (M2 review R17). nil = per-engine semaphore.
@@ -49,7 +49,7 @@ type Options struct {
 	// SpanSampleRate is the per-message span sampling rate (pipeline
 	// telemetry.span_sample_rate, §6.6/R16: per-message spans only when the
 	// pipeline opts in). 0 (default) = no spans, zero cost; 1 = all
-	// messages. Spans cover accept → terminal state (settled or dead
+	// messages. Spans cover accept → terminal state (committed or dead
 	// letter); they are roots (the engine does not thread the span context
 	// through the DAG — correlation rides the attributes).
 	SpanSampleRate float64
@@ -121,22 +121,22 @@ func (o Options) WithLimits(l *config.Limits) Options {
 }
 
 // Metrics holds engine counters (POC observability: expvar-style atomics).
-// SettledCount counts messages settled this engine instance; CheckpointPtr
+// CommittedCount counts messages committed this engine instance; CheckpointPtr
 // mirrors the durable checkpoint position (M2 review R5 split them apart).
 type Metrics struct {
-	MessagesIn    atomic.Int64
-	SettledCount  atomic.Int64
-	CheckpointPtr atomic.Int64
-	DeadLettered  atomic.Int64
-	CelEvalErrors atomic.Int64
-	NoMatch       atomic.Int64
-	Retries       atomic.Int64
-	DlqFailures   atomic.Int64
-	OptionalDrops atomic.Int64
-	DecodeErrors  atomic.Int64
-	TransformRuns atomic.Int64
-	Backpressured atomic.Int64
-	SpoolFailures atomic.Int64
+	MessagesIn     atomic.Int64
+	CommittedCount atomic.Int64
+	CheckpointPtr  atomic.Int64
+	DeadLettered   atomic.Int64
+	CelEvalErrors  atomic.Int64
+	NoMatch        atomic.Int64
+	Retries        atomic.Int64
+	DlqFailures    atomic.Int64
+	OptionalDrops  atomic.Int64
+	DecodeErrors   atomic.Int64
+	TransformRuns  atomic.Int64
+	Backpressured  atomic.Int64
+	SpoolFailures  atomic.Int64
 }
 
 // Engine runs one pipeline against one store.
@@ -147,7 +147,7 @@ type Engine struct {
 	Opts    Options
 	Metrics Metrics
 
-	settle  *settleTracker
+	commit  *commitTracker
 	chans   map[string]chan *instance
 	sinks   map[string]registry.Sink
 	codecs  map[string]registry.Codec // resolved by codec name
@@ -157,7 +157,7 @@ type Engine struct {
 
 	// admitting counts accepts waiting on the admission semaphore, and
 	// replayDone flips once Run's crash replay has registered everything:
-	// WaitSettled must not read "settled" while either is in flight (an
+	// WaitCommit must not read "committed" while either is in flight (an
 	// admission-blocked message or an unregistered replay both look like
 	// outstanding==0 for a moment — flaky-test class, M3 CI).
 	admitting  atomic.Int64
@@ -167,7 +167,7 @@ type Engine struct {
 	acquiredMu sync.Mutex
 
 	acceptMu   sync.Mutex
-	acceptedAt map[int64]time.Time // spool seq → accept time (settle latency)
+	acceptedAt map[int64]time.Time // spool seq → accept time (commit latency)
 
 	spanMu sync.Mutex
 	spans  map[int64]trace.Span // spool seq → sampled per-message span (nil rate = empty)
@@ -199,7 +199,7 @@ type instance struct {
 }
 
 // New builds an engine: resolves plugins and codecs, allocates channels and
-// the settle tracker. Call Run to start it.
+// the commit tracker. Call Run to start it.
 func New(p *ir.Pipeline, st store.Store, reg *registry.Registry, opts Options) (*Engine, error) {
 	if opts.Clock == nil {
 		opts.Clock = time.Now
@@ -322,7 +322,7 @@ func New(p *ir.Pipeline, st store.Store, reg *registry.Registry, opts Options) (
 			sourceNames = append(sourceNames, name)
 		}
 	}
-	e.settle = newSettleTracker(p.Config.Name, sourceNames, e.onSettled, e.persistCheckpoint)
+	e.commit = newCommitTracker(p.Config.Name, sourceNames, e.onCommit, e.persistCheckpoint)
 	if opts.Admission != nil {
 		e.admitSem = opts.Admission // shared pool: pipeline-aggregated quota
 	} else {
@@ -331,12 +331,12 @@ func New(p *ir.Pipeline, st store.Store, reg *registry.Registry, opts Options) (
 	return e, nil
 }
 
-// onSettled releases the backpressure slot of one settled message, counts
+// onCommit releases the backpressure slot of one committed message, counts
 // it (R5: a count, distinct from the checkpoint pointer) and records its
-// accept-to-settle latency.
-func (e *Engine) onSettled(seq int64) {
-	e.Metrics.SettledCount.Add(1)
-	e.finishSpan(seq, "settled", "")
+// accept-to-commit latency.
+func (e *Engine) onCommit(seq int64) {
+	e.Metrics.CommittedCount.Add(1)
+	e.finishSpan(seq, "committed", "")
 	e.acceptMu.Lock()
 	accepted := e.acceptedAt[seq]
 	delete(e.acceptedAt, seq)
@@ -345,40 +345,40 @@ func (e *Engine) onSettled(seq int64) {
 	if !accepted.IsZero() {
 		latency = e.Opts.Clock().Sub(accepted)
 	}
-	e.Opts.Obs.RecordSettled(e.IR.Config.Name, latency)
+	e.Opts.Obs.RecordCommit(e.IR.Config.Name, latency)
 	e.releaseAdmission(seq)
 }
 
 // persistCheckpoint advances the durable checkpoint (invariant 2) and pushes
-// settle notifications into sources, persisting their returned state. It runs
-// OUTSIDE the settle tracker's lock, on the goroutine that settled the prefix;
+// commit notifications into sources, persisting their returned state. It runs
+// OUTSIDE the commit tracker's lock, on the goroutine that committed the prefix;
 // concurrent advances can therefore flush out of order, so monotonic guards
 // (persistMu) keep the checkpoint, per-source frontiers and the attempt
 // pointer from ever regressing. A failed checkpoint write only widens the
 // replay window on crash; the next advance retries. Never a loss (invariant 3).
-func (e *Engine) persistCheckpoint(settledThrough int64, frontiers map[string]int64) {
+func (e *Engine) persistCheckpoint(committedThrough int64, frontiers map[string]int64) {
 	e.persistMu.Lock()
 	defer e.persistMu.Unlock()
-	if settledThrough > e.persistedThrough {
-		if err := e.Store.SetCheckpoint(e.IR.Config.Name, settledThrough); err != nil {
+	if committedThrough > e.persistedThrough {
+		if err := e.Store.SetCheckpoint(e.IR.Config.Name, committedThrough); err != nil {
 			// Consume the flush position anyway: observers waiting on the
 			// visibility barrier must not block on a store that keeps
 			// failing — durability is retried by the next advance.
-			e.flushAttempted = settledThrough
+			e.flushAttempted = committedThrough
 			return
 		}
-		e.persistedThrough = settledThrough
-		e.Metrics.CheckpointPtr.Store(settledThrough)
+		e.persistedThrough = committedThrough
+		e.Metrics.CheckpointPtr.Store(committedThrough)
 	}
-	if settledThrough > e.flushAttempted {
-		e.flushAttempted = settledThrough
+	if committedThrough > e.flushAttempted {
+		e.flushAttempted = committedThrough
 	}
 	for name, src := range e.sources {
 		frontier := frontiers[name]
 		if frontier <= 0 || frontier <= e.srcPersisted[name] {
 			continue
 		}
-		state, err := src.Settled(e.ctx, frontier)
+		state, err := src.Commit(e.ctx, frontier)
 		if err != nil || state == nil {
 			continue
 		}
@@ -388,10 +388,10 @@ func (e *Engine) persistCheckpoint(settledThrough int64, frontiers map[string]in
 	}
 }
 
-// durableThrough reports the highest settle advance whose persistence has
+// durableThrough reports the highest commit advance whose persistence has
 // been ATTEMPTED (successfully or not). It is the visibility barrier: snapshot
-// accounting (settledThrough) may lead it only while an inline flush is in
-// flight — never after the settling goroutine has moved on.
+// accounting (committedThrough) may lead it only while an inline flush is in
+// flight — never after the committing goroutine has moved on.
 func (e *Engine) durableThrough() int64 {
 	e.persistMu.Lock()
 	defer e.persistMu.Unlock()
@@ -448,11 +448,11 @@ func (e *Engine) Run(ctx context.Context) error {
 		if _, known := e.IR.Nodes[node]; !known {
 			// Spooled but never dispatched and not attributable: release it
 			// instead of wedging the contiguous prefix.
-			e.settle.arrived(seq, "", 0)
-			e.settle.done(seq)
+			e.commit.arrived(seq, "", 0)
+			e.commit.done(seq)
 			return nil
 		}
-		e.settle.arrived(seq, "", 0)
+		e.commit.arrived(seq, "", 0)
 		e.dispatchFrom(node, seq, msg)
 		return nil
 	}); err != nil {
@@ -570,7 +570,7 @@ func (e *Engine) markSourceDone(name string, err error) {
 }
 
 // SourcesDone reports whether every registered source has stopped (job
-// completion detection: sources exhausted AND settle outstanding == 0).
+// completion detection: sources exhausted AND commit outstanding == 0).
 // False until Run has counted the sources — a poll racing engine startup
 // must not read "all done" from a zero total.
 func (e *Engine) SourcesDone() bool {
@@ -591,32 +591,32 @@ func (e *Engine) SourceErrors() map[string]error {
 }
 
 // Quiesced reports whether the pipeline has no outstanding execution work:
-// all sources stopped, nothing unsettled, and every settle advance flushed
+// all sources stopped, nothing uncommitted, and every commit advance flushed
 // (attempted) — job runners poll this to move a run into its terminal state.
 func (e *Engine) Quiesced() bool {
 	if !e.SourcesDone() {
 		return false
 	}
-	outstanding, settledThrough, _ := e.settle.snapshot()
-	return outstanding == 0 && e.durableThrough() >= settledThrough
+	outstanding, committedThrough, _ := e.commit.snapshot()
+	return outstanding == 0 && e.durableThrough() >= committedThrough
 }
 
-// Abandon terminal-settles every outstanding message by dead-lettering it
-// (M2 review R2: a canceled run must not leave unsettled spool rows wedging
+// Abandon force-commits every outstanding message by dead-lettering it
+// (M2 review R2: a canceled run must not leave uncommitted spool rows wedging
 // the checkpoint's contiguous prefix forever). Ordering preserves the
 // invariants: the dead letter is written first, and only then does the
 // tracker clear the message (any leftover branches from a mid-flight fan-out
 // are force-terminated after the durable record exists).
 func (e *Engine) Abandon(reason string) int {
 	abandoned := 0
-	_, settledThrough, _ := e.settle.snapshot()
-	after := settledThrough
+	_, committedThrough, _ := e.commit.snapshot()
+	after := committedThrough
 	for {
 		var seqs []int64
 		msgs := map[int64]registry.Message{}
 		last, more, ferr := e.Store.ReplayPage(e.IR.Config.Name, after, 256,
 			func(seq int64, msg registry.Message, _ time.Time) error {
-				if e.settle.isOutstanding(seq) {
+				if e.commit.isOutstanding(seq) {
 					seqs = append(seqs, seq)
 					msgs[seq] = msg
 				}
@@ -628,7 +628,7 @@ func (e *Engine) Abandon(reason string) int {
 		for _, seq := range seqs {
 			msg := msgs[seq]
 			e.deadLetterMsg(seq, msg, firstNonEmpty(msg.SrcName, "unknown"), "", reason, "")
-			e.settle.forceTerminal(seq)
+			e.commit.forceTerminal(seq)
 			abandoned++
 		}
 		if !more || last == after {
@@ -650,7 +650,7 @@ func firstNonEmpty(a, b string) string {
 // engine stamping, durable spool append, then DAG visibility (invariant 1:
 // nothing is visible before the append succeeds).
 func (e *Engine) accept(raw registry.Message, sourceNode string) error {
-	// Backpressure: block while too many unsettled messages are in flight.
+	// Backpressure: block while too many uncommitted messages are in flight.
 	e.admitting.Add(1)
 	select {
 	case e.admitSem <- struct{}{}:
@@ -701,7 +701,7 @@ func (e *Engine) accept(raw registry.Message, sourceNode string) error {
 	e.acquired[seq] = true
 	e.acquiredMu.Unlock()
 	e.startMessageSpan(seq, msg.ID, sourceNode)
-	e.settle.arrived(seq, sourceNode, raw.SrcSeq)
+	e.commit.arrived(seq, sourceNode, raw.SrcSeq)
 	e.dispatchFrom(sourceNode, seq, msg)
 	return nil
 }
@@ -770,7 +770,7 @@ func (e *Engine) dispatchFrom(sourceNode string, seq int64, msg registry.Message
 }
 
 // fanOut evaluates outgoing edge conditions (CEL errors count and act as
-// not-passed) and delivers to every matched edge. Zero matches settle the
+// not-passed) and delivers to every matched edge. Zero matches commit the
 // message as filtered (documented semantics, review R7).
 func (e *Engine) fanOut(node *ir.Node, seq int64, msg registry.Message) {
 	matched := make([]*ir.Edge, 0, len(node.Out))
@@ -792,10 +792,10 @@ func (e *Engine) fanOut(node *ir.Node, seq int64, msg registry.Message) {
 	if len(matched) == 0 {
 		e.Metrics.NoMatch.Add(1)
 		e.Opts.Obs.RecordNoMatch(e.IR.Config.Name, node.Name)
-		e.settle.done(seq)
+		e.commit.done(seq)
 		return
 	}
-	e.settle.add(seq, len(matched)-1)
+	e.commit.add(seq, len(matched)-1)
 	for _, edge := range matched {
 		e.deliver(edge, seq, msg)
 	}
@@ -806,9 +806,9 @@ func (e *Engine) deliver(edge *ir.Edge, seq int64, msg registry.Message) {
 	select {
 	case e.chans[edge.To] <- inst:
 	case <-e.ctx.Done():
-		// Shutdown with undelivered work: deliberately NOT settled, it stays
-		// unsettled and will be replayed from the spool on restart
-		// (invariant 3: replay covers the unsettled set).
+		// Shutdown with undelivered work: deliberately NOT committed, it stays
+		// uncommitted and will be replayed from the spool on restart
+		// (invariant 3: replay covers the uncommitted set).
 	}
 }
 
@@ -884,7 +884,7 @@ func (e *Engine) injectAt(node string, raw []byte, meta map[string]any, keepID s
 	e.acquiredMu.Lock()
 	e.acquired[seq] = true
 	e.acquiredMu.Unlock()
-	e.settle.arrived(seq, "", 0)
+	e.commit.arrived(seq, "", 0)
 	// Decode once so the sink's encoder can re-encode (writeBatch encodes
 	// from Decoded; Raw is the spooled truth and stays untouched).
 	codec, cerr := e.codec("json", e.Reg)
@@ -906,30 +906,30 @@ func (e *Engine) injectAt(node string, raw []byte, meta map[string]any, keepID s
 	return seq, nil
 }
 
-// WaitSettled blocks until no outstanding branches remain and every settle
-// advance has been flushed (attempted) — settle completion must still imply
+// WaitCommit blocks until no outstanding branches remain and every commit
+// advance has been flushed (attempted) — commit completion must still imply
 // persistence visibility now that the flush runs outside the tracker lock
 // (test helper; the durability barrier keeps that implication explicit).
-func (e *Engine) WaitSettled(ctx context.Context) error {
+func (e *Engine) WaitCommit(ctx context.Context) error {
 	tick := time.NewTicker(2 * time.Millisecond)
 	defer tick.Stop()
 	for {
-		outstanding, settledThrough, _ := e.settle.snapshot()
-		if outstanding == 0 && e.durableThrough() >= settledThrough && e.replayDone.Load() && e.admitting.Load() == 0 {
+		outstanding, committedThrough, _ := e.commit.snapshot()
+		if outstanding == 0 && e.durableThrough() >= committedThrough && e.replayDone.Load() && e.admitting.Load() == 0 {
 			return nil
 		}
 		select {
 		case <-ctx.Done():
-			outstanding, settled, arrived := e.settle.snapshot()
-			return fmt.Errorf("wait settled: ctx done with %d outstanding (settledThrough=%d arrivedMax=%d durableThrough=%d)", outstanding, settled, arrived, e.durableThrough())
+			outstanding, committed, arrived := e.commit.snapshot()
+			return fmt.Errorf("wait commit: ctx done with %d outstanding (committedThrough=%d arrivedMax=%d durableThrough=%d)", outstanding, committed, arrived, e.durableThrough())
 		case <-tick.C:
 		}
 	}
 }
 
-// SettleSnapshot exposes settle counters for tests and status.
-func (e *Engine) SettleSnapshot() (outstanding int, settledThrough int64, arrivedMax int64) {
-	return e.settle.snapshot()
+// CommitSnapshot exposes commit counters for tests and status.
+func (e *Engine) CommitSnapshot() (outstanding int, committedThrough int64, arrivedMax int64) {
+	return e.commit.snapshot()
 }
 
 func cloneMeta(m map[string]any) map[string]any {

@@ -65,7 +65,7 @@ func (s *cronSource) Run(ctx context.Context, emit func(registry.Message)) {
 	s.mu.Unlock()
 }
 
-func (s *cronSource) Settled(ctx context.Context, throughSrcSeq int64) ([]byte, error) {
+func (s *cronSource) Commit(ctx context.Context, throughSrcSeq int64) ([]byte, error) {
 	return nil, nil
 }
 

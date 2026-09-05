@@ -363,27 +363,27 @@ func (*RunRequest) Descriptor() ([]byte, []int) {
 	return file_proto_eventboat_plugin_v1_plugin_proto_rawDescGZIP(), []int{4}
 }
 
-type SettledRequest struct {
+type CommitRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	ThroughSrcSeq int64                  `protobuf:"varint,1,opt,name=through_src_seq,json=throughSrcSeq,proto3" json:"through_src_seq,omitempty"` // settle frontier advanced through this seq
+	ThroughSrcSeq int64                  `protobuf:"varint,1,opt,name=through_src_seq,json=throughSrcSeq,proto3" json:"through_src_seq,omitempty"` // commit frontier advanced through this seq
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *SettledRequest) Reset() {
-	*x = SettledRequest{}
+func (x *CommitRequest) Reset() {
+	*x = CommitRequest{}
 	mi := &file_proto_eventboat_plugin_v1_plugin_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *SettledRequest) String() string {
+func (x *CommitRequest) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*SettledRequest) ProtoMessage() {}
+func (*CommitRequest) ProtoMessage() {}
 
-func (x *SettledRequest) ProtoReflect() protoreflect.Message {
+func (x *CommitRequest) ProtoReflect() protoreflect.Message {
 	mi := &file_proto_eventboat_plugin_v1_plugin_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -395,19 +395,19 @@ func (x *SettledRequest) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use SettledRequest.ProtoReflect.Descriptor instead.
-func (*SettledRequest) Descriptor() ([]byte, []int) {
+// Deprecated: Use CommitRequest.ProtoReflect.Descriptor instead.
+func (*CommitRequest) Descriptor() ([]byte, []int) {
 	return file_proto_eventboat_plugin_v1_plugin_proto_rawDescGZIP(), []int{5}
 }
 
-func (x *SettledRequest) GetThroughSrcSeq() int64 {
+func (x *CommitRequest) GetThroughSrcSeq() int64 {
 	if x != nil {
 		return x.ThroughSrcSeq
 	}
 	return 0
 }
 
-type SettledResponse struct {
+type CommitResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	State         []byte                 `protobuf:"bytes,1,opt,name=state,proto3" json:"state,omitempty"` // new state to persist (nil = unchanged)
 	Error         string                 `protobuf:"bytes,2,opt,name=error,proto3" json:"error,omitempty"`
@@ -415,20 +415,20 @@ type SettledResponse struct {
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *SettledResponse) Reset() {
-	*x = SettledResponse{}
+func (x *CommitResponse) Reset() {
+	*x = CommitResponse{}
 	mi := &file_proto_eventboat_plugin_v1_plugin_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *SettledResponse) String() string {
+func (x *CommitResponse) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*SettledResponse) ProtoMessage() {}
+func (*CommitResponse) ProtoMessage() {}
 
-func (x *SettledResponse) ProtoReflect() protoreflect.Message {
+func (x *CommitResponse) ProtoReflect() protoreflect.Message {
 	mi := &file_proto_eventboat_plugin_v1_plugin_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -440,19 +440,19 @@ func (x *SettledResponse) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use SettledResponse.ProtoReflect.Descriptor instead.
-func (*SettledResponse) Descriptor() ([]byte, []int) {
+// Deprecated: Use CommitResponse.ProtoReflect.Descriptor instead.
+func (*CommitResponse) Descriptor() ([]byte, []int) {
 	return file_proto_eventboat_plugin_v1_plugin_proto_rawDescGZIP(), []int{6}
 }
 
-func (x *SettledResponse) GetState() []byte {
+func (x *CommitResponse) GetState() []byte {
 	if x != nil {
 		return x.State
 	}
 	return nil
 }
 
-func (x *SettledResponse) GetError() string {
+func (x *CommitResponse) GetError() string {
 	if x != nil {
 		return x.Error
 	}
@@ -656,10 +656,10 @@ const file_proto_eventboat_plugin_v1_plugin_proto_rawDesc = "" +
 	"\fInitResponse\x12\x14\n" +
 	"\x05error\x18\x01 \x01(\tR\x05error\"\f\n" +
 	"\n" +
-	"RunRequest\"8\n" +
-	"\x0eSettledRequest\x12&\n" +
-	"\x0fthrough_src_seq\x18\x01 \x01(\x03R\rthroughSrcSeq\"=\n" +
-	"\x0fSettledResponse\x12\x14\n" +
+	"RunRequest\"7\n" +
+	"\rCommitRequest\x12&\n" +
+	"\x0fthrough_src_seq\x18\x01 \x01(\x03R\rthroughSrcSeq\"<\n" +
+	"\x0eCommitResponse\x12\x14\n" +
 	"\x05state\x18\x01 \x01(\fR\x05state\x12\x14\n" +
 	"\x05error\x18\x02 \x01(\tR\x05error\"\x0e\n" +
 	"\fCloseRequest\"%\n" +
@@ -668,12 +668,12 @@ const file_proto_eventboat_plugin_v1_plugin_proto_rawDesc = "" +
 	"\fWriteRequest\x120\n" +
 	"\x05batch\x18\x01 \x03(\v2\x1a.eventboat.plugin.v1.EventR\x05batch\"%\n" +
 	"\rWriteResponse\x12\x14\n" +
-	"\x05error\x18\x01 \x01(\tR\x05error2\x88\x03\n" +
+	"\x05error\x18\x01 \x01(\tR\x05error2\x85\x03\n" +
 	"\x06Source\x12K\n" +
 	"\x04Init\x12 .eventboat.plugin.v1.InitRequest\x1a!.eventboat.plugin.v1.InitResponse\x12D\n" +
 	"\x03Run\x12\x1f.eventboat.plugin.v1.RunRequest\x1a\x1a.eventboat.plugin.v1.Event0\x01\x12E\n" +
-	"\x04Pull\x12\x1f.eventboat.plugin.v1.RunRequest\x1a\x1a.eventboat.plugin.v1.Event0\x01\x12T\n" +
-	"\aSettled\x12#.eventboat.plugin.v1.SettledRequest\x1a$.eventboat.plugin.v1.SettledResponse\x12N\n" +
+	"\x04Pull\x12\x1f.eventboat.plugin.v1.RunRequest\x1a\x1a.eventboat.plugin.v1.Event0\x01\x12Q\n" +
+	"\x06Commit\x12\".eventboat.plugin.v1.CommitRequest\x1a#.eventboat.plugin.v1.CommitResponse\x12N\n" +
 	"\x05Close\x12!.eventboat.plugin.v1.CloseRequest\x1a\".eventboat.plugin.v1.CloseResponse2\xf3\x01\n" +
 	"\x04Sink\x12K\n" +
 	"\x04Init\x12 .eventboat.plugin.v1.InitRequest\x1a!.eventboat.plugin.v1.InitResponse\x12N\n" +
@@ -694,18 +694,18 @@ func file_proto_eventboat_plugin_v1_plugin_proto_rawDescGZIP() []byte {
 
 var file_proto_eventboat_plugin_v1_plugin_proto_msgTypes = make([]protoimpl.MessageInfo, 12)
 var file_proto_eventboat_plugin_v1_plugin_proto_goTypes = []any{
-	(*MetaValue)(nil),       // 0: eventboat.plugin.v1.MetaValue
-	(*Event)(nil),           // 1: eventboat.plugin.v1.Event
-	(*InitRequest)(nil),     // 2: eventboat.plugin.v1.InitRequest
-	(*InitResponse)(nil),    // 3: eventboat.plugin.v1.InitResponse
-	(*RunRequest)(nil),      // 4: eventboat.plugin.v1.RunRequest
-	(*SettledRequest)(nil),  // 5: eventboat.plugin.v1.SettledRequest
-	(*SettledResponse)(nil), // 6: eventboat.plugin.v1.SettledResponse
-	(*CloseRequest)(nil),    // 7: eventboat.plugin.v1.CloseRequest
-	(*CloseResponse)(nil),   // 8: eventboat.plugin.v1.CloseResponse
-	(*WriteRequest)(nil),    // 9: eventboat.plugin.v1.WriteRequest
-	(*WriteResponse)(nil),   // 10: eventboat.plugin.v1.WriteResponse
-	nil,                     // 11: eventboat.plugin.v1.Event.MetaEntry
+	(*MetaValue)(nil),      // 0: eventboat.plugin.v1.MetaValue
+	(*Event)(nil),          // 1: eventboat.plugin.v1.Event
+	(*InitRequest)(nil),    // 2: eventboat.plugin.v1.InitRequest
+	(*InitResponse)(nil),   // 3: eventboat.plugin.v1.InitResponse
+	(*RunRequest)(nil),     // 4: eventboat.plugin.v1.RunRequest
+	(*CommitRequest)(nil),  // 5: eventboat.plugin.v1.CommitRequest
+	(*CommitResponse)(nil), // 6: eventboat.plugin.v1.CommitResponse
+	(*CloseRequest)(nil),   // 7: eventboat.plugin.v1.CloseRequest
+	(*CloseResponse)(nil),  // 8: eventboat.plugin.v1.CloseResponse
+	(*WriteRequest)(nil),   // 9: eventboat.plugin.v1.WriteRequest
+	(*WriteResponse)(nil),  // 10: eventboat.plugin.v1.WriteResponse
+	nil,                    // 11: eventboat.plugin.v1.Event.MetaEntry
 }
 var file_proto_eventboat_plugin_v1_plugin_proto_depIdxs = []int32{
 	11, // 0: eventboat.plugin.v1.Event.meta:type_name -> eventboat.plugin.v1.Event.MetaEntry
@@ -714,7 +714,7 @@ var file_proto_eventboat_plugin_v1_plugin_proto_depIdxs = []int32{
 	2,  // 3: eventboat.plugin.v1.Source.Init:input_type -> eventboat.plugin.v1.InitRequest
 	4,  // 4: eventboat.plugin.v1.Source.Run:input_type -> eventboat.plugin.v1.RunRequest
 	4,  // 5: eventboat.plugin.v1.Source.Pull:input_type -> eventboat.plugin.v1.RunRequest
-	5,  // 6: eventboat.plugin.v1.Source.Settled:input_type -> eventboat.plugin.v1.SettledRequest
+	5,  // 6: eventboat.plugin.v1.Source.Commit:input_type -> eventboat.plugin.v1.CommitRequest
 	7,  // 7: eventboat.plugin.v1.Source.Close:input_type -> eventboat.plugin.v1.CloseRequest
 	2,  // 8: eventboat.plugin.v1.Sink.Init:input_type -> eventboat.plugin.v1.InitRequest
 	9,  // 9: eventboat.plugin.v1.Sink.Write:input_type -> eventboat.plugin.v1.WriteRequest
@@ -722,7 +722,7 @@ var file_proto_eventboat_plugin_v1_plugin_proto_depIdxs = []int32{
 	3,  // 11: eventboat.plugin.v1.Source.Init:output_type -> eventboat.plugin.v1.InitResponse
 	1,  // 12: eventboat.plugin.v1.Source.Run:output_type -> eventboat.plugin.v1.Event
 	1,  // 13: eventboat.plugin.v1.Source.Pull:output_type -> eventboat.plugin.v1.Event
-	6,  // 14: eventboat.plugin.v1.Source.Settled:output_type -> eventboat.plugin.v1.SettledResponse
+	6,  // 14: eventboat.plugin.v1.Source.Commit:output_type -> eventboat.plugin.v1.CommitResponse
 	8,  // 15: eventboat.plugin.v1.Source.Close:output_type -> eventboat.plugin.v1.CloseResponse
 	3,  // 16: eventboat.plugin.v1.Sink.Init:output_type -> eventboat.plugin.v1.InitResponse
 	10, // 17: eventboat.plugin.v1.Sink.Write:output_type -> eventboat.plugin.v1.WriteResponse

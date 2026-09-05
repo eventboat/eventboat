@@ -38,7 +38,7 @@ func TestEngineLinearFlow(t *testing.T) {
 	eng, _ := runEngine(t, pip, st, h.reg, fastOptions())
 
 	h.source("in").Emit([]byte(`{"id":"A1","price":20,"qty":6}`), "")
-	waitSettled(t, eng)
+	waitCommit(t, eng)
 
 	delivered, _, _ := h.sink("out").snapshot()
 	if len(delivered) != 1 {
@@ -86,7 +86,7 @@ sinks:
 
 	h.source("orders").Emit([]byte(`{"kind":"order"}`), "")
 	h.source("refunds").Emit([]byte(`{"kind":"refund"}`), "")
-	waitSettled(t, eng)
+	waitCommit(t, eng)
 
 	delivered, _, _ := h.sink("audit").snapshot()
 	if len(delivered) != 2 {
@@ -123,7 +123,7 @@ sinks:
 	eng, _ := runEngine(t, pip, store.NewMemory("split"), h.reg, fastOptions())
 
 	h.source("in").Emit([]byte(`[{"i":1},{"i":2},{"i":3}]`), "")
-	waitSettled(t, eng)
+	waitCommit(t, eng)
 
 	delivered, _, _ := h.sink("out").snapshot()
 	if len(delivered) != 3 {
@@ -162,7 +162,7 @@ sinks:
 	h.source("in").Emit([]byte(`{"region":"eu","price":1,"qty":1}`), "")
 	h.source("in").Emit([]byte(`{"region":"us","price":2,"qty":2}`), "")
 	h.source("in").Emit([]byte(`{"region":"apac","price":3,"qty":3}`), "")
-	waitSettled(t, eng)
+	waitCommit(t, eng)
 
 	eu, _, _ := h.sink("eu").snapshot()
 	us, _, _ := h.sink("us").snapshot()
@@ -193,7 +193,7 @@ sinks:
 	eng, _ := runEngine(t, pip, st, h.reg, fastOptions())
 
 	h.source("in").Emit([]byte(`{not json`), "")
-	waitSettled(t, eng)
+	waitCommit(t, eng)
 
 	if delivered, _, _ := h.sink("out").snapshot(); len(delivered) != 0 {
 		t.Fatalf("malformed message leaked to sink")
@@ -233,7 +233,7 @@ sinks:
 	eng, _ := runEngine(t, pip, st, h.reg, fastOptions())
 
 	h.source("in").Emit([]byte(`{"a":1}`), "")
-	waitSettled(t, eng)
+	waitCommit(t, eng)
 
 	dls, _ := st.DeadLetters("scriptfail")
 	if len(dls) != 1 {
@@ -277,7 +277,7 @@ sinks:
 	}
 
 	h.source("in").Emit([]byte(`{"a":1}`), "")
-	waitSettled(t, eng)
+	waitCommit(t, eng)
 
 	delivered, writes, _ := h.sink("out").snapshot()
 	if len(delivered) != 1 || writes != 3 {
@@ -329,10 +329,10 @@ sinks:
 	case <-time.After(150 * time.Millisecond):
 		// still blocked: good
 	case <-gate:
-		t.Fatal("second message admitted while first unsettled")
+		t.Fatal("second message admitted while first uncommitted")
 	}
 	close(gate)
-	waitSettled(t, eng)
+	waitCommit(t, eng)
 	delivered, _, _ := h.sink("out").snapshot()
 	if len(delivered) != 2 {
 		t.Fatalf("delivered = %d, want 2 after release", len(delivered))
@@ -361,9 +361,9 @@ sinks:
 
 	// payload.total is a string (type error) and payload.label is absent
 	// (unknown map key): both predicates fail at evaluation, count as
-	// not-passed, and the message settles as filtered.
+	// not-passed, and the message commits as filtered.
 	h.source("in").Emit([]byte(`{"total":"NaN"}`), "")
-	waitSettled(t, eng)
+	waitCommit(t, eng)
 
 	if got := eng.Metrics.CelEvalErrors.Load(); got != 2 {
 		t.Errorf("cel eval errors = %d, want 2", got)
@@ -406,7 +406,7 @@ sinks:
 	if _, err := eng.InjectReplay("t", []byte(`{"i":1}`), map[string]any{"job_run_id": "r1"}, "original-id-7"); err != nil {
 		t.Fatal(err)
 	}
-	waitSettled(t, eng)
+	waitCommit(t, eng)
 
 	delivered, _, _ := h.sink("out").snapshot()
 	if len(delivered) != 1 {
@@ -433,7 +433,7 @@ sinks:
 	if _, err := eng.InjectReplay("in", []byte(`{"i":2}`), nil, "original-id-8"); err != nil {
 		t.Fatal(err)
 	}
-	waitSettled(t, eng)
+	waitCommit(t, eng)
 	delivered, _, _ = h.sink("out").snapshot()
 	if len(delivered) != 2 || delivered[1].ID != "original-id-8" {
 		t.Fatalf("source-node replay lost identity: %+v", delivered)

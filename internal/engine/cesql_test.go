@@ -36,7 +36,7 @@ sinks:
 	src.Emit([]byte(`{"region":"EU","amount":50}`), "")
 	src.Emit([]byte(`{"region":"US","amount":500}`), "")
 	src.Emit([]byte(`{"amount":500}`), "") // missing region => evaluation error on both edges: counted, not passed
-	waitSettled(t, eng)
+	waitCommit(t, eng)
 
 	big, _, _ := h.sink("big").snapshot()
 	us, _, _ := h.sink("us").snapshot()

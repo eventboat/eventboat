@@ -13,7 +13,7 @@ import (
 // fast-fail — a dead plugin surfaces as stream/write errors and a redeploy
 // recovers. grpc.restart: restart hands the process to a supervisor that
 // respawns it with exponential backoff and re-delivers its config (and the
-// latest persisted state, so pull sources resume past the settled
+// latest persisted state, so pull sources resume past the committed
 // watermark — duplicates are the at-least-once contract, never loss).
 
 const (

@@ -55,7 +55,7 @@ sinks:
 
 	src := h.source("wasm")
 	src.Emit([]byte(`{"samples":[1,2,3]}`), "")
-	waitSettled(t, eng)
+	waitCommit(t, eng)
 
 	got, _, _ := h.sink("out").snapshot()
 	if len(got) != 1 {
@@ -93,7 +93,7 @@ sinks:
 	src := h.source("wasmf")
 	// Empty values: the guest reports a domain error → retry → dead letter.
 	src.Emit([]byte(`{"samples":[]}`), "")
-	waitSettled(t, eng)
+	waitCommit(t, eng)
 
 	if got := eng.Metrics.DeadLettered.Load(); got != 1 {
 		t.Fatalf("dead lettered %d, want 1", got)

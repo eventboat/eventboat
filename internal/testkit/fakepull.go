@@ -22,7 +22,7 @@ type FakePullSource struct {
 	mu        sync.Mutex
 	rows      []fakeRow
 	failNext  bool
-	watermark string // committed watermark (from Settled)
+	watermark string // committed watermark (from Commit)
 	pending   map[int64]fakeRow
 	nextSeq   int64
 	exhausted bool
@@ -78,7 +78,7 @@ func (s *FakePullSource) Init(state []byte) error {
 }
 
 // Pull emits staged rows with cursor strictly after the restored watermark
-// (rows resume after the settled frontier), then reports exhaustion.
+// (rows resume after the committed frontier), then reports exhaustion.
 func (s *FakePullSource) Pull(ctx context.Context, emit func(registry.Message)) error {
 	s.mu.Lock()
 	if s.failNext {
@@ -97,7 +97,7 @@ func (s *FakePullSource) Pull(ctx context.Context, emit func(registry.Message)) 
 			return err
 		}
 		if r.cursor <= s.readWatermark() {
-			continue // already settled in a previous run
+			continue // already committed in a previous run
 		}
 		raw, err := json.Marshal(r.payload)
 		if err != nil {
@@ -121,8 +121,8 @@ func (s *FakePullSource) readWatermark() string {
 	return s.watermark
 }
 
-// Settled commits the watermark at the contiguous settled frontier.
-func (s *FakePullSource) Settled(ctx context.Context, throughSrcSeq int64) ([]byte, error) {
+// Commit advances the watermark to the contiguous committed frontier.
+func (s *FakePullSource) Commit(ctx context.Context, throughSrcSeq int64) ([]byte, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var maxSeq int64

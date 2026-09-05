@@ -68,12 +68,12 @@ type pendingRow struct {
 
 // sqlSource pulls rows over database/sql with keyset pagination
 // (redesign-v3.md §5.8, M2 review R8). Commit state is {watermark, last_key}:
-// Init restores it (resume), Settled advances it to the contiguous settled
-// frontier (invariant 7 — the watermark never exceeds settled rows).
+// Init restores it (resume), Commit advances it to the contiguous committed
+// frontier (invariant 7 — the watermark never exceeds committed rows).
 //
 // Concurrency: Pull runs in the source goroutine while the engine calls
-// Settled from the settle path; shared fields are guarded by mu. Pagination
-// tracks the last PULLED key locally; only the SETTLED key is persisted.
+// Commit from the commit path; shared fields are guarded by mu. Pagination
+// tracks the last PULLED key locally; only the COMMITTED key is persisted.
 type sqlSource struct {
 	driver   string
 	dsn      string
@@ -85,8 +85,8 @@ type sqlSource struct {
 	emit     string
 
 	mu        sync.Mutex
-	watermark string // max settled cursor value ("" = start)
-	lastKey   []any  // key values of the settled frontier row
+	watermark string // max committed cursor value ("" = start)
+	lastKey   []any  // key values of the committed frontier row
 	pending   map[int64]pendingRow
 	nextSeq   int64
 }
@@ -111,7 +111,7 @@ func (s *sqlSource) Init(state []byte) error {
 	return nil
 }
 
-// Watermark returns the settled cursor watermark (jobs runner binds it to
+// Watermark returns the committed cursor watermark (jobs runner binds it to
 // ${parameters.from} when the declared value is the sentinel "cursor").
 func (s *sqlSource) Watermark() string {
 	s.mu.Lock()
@@ -236,11 +236,11 @@ func (s *sqlSource) emitRow(emit func(registry.Message), row map[string]any, cur
 	s.mu.Unlock()
 }
 
-// Settled commits the watermark at the contiguous settled frontier
+// Commit advances the watermark to the contiguous committed frontier
 // (invariant 7). Rows are emitted in key order, so the frontier row is the
-// emission with the highest srcSeq within the settled prefix — its cursor
+// emission with the highest srcSeq within the committed prefix — its cursor
 // IS the watermark (a string-max would misorder numeric cursors: "9" > "24").
-func (s *sqlSource) Settled(ctx context.Context, throughSrcSeq int64) ([]byte, error) {
+func (s *sqlSource) Commit(ctx context.Context, throughSrcSeq int64) ([]byte, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var maxSeq int64

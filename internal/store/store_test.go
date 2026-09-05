@@ -325,6 +325,6 @@ func TestSQLitePersistsAcrossReopen(t *testing.T) {
 		return nil
 	})
 	if count != 0 {
-		t.Fatalf("settled message replayed: %d", count)
+		t.Fatalf("committed message replayed: %d", count)
 	}
 }

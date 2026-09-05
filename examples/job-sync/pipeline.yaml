@@ -15,7 +15,7 @@ constants:
   default_region: unknown
 
 parameters:
-  from: { type: string, default: cursor }   # engine binding: last settled watermark
+  from: { type: string, default: cursor }   # engine binding: last committed watermark
   to:   { type: string, default: now }      # engine binding: run start time
 
 edge_defaults:

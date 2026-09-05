@@ -199,11 +199,11 @@ func waitReady(t testing.TB, eng *Engine) {
 	t.Fatal("engine not ready")
 }
 
-func waitSettled(t *testing.T, eng *Engine) {
+func waitCommit(t *testing.T, eng *Engine) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if err := eng.WaitSettled(ctx); err != nil {
+	if err := eng.WaitCommit(ctx); err != nil {
 		t.Fatal(err)
 	}
 }

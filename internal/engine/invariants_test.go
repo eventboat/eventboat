@@ -55,22 +55,22 @@ func TestInvariant_SpoolBeforeVisible(t *testing.T) {
 	if delivered, _, _ := h.sink("out").snapshot(); len(delivered) != 0 {
 		t.Fatalf("message became visible despite failed spool append")
 	}
-	if out, _, _ := eng.SettleSnapshot(); out != 0 {
+	if out, _, _ := eng.CommitSnapshot(); out != 0 {
 		t.Errorf("outstanding = %d, want 0 (message never entered the DAG)", out)
 	}
 
 	// Positive control: with the store healthy the same emission flows.
 	failAppend = false
 	h.source("in").Emit([]byte(`{"i":2}`), "")
-	waitSettled(t, eng)
+	waitCommit(t, eng)
 	if delivered, _, _ := h.sink("out").snapshot(); len(delivered) != 1 {
 		t.Fatalf("healthy path broken: %d delivered", len(delivered))
 	}
 }
 
-// Invariant 2: the checkpoint only advances over settled messages. A wedged
-// write keeps the message unsettled and pins the contiguous checkpoint.
-func TestInvariant_CheckpointAdvancesOnlyAfterSettle(t *testing.T) {
+// Invariant 2: the checkpoint only advances over committed messages. A wedged
+// write keeps the message uncommitted and pins the contiguous checkpoint.
+func TestInvariant_CheckpointAdvancesOnlyAfterCommit(t *testing.T) {
 	h := newHarness(t)
 	pip := h.build(invYAML)
 	st := store.NewMemory("inv")
@@ -84,9 +84,9 @@ func TestInvariant_CheckpointAdvancesOnlyAfterSettle(t *testing.T) {
 	eng, _ := runEngine(t, pip, st, h.reg, fastOptions())
 
 	h.source("in").Emit([]byte(`{"i":1}`), "")
-	waitSettled(t, eng)
+	waitCommit(t, eng)
 	if cp, _ := st.Checkpoint("inv"); cp != 1 {
-		t.Fatalf("checkpoint after first settle = %d, want 1", cp)
+		t.Fatalf("checkpoint after first commit = %d, want 1", cp)
 	}
 
 	h.source("in").Emit([]byte(`{"i":2}`), "")
@@ -95,19 +95,19 @@ func TestInvariant_CheckpointAdvancesOnlyAfterSettle(t *testing.T) {
 		return writes >= 2 // second write is now wedged on the gate
 	})
 	if cp, _ := st.Checkpoint("inv"); cp != 1 {
-		t.Fatalf("checkpoint advanced to %d while message 2 is unsettled", cp)
+		t.Fatalf("checkpoint advanced to %d while message 2 is uncommitted", cp)
 	}
 
 	close(gate)
-	waitSettled(t, eng)
+	waitCommit(t, eng)
 	if cp, _ := st.Checkpoint("inv"); cp != 2 {
-		t.Fatalf("checkpoint = %d after settle, want 2", cp)
+		t.Fatalf("checkpoint = %d after commit, want 2", cp)
 	}
 }
 
 // Invariant 3: after a kill -9, replay from the checkpoint covers every
-// unsettled message (at-least-once; duplicates are allowed, loss is not).
-func TestInvariant_Kill9ReplayReplaysAllUnsettled(t *testing.T) {
+// uncommitted message (at-least-once; duplicates are allowed, loss is not).
+func TestInvariant_Kill9ReplayReplaysAllUncommitted(t *testing.T) {
 	h := newHarness(t)
 	pip := h.build(invYAML)
 	dbPath := t.TempDir() + "/inv3.db"
@@ -127,14 +127,14 @@ func TestInvariant_Kill9ReplayReplaysAllUnsettled(t *testing.T) {
 	}
 	eng1, _ := runEngine(t, pip, st1, h.reg, fastOptions())
 	h.source("in").Emit([]byte(`{"i":"A"}`), "")
-	waitSettled(t, eng1)
+	waitCommit(t, eng1)
 	h.source("in").Emit([]byte(`{"i":"B"}`), "")
 	waitFor(t, func() bool {
 		_, writes, _ := h.sink("out").snapshot()
 		return writes >= 2
 	})
 	if cp, _ := st1.Checkpoint("inv"); cp != 1 {
-		t.Fatalf("checkpoint = %d, want 1 (B unsettled)", cp)
+		t.Fatalf("checkpoint = %d, want 1 (B uncommitted)", cp)
 	}
 
 	// Simulate the crash: abandon engine 1 (its wedged write stays wedged —
@@ -149,7 +149,7 @@ func TestInvariant_Kill9ReplayReplaysAllUnsettled(t *testing.T) {
 	opts := fastOptions()
 	opts.SinkWrapper = func(node string, s registry.Sink) registry.Sink { return recovered }
 	eng2, _ := runEngine(t, pip, st2, h.reg, opts)
-	waitSettled(t, eng2)
+	waitCommit(t, eng2)
 
 	replayed, _, _ := recovered.snapshot()
 	if len(replayed) != 1 {
@@ -168,8 +168,8 @@ func TestInvariant_Kill9ReplayReplaysAllUnsettled(t *testing.T) {
 }
 
 // Invariant 4: when the dead letter write itself fails, the message must not
-// settle — the pipeline degrades (blocks that branch) instead of losing data.
-func TestInvariant_DeadLetterWriteFailureBlocksSettle(t *testing.T) {
+// commit — the pipeline degrades (blocks that branch) instead of losing data.
+func TestInvariant_DeadLetterWriteFailureBlocksCommit(t *testing.T) {
 	h := newHarness(t)
 	pip := h.build(invYAML)
 
@@ -191,32 +191,32 @@ func TestInvariant_DeadLetterWriteFailureBlocksSettle(t *testing.T) {
 	waitFor(t, func() bool { return eng.Metrics.DlqFailures.Load() >= 2 })
 	time.Sleep(50 * time.Millisecond)
 
-	out, settledThrough, _ := eng.SettleSnapshot()
+	out, committedThrough, _ := eng.CommitSnapshot()
 	if out == 0 {
-		t.Fatal("message settled despite dead letter write failure")
+		t.Fatal("message committed despite dead letter write failure")
 	}
-	if settledThrough != 0 {
-		t.Fatalf("checkpoint advanced to %d with unsettled dead letter", settledThrough)
+	if committedThrough != 0 {
+		t.Fatalf("checkpoint advanced to %d with uncommitted dead letter", committedThrough)
 	}
 	dls, _ := st.DeadLetters("inv")
 	if len(dls) != 0 {
 		t.Fatalf("dead letter recorded despite failing writes: %d", len(dls))
 	}
 
-	// Repair the dead letter store: the message settles through the DLQ.
+	// Repair the dead letter store: the message commits through the DLQ.
 	dlBroken.Store(false)
-	waitSettled(t, eng)
+	waitCommit(t, eng)
 	dls, _ = st.DeadLetters("inv")
 	if len(dls) != 1 {
 		t.Fatalf("dead letter missing after repair: %d", len(dls))
 	}
 	if cp, _ := st.Checkpoint("inv"); cp != 1 {
-		t.Errorf("checkpoint = %d after DL settle, want 1", cp)
+		t.Errorf("checkpoint = %d after DL commit, want 1", cp)
 	}
 }
 
 // Invariant 5: a required:false edge that fails affects only its own branch;
-// sibling branches settle normally and the message still settles.
+// sibling branches commit normally and the message still commits.
 func TestInvariant_RequiredFalseFailureDoesNotBlockSiblingBranches(t *testing.T) {
 	h := newHarness(t)
 	pip := h.build(`
@@ -242,7 +242,7 @@ sinks:
 	h.sink("telemetry").fail = func(attempt int) error { return errString("telemetry down") }
 
 	h.source("in").Emit([]byte(`{"i":1}`), "")
-	waitSettled(t, eng)
+	waitCommit(t, eng)
 
 	primary, _, _ := h.sink("primary").snapshot()
 	if len(primary) != 1 {
@@ -256,7 +256,7 @@ sinks:
 		t.Fatalf("optional edge failure must not dead letter: %d", len(dls))
 	}
 	if cp, _ := st.Checkpoint("inv5"); cp != 1 {
-		t.Errorf("checkpoint = %d, want 1 (message settled)", cp)
+		t.Errorf("checkpoint = %d, want 1 (message committed)", cp)
 	}
 }
 
@@ -273,7 +273,7 @@ func TestInvariant_RedeliveryKeepsMessageIdStable(t *testing.T) {
 	eng, stopA := runEngine(t, pip, st, h.reg, fastOptions())
 	h.source("in").Emit([]byte(`{"i":1}`), "")
 	h.source("in").Emit([]byte(`{"i":1}`), "")
-	waitSettled(t, eng)
+	waitCommit(t, eng)
 	delivered, _, _ := h.sink("out").snapshot()
 	if len(delivered) != 2 {
 		t.Fatalf("want 2 deliveries, got %d", len(delivered))
@@ -288,7 +288,7 @@ func TestInvariant_RedeliveryKeepsMessageIdStable(t *testing.T) {
 	}
 	stopA() // stop before the next engine: plugin instances are shared
 
-	// Replay duplicate: checkpoint persistence fails, so the settled message
+	// Replay duplicate: checkpoint persistence fails, so the committed message
 	// is replayed on restart — with the SAME spooled message_id.
 	dbPath := t.TempDir() + "/inv6.db"
 	st1, err := store.OpenSQLite(dbPath)
@@ -300,18 +300,18 @@ func TestInvariant_RedeliveryKeepsMessageIdStable(t *testing.T) {
 	noCheckpoint.SetCheckpointHook = func(seq int64) error { return errString("checkpoint write failed") }
 	eng1, stop1 := runEngine(t, pip, noCheckpoint, h.reg, fastOptions())
 	h.source("in").Emit([]byte(`{"i":9}`), "")
-	// Wait for the settle COUNT, not WaitSettled: until the emission is
+	// Wait for the commit COUNT, not WaitCommit: until the emission is
 	// consumed (the engine may still be starting up when Emit returns),
-	// outstanding==0 reads as settled and the wait would race — then stop1
+	// outstanding==0 reads as committed and the wait would race — then stop1
 	// would cancel mid-emission and the scenario falls apart (flaked under
 	// load; found while hardening M3 CI).
 	deadline := time.Now().Add(5 * time.Second)
-	for eng1.Metrics.SettledCount.Load() < 1 && time.Now().Before(deadline) {
+	for eng1.Metrics.CommittedCount.Load() < 1 && time.Now().Before(deadline) {
 		time.Sleep(2 * time.Millisecond)
 	}
-	if eng1.Metrics.SettledCount.Load() < 1 {
-		t.Fatalf("eng1: the emitted message never settled (messagesIn=%d settled=%d dead=%d noMatch=%d decodeErr=%d)",
-			eng1.Metrics.MessagesIn.Load(), eng1.Metrics.SettledCount.Load(), eng1.Metrics.DeadLettered.Load(),
+	if eng1.Metrics.CommittedCount.Load() < 1 {
+		t.Fatalf("eng1: the emitted message never committed (messagesIn=%d committed=%d dead=%d noMatch=%d decodeErr=%d)",
+			eng1.Metrics.MessagesIn.Load(), eng1.Metrics.CommittedCount.Load(), eng1.Metrics.DeadLettered.Load(),
 			eng1.Metrics.NoMatch.Load(), eng1.Metrics.DecodeErrors.Load())
 	}
 	// Stop before reopening the database: eng1's forever-failing checkpoint
@@ -333,8 +333,8 @@ func TestInvariant_RedeliveryKeepsMessageIdStable(t *testing.T) {
 	opts.NewID = func() string { fresh++; return fmt.Sprintf("fresh-%03d", fresh) }
 	_, stop2 := runEngine(t, pip, st2, h.reg, opts)
 	defer stop2()
-	// Wait for the replayed delivery itself, not WaitSettled: until the
-	// replay registers, outstanding==0 reads as "settled" and the wait races
+	// Wait for the replayed delivery itself, not WaitCommit: until the
+	// replay registers, outstanding==0 reads as "committed" and the wait races
 	// engine startup (flaked under load; the invariant under test is the
 	// message_id, so wait for exactly the expected delivery).
 	replayDeadline := time.Now().Add(5 * time.Second)
@@ -346,7 +346,7 @@ func TestInvariant_RedeliveryKeepsMessageIdStable(t *testing.T) {
 
 	replayed := recovered2
 	if len(replayed) != 1 {
-		t.Fatalf("replay delivered %d, want the 1 unsettled-checkpoint message", len(replayed))
+		t.Fatalf("replay delivered %d, want the 1 uncommitted-checkpoint message", len(replayed))
 	}
 	replayID, _ := replayed[0].Meta["message_id"].(string)
 	if !strings.HasPrefix(replayID, "id-") {
@@ -355,8 +355,8 @@ func TestInvariant_RedeliveryKeepsMessageIdStable(t *testing.T) {
 }
 
 // Invariant 7: a pull source's cursor watermark only advances to the max
-// cursor of settled messages — never past an unsettled one.
-func TestInvariant_CursorWatermarkNeverExceedsSettled(t *testing.T) {
+// cursor of committed messages — never past an uncommitted one.
+func TestInvariant_CursorWatermarkNeverExceedsCommitted(t *testing.T) {
 	h := newHarness(t)
 	pip := h.build(`
 apiVersion: eventboat/v3
@@ -398,27 +398,27 @@ sinks:
 		return writes >= 2 // c2 wedged; c3 queued behind it
 	})
 
-	// While c2 is unsettled, the watermark must not pass c1.
+	// While c2 is uncommitted, the watermark must not pass c1.
 	state, _, err := st.SourceState("inv7", "in")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(string(state), `"c1"`) {
-		t.Fatalf("watermark state = %s, want c1 (settled max)", state)
+		t.Fatalf("watermark state = %s, want c1 (committed max)", state)
 	}
 	if strings.Contains(string(state), `"c2"`) || strings.Contains(string(state), `"c3"`) {
-		t.Fatalf("watermark advanced past unsettled cursor: %s", state)
+		t.Fatalf("watermark advanced past uncommitted cursor: %s", state)
 	}
 
 	close(gate)
-	waitSettled(t, eng)
+	waitCommit(t, eng)
 	state, _, _ = st.SourceState("inv7", "in")
 	delivered7, writes7, _ := h.sink("out").snapshot()
-	out7, through7, arrived7 := eng.SettleSnapshot()
-	t.Logf("after settle: state=%s delivered=%d writes=%d outstanding=%d through=%d arrived=%d",
+	out7, through7, arrived7 := eng.CommitSnapshot()
+	t.Logf("after commit: state=%s delivered=%d writes=%d outstanding=%d through=%d arrived=%d",
 		state, len(delivered7), writes7, out7, through7, arrived7)
 	if !strings.Contains(string(state), `"c3"`) {
-		t.Fatalf("watermark state after full settle = %s, want c3", state)
+		t.Fatalf("watermark state after full commit = %s, want c3", state)
 	}
 }
 

@@ -122,29 +122,29 @@ func cmdRun(args []string, jsonOut bool) int {
 	go func() { runErr <- eng.Run(ctx) }()
 
 	sigStatus := func() {
-		outstanding, settledThrough, arrived := eng.SettleSnapshot()
+		outstanding, committedThrough, arrived := eng.CommitSnapshot()
 		m := &eng.Metrics
 		if jsonOut {
 			b, _ := json.Marshal(map[string]any{
-				"pipeline":        pip.Config.Name,
-				"outstanding":     outstanding,
-				"settled_through": settledThrough,
-				"arrived_max":     arrived,
-				"messages_in":     m.MessagesIn.Load(),
-				"settled":         m.SettledCount.Load(),
-				"checkpoint":      m.CheckpointPtr.Load(),
-				"dead_lettered":   m.DeadLettered.Load(),
-				"cel_eval_errors": m.CelEvalErrors.Load(),
-				"no_match":        m.NoMatch.Load(),
-				"retries":         m.Retries.Load(),
-				"dlq_failures":    m.DlqFailures.Load(),
+				"pipeline":          pip.Config.Name,
+				"outstanding":       outstanding,
+				"committed_through": committedThrough,
+				"arrived_max":       arrived,
+				"messages_in":       m.MessagesIn.Load(),
+				"committed":         m.CommittedCount.Load(),
+				"checkpoint":        m.CheckpointPtr.Load(),
+				"dead_lettered":     m.DeadLettered.Load(),
+				"cel_eval_errors":   m.CelEvalErrors.Load(),
+				"no_match":          m.NoMatch.Load(),
+				"retries":           m.Retries.Load(),
+				"dlq_failures":      m.DlqFailures.Load(),
 			})
 			fmt.Println(string(b))
 			return
 		}
-		fmt.Printf("eventboat: pipeline %q stopped: settledThrough=%d outstanding=%d arrivedMax=%d in=%d settled=%d deadLettered=%d celErrors=%d noMatch=%d retries=%d\n",
-			pip.Config.Name, settledThrough, outstanding, arrived,
-			m.MessagesIn.Load(), m.SettledCount.Load(), m.DeadLettered.Load(),
+		fmt.Printf("eventboat: pipeline %q stopped: committedThrough=%d outstanding=%d arrivedMax=%d in=%d committed=%d deadLettered=%d celErrors=%d noMatch=%d retries=%d\n",
+			pip.Config.Name, committedThrough, outstanding, arrived,
+			m.MessagesIn.Load(), m.CommittedCount.Load(), m.DeadLettered.Load(),
 			m.CelEvalErrors.Load(), m.NoMatch.Load(), m.Retries.Load())
 	}
 

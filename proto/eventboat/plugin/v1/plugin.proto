@@ -43,10 +43,10 @@ message InitResponse {
 
 message RunRequest {}
 
-message SettledRequest {
-  int64 through_src_seq = 1; // settle frontier advanced through this seq
+message CommitRequest {
+  int64 through_src_seq = 1; // commit frontier advanced through this seq
 }
-message SettledResponse {
+message CommitResponse {
   bytes state = 1;   // new state to persist (nil = unchanged)
   string error = 2;
 }
@@ -64,8 +64,8 @@ message WriteResponse {
 }
 
 // Source is served by source plugins. Lifecycle mirrors the in-process
-// registry.Source: Init(state) once before Run/Pull; Settled whenever the
-// contiguous settled frontier advances (plugins commit offsets there);
+// registry.Source: Init(state) once before Run/Pull; Commit whenever the
+// contiguous committed frontier advances (plugins commit offsets there);
 // Close on shutdown. Run and Pull are server streams: the host paces reads
 // (admission gate) and gRPC flow control carries backpressure — plugins must
 // honor send blocking. Pull ends the stream with OK status when exhausted;
@@ -75,7 +75,7 @@ service Source {
   rpc Init(InitRequest) returns (InitResponse);
   rpc Run(RunRequest) returns (stream Event);
   rpc Pull(RunRequest) returns (stream Event);
-  rpc Settled(SettledRequest) returns (SettledResponse);
+  rpc Commit(CommitRequest) returns (CommitResponse);
   rpc Close(CloseRequest) returns (CloseResponse);
 }
 

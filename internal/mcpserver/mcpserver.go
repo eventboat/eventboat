@@ -156,7 +156,7 @@ func NewServer(svc *ops.Service, name, version string) *mcp.Server {
 		})
 
 	mcp.AddTool(server, &mcp.Tool{Name: "drain",
-		Description: "Stop a deployed pipeline's sources and wait for in-flight work to settle. The pipeline stays deployed (drained)."},
+		Description: "Stop a deployed pipeline's sources and wait for in-flight work to commit. The pipeline stays deployed (drained)."},
 		func(ctx context.Context, req *mcp.CallToolRequest, in struct {
 			Pipeline string `json:"pipeline"`
 		}) (*mcp.CallToolResult, any, error) {

@@ -303,7 +303,7 @@ func cmdReplay(args []string, jsonOut bool) int {
 		return 0
 	}
 
-	// Live replay: run the engine with REAL sinks, inject, wait for settle.
+	// Live replay: run the engine with REAL sinks, inject, wait for commit.
 	eng, err := engine.New(pip, st, reg, engine.DefaultOptions().WithLimits(pip.Config.Limits))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "replay: %v\n", err)
@@ -328,7 +328,7 @@ func cmdReplay(args []string, jsonOut bool) int {
 		replayed++
 	}
 	waitCtx, waitCancel := context.WithTimeout(ctx, 30*time.Second)
-	werr := eng.WaitSettled(waitCtx)
+	werr := eng.WaitCommit(waitCtx)
 	waitCancel()
 	eng.Close()
 	select {
@@ -345,10 +345,10 @@ func cmdReplay(args []string, jsonOut bool) int {
 	}
 
 	if jsonOut {
-		b, _ := json.Marshal(map[string]any{"replayed": replayed, "failed": failed, "settled_err": errString(werr)})
+		b, _ := json.Marshal(map[string]any{"replayed": replayed, "failed": failed, "committed_err": errString(werr)})
 		fmt.Println(string(b))
 	} else {
-		fmt.Printf("replay: reinjected %d message(s) at node(s) %q; settle: %v\n", replayed, *at, werr)
+		fmt.Printf("replay: reinjected %d message(s) at node(s) %q; commit: %v\n", replayed, *at, werr)
 	}
 	if failed > 0 {
 		return 1

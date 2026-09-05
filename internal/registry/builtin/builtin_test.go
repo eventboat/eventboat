@@ -130,9 +130,9 @@ loop:
 	cancel()
 	_ = src.Close()
 
-	// Settled commits the byte offset of the highest settled emission; Init
+	// Commit persists the byte offset of the highest committed emission; Init
 	// restores it, so a reopened source resumes after committed lines.
-	state, err := src.Settled(ctx, 2)
+	state, err := src.Commit(ctx, 2)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -169,13 +169,13 @@ func TestTickerPluginRun(t *testing.T) {
 		for name, err := range eng.SourceErrors() {
 			t.Logf("source %q error: %v", name, err)
 		}
-		t.Logf("messagesIn=%d settled=%d deadlettered=%d", eng.Metrics.MessagesIn.Load(), eng.Metrics.SettledCount.Load(), eng.Metrics.DeadLettered.Load())
+		t.Logf("messagesIn=%d committed=%d deadlettered=%d", eng.Metrics.MessagesIn.Load(), eng.Metrics.CommittedCount.Load(), eng.Metrics.DeadLettered.Load())
 		t.Fatal("ticker plugin did not signal exhaustion")
 	}
 	sctx, scancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer scancel()
-	if err := eng.WaitSettled(sctx); err != nil {
-		t.Fatalf("settle: %v", err)
+	if err := eng.WaitCommit(sctx); err != nil {
+		t.Fatalf("commit: %v", err)
 	}
 	cancel()
 	select {

@@ -27,7 +27,7 @@ dial gRPC (auth token in metadata) ->  serve Source / Sink
 Init(config_json, state)           ->  parse config, restore state
 Run stream   (continuous source)   <-> Event frames
 Pull stream  (job/pull source)     <-> Event frames; OK end = exhausted
-Settled(through_seq)               ->  return new state (commit offsets HERE)
+Commit(through_seq)               ->  return new state (commit offsets HERE)
 Close rpc, then stdin closed       ->  exit promptly (host kills after 5s)
 ```
 
@@ -121,7 +121,7 @@ Sinks use the same shape under `sinks:`.
 
 - `Init(InitRequest{state bytes, config_json string})` — called once before
   Run/Pull. `config_json` is the plugin block as JSON. `state` is the bytes
-  you last returned from Settled (empty on first run). Report failures in
+  you last returned from Commit (empty on first run). Report failures in
   `InitResponse.error`, not as a gRPC status.
 - `Run(RunRequest) returns (stream Event)` — continuous mode. Emit frames
   until the host cancels the stream. **Honor send blocking**: when the host
@@ -130,17 +130,17 @@ Sinks use the same shape under `sinks:`.
 - `Pull(RunRequest) returns (stream Event)` — job/pull mode, served when your
   manifest declares `capabilities: ["pull"]`. Emit one page of rows, then
   **end the stream with OK status** — that signals "exhausted" and the job
-  run settles. Ending with an error status fails the run (a pull-source
+  run commits. Ending with an error status fails the run (a pull-source
   failure, distinct from per-message dead letters). Fix page bounds up front:
-  if you compute the end from mutable state that Settled updates
+  if you compute the end from mutable state that Commit updates
   concurrently, the stream never ends (the reference implementation documents
   this trap).
-- `Settled(SettledRequest{through_src_seq})` — the contiguous settled
+- `Commit(CommitRequest{through_src_seq})` — the contiguous committed
   frontier advanced through `src_seq`. Commit your offsets HERE (Kafka
   offsets, file positions, watermarks) and return the new state bytes in
-  `SettledResponse.state`; the host persists and feeds it back through the
+  `CommitResponse.state`; the host persists and feeds it back through the
   next `Init`. This is the at-least-once contract: a replay may re-deliver
-  everything after the last Settled you acknowledged.
+  everything after the last Commit you acknowledged.
 - `Close(CloseRequest)` — last chance to flush; the process then receives
   stdin EOF.
 
@@ -160,9 +160,9 @@ absence (Init is the real liveness gate).
 
 - **Verify** (gate 1) validates your config schema strictly and checks the
   optional `version` pin — without spawning your process.
-- **At-least-once**: spool, settle tracking and checkpointing are host-side.
+- **At-least-once**: spool, commit tracking and checkpointing are host-side.
   Events you emit are durable before they flow; if the host crashes, you are
-  re-Inited with your last Settled state and may re-emit from there.
+  re-Inited with your last Commit state and may re-emit from there.
 - **Dead letters** apply to your sink failures via the delivery policy; a
   crashed plugin process surfaces as source/sink errors by default (fail
   fast, M3 semantics). Opt into automatic recovery with
@@ -187,8 +187,8 @@ sources:
 - **restart**: the host supervises the process. A crash (or a wedged
   connection) respawns it with exponential backoff (250ms doubling, capped
   at 30s; the ladder resets after 30s of uptime), re-delivers your config
-  via Init (with the latest Settled state — pull sources resume past the
-  settled watermark; duplicates are the at-least-once contract, never loss),
+  via Init (with the latest Commit state — pull sources resume past the
+  committed watermark; duplicates are the at-least-once contract, never loss),
   and retries: source streams reconnect, sink Writes retry once per call on
   a transport error (the edge's delivery policy still governs the rest).
   Every respawn counts `eventboat_plugin_restarts_total{plugin=...}`.

@@ -137,7 +137,7 @@ func walk(pip *ir.Pipeline, node *ir.Node, payload any, meta map[string]any, b *
 		fmt.Fprintf(b, "\t%s\n", mark)
 	}
 	if len(node.Out) > 0 && matched == 0 {
-		fmt.Fprintf(b, "  (zero matching edges: the message settles as filtered — eventboat_fanout_no_match_total)\n")
+		fmt.Fprintf(b, "  (zero matching edges: the message commits as filtered — eventboat_fanout_no_match_total)\n")
 	}
 	// Recurse into matched downstream nodes (sinks described, not executed).
 	for i := range node.Out {
@@ -167,7 +167,7 @@ func describeSink(node *ir.Node, b *strings.Builder) {
 		}
 	}
 	fmt.Fprintf(b, "  %s: sink %s (encoder %s%s)\n", node.Name, node.Config.Plugin, encoderOf(node), detail)
-	fmt.Fprintf(b, "    delivery: retries=%d backoff=%s → settles on ack; exhausted → dead letter\n",
+	fmt.Fprintf(b, "    delivery: retries=%d backoff=%s → commits on ack; exhausted → dead letter\n",
 		sinkEdgeRetries(node), sinkEdgeBackoff(node))
 }
 
@@ -200,7 +200,7 @@ func symbolic(pip *ir.Pipeline, b *strings.Builder) error {
 			fmt.Fprintln(b)
 		}
 	}
-	fmt.Fprintf(b, "\nsettle: every branch reaching a sink settles on its ack (or dead letter after retries);\na message with zero matching edges settles as filtered.\n")
+	fmt.Fprintf(b, "\ncommit: every branch reaching a sink commits on its ack (or dead letter after retries);\na message with zero matching edges commits as filtered.\n")
 	return nil
 }
 

@@ -505,7 +505,7 @@ func (s *SQLite) JobRuns(pipeline string, limit int) ([]JobRun, error) {
 
 func (s *SQLite) RunnableJobRuns(pipeline string) ([]JobRun, error) {
 	rows, err := s.db.Query(
-		`SELECT `+jobRunColumns+` FROM job_run WHERE pipeline = ? AND status IN ('pending','running','settling') ORDER BY started_at`, pipeline)
+		`SELECT `+jobRunColumns+` FROM job_run WHERE pipeline = ? AND status IN ('pending','running','committing') ORDER BY started_at`, pipeline)
 	if err != nil {
 		return nil, fmt.Errorf("store: runnable job runs: %w", err)
 	}
@@ -547,7 +547,7 @@ func (s *SQLite) LastScheduledFor(pipeline string) (string, error) {
 
 func (s *SQLite) DeleteJobRunsBefore(pipeline string, cutoff time.Time) (int64, error) {
 	res, err := s.db.Exec(
-		`DELETE FROM job_run WHERE pipeline = ? AND ended_at != '' AND ended_at < ? AND status NOT IN ('pending','running','settling')`,
+		`DELETE FROM job_run WHERE pipeline = ? AND ended_at != '' AND ended_at < ? AND status NOT IN ('pending','running','committing')`,
 		pipeline, cutoff.UTC().Format(time.RFC3339Nano))
 	if err != nil {
 		return 0, fmt.Errorf("store: job run retention: %w", err)

@@ -77,12 +77,12 @@ type config struct {
 }
 
 // tickerSource emits Events events per pull, one every IntervalMs, resuming
-// from the persisted state (the last settled sequence number).
+// from the persisted state (the last committed sequence number).
 type tickerSource struct {
 	pluginv1.UnimplementedSourceServer
 	mu       sync.Mutex
 	cfg      config
-	state    int64 // last settled sequence (from Init)
+	state    int64 // last committed sequence (from Init)
 	lastSent int64 // last sequence emitted this session
 }
 
@@ -135,7 +135,7 @@ func (t *tickerSource) Run(req *pluginv1.RunRequest, stream pluginv1.Source_RunS
 
 // Pull is the job mode: emit cfg.Events events after the persisted state,
 // then end the stream with OK status — the documented "exhausted" signal.
-// The end bound is fixed up front: Settled RPCs advance t.state concurrently
+// The end bound is fixed up front: Commit RPCs advance t.state concurrently
 // with this stream, and re-reading the bound each iteration would turn the
 // bounded pull into an endless generator.
 func (t *tickerSource) Pull(req *pluginv1.RunRequest, stream pluginv1.Source_PullServer) error {
@@ -157,14 +157,14 @@ func (t *tickerSource) Pull(req *pluginv1.RunRequest, stream pluginv1.Source_Pul
 	return nil // exhausted
 }
 
-func (t *tickerSource) Settled(ctx context.Context, req *pluginv1.SettledRequest) (*pluginv1.SettledResponse, error) {
+func (t *tickerSource) Commit(ctx context.Context, req *pluginv1.CommitRequest) (*pluginv1.CommitResponse, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if req.ThroughSrcSeq > 0 && req.ThroughSrcSeq <= t.lastSent {
 		t.state = req.ThroughSrcSeq
 	}
 	state, _ := json.Marshal(map[string]int64{"last": t.state})
-	return &pluginv1.SettledResponse{State: state}, nil
+	return &pluginv1.CommitResponse{State: state}, nil
 }
 
 func (t *tickerSource) Close(ctx context.Context, req *pluginv1.CloseRequest) (*pluginv1.CloseResponse, error) {

@@ -47,13 +47,13 @@ type Message struct {
 }
 
 // Source is implemented by source plugins. The engine calls Init with the
-// persisted state before Run, and Settled whenever the contiguous frontier of
-// settled (spooled, fully processed) messages advances; sources commit their
+// persisted state before Run, and Commit whenever the contiguous frontier of
+// committed (spooled, fully processed) messages advances; sources commit their
 // own offsets there (Kafka offsets, file offsets, SQL watermarks).
 type Source interface {
 	Init(state []byte) error
 	Run(ctx context.Context, emit func(Message))
-	Settled(ctx context.Context, throughSrcSeq int64) (state []byte, err error)
+	Commit(ctx context.Context, throughSrcSeq int64) (state []byte, err error)
 	Close() error
 }
 
@@ -61,7 +61,7 @@ type Source interface {
 // §5.8, M2 review R1): the engine calls Pull instead of Run. Pull emits rows
 // synchronously (the engine's admission gate applies backpressure between
 // pages) and returns nil when the source is exhausted for this run — the job
-// then settles — or an error when the source itself failed (run failed,
+// then commits — or an error when the source itself failed (run failed,
 // distinct from per-message dead letters). Sources declaring the "pull"
 // capability must implement this interface.
 type PullSource interface {

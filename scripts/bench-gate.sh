@@ -18,10 +18,10 @@ check() {
 }
 
 # Baselines (i5-14600KF, 2026-09-04): predicate ~300ns, simple script
-# ~1550ns, read-only container ~1460ns, settle throughput (mem) ~6400ns.
+# ~1550ns, read-only container ~1460ns, commit throughput (mem) ~6400ns.
 check ./internal/lang/celhost BenchmarkPredicateEval 5000
 check ./internal/lang/starhost BenchmarkSimpleScript 20000
 check ./internal/lang/starhost BenchmarkContainerReadOnly 20000
-check ./internal/engine BenchmarkSettleThroughput/mem 100000
+check ./internal/engine BenchmarkCommitThroughput/mem 100000
 
 exit $fail

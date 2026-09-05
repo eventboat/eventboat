@@ -77,7 +77,7 @@ func buildPipeline(t *testing.T, reg *registry.Registry, name, yamlText string) 
 // TestSoakMixedLoadWithFaults drives two pipelines for the configured
 // duration: a continuous fan-out under transient spool/DLQ store faults and
 // a script-failure pipeline feeding the dead-letter path. At the end every
-// injected message must have settled exactly once, the checkpoint must
+// injected message must have committed exactly once, the checkpoint must
 // cover the full prefix, and no goroutines may remain.
 func TestSoakMixedLoadWithFaults(t *testing.T) {
 	if os.Getenv("EVENTBOAT_SOAK_TEST") != "1" {
@@ -140,7 +140,7 @@ sinks:
 
 	// Pipeline 2: every 10th message fails its script → dead letter against
 	// the real SQLite store, wrapped with transient DLQ-write faults (the
-	// settle must block and retry — never settle through a failed write).
+	// commit must block and retry — never commit through a failed write).
 	st2raw, err := store.OpenSQLite(t.TempDir() + "/soak-dlq.db")
 	if err != nil {
 		t.Fatal(err)
@@ -200,27 +200,27 @@ sinks:
 	<-d1
 	<-d2
 
-	settleCtx, cancelSettle := context.WithTimeout(context.Background(), 3*time.Minute)
-	defer cancelSettle()
-	if err := eng1.WaitSettled(settleCtx); err != nil {
-		t.Fatalf("soak-fan did not settle: %v", err)
+	commitCtx, cancelCommit := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancelCommit()
+	if err := eng1.WaitCommit(commitCtx); err != nil {
+		t.Fatalf("soak-fan did not commit: %v", err)
 	}
-	if err := eng2.WaitSettled(settleCtx); err != nil {
-		t.Fatalf("soak-dlq did not settle: %v", err)
+	if err := eng2.WaitCommit(commitCtx); err != nil {
+		t.Fatalf("soak-dlq did not commit: %v", err)
 	}
 	stop1()
 	stop2()
 
-	// At-least-once, exactly-once-per-injection: both engines settle every
+	// At-least-once, exactly-once-per-injection: both engines commit every
 	// accepted message (spool-faulted injections are refused and retried by
 	// the driver, counted only on success).
-	if got, want := eng1.Metrics.SettledCount.Load(), injected1.Load(); got != want {
-		t.Errorf("soak-fan settled %d, injected %d", got, want)
+	if got, want := eng1.Metrics.CommittedCount.Load(), injected1.Load(); got != want {
+		t.Errorf("soak-fan committed %d, injected %d", got, want)
 	}
-	if got, want := eng2.Metrics.SettledCount.Load(), injected2.Load(); got != want {
-		t.Errorf("soak-dlq settled %d, injected %d", got, want)
+	if got, want := eng2.Metrics.CommittedCount.Load(), injected2.Load(); got != want {
+		t.Errorf("soak-dlq committed %d, injected %d", got, want)
 	}
-	if _, through, _ := eng1.SettleSnapshot(); through != injected1.Load() {
+	if _, through, _ := eng1.CommitSnapshot(); through != injected1.Load() {
 		t.Errorf("soak-fan checkpoint %d, want %d", through, injected1.Load())
 	}
 	if dl := eng2.Metrics.DeadLettered.Load(); dl != injected2.Load()/10 {

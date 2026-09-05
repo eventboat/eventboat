@@ -106,7 +106,7 @@ func TestJobTriggerAndHistoryCLI(t *testing.T) {
 	}
 
 	// The sink file holds all six orders exactly once (incremental resumed
-	// from the settled watermark).
+	// from the committed watermark).
 	data, err := os.ReadFile(out)
 	if err != nil {
 		t.Fatal(err)

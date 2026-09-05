@@ -42,15 +42,15 @@ agents that write your pipelines.
         ▼                         ▼                          ▼
    Engine (per pipeline)                              CLI / future MCP
    source ─▶ spool (SQLite) ─▶ in-memory DAG ─▶ sinks
-                  │              settle tracking      │
+                  │              commit tracking      │
                   └─ checkpoint ◀──── terminal states ┘
                         (sink ok / dead letter / optional drop)
 ```
 
 Reliability model (redesign-v3.md §6.2): every inbound message is durably
-spooled *before* it becomes visible to the DAG; a settle tracker counts
+spooled *before* it becomes visible to the DAG; a commit tracker counts
 execution branches to terminal states; the checkpoint only advances over
-settled messages; crash recovery replays the spool beyond the checkpoint.
+committed messages; crash recovery replays the spool beyond the checkpoint.
 Each of the seven invariants has a dedicated test (`TestInvariant_*` in
 [internal/engine](internal/engine/invariants_test.go)).
 
@@ -192,7 +192,7 @@ hover; minimal VS Code launcher in examples/editors/vscode), the
 **`plugin schema` export** (single or `--all --dir`, for offline
 IDEs/agents) and **`repl`** (one-shot `--cel`/`--script` against a sample
 message plus a deterministic interactive session); engine with
-spool/settle/checkpoint/backpressure/replay on SQLite (`modernc.org/sqlite`,
+spool/commit/checkpoint/backpressure/replay on SQLite (`modernc.org/sqlite`,
 pure Go — no hand-written WAL); dead letter store; **job pipelines**
 (`run`/`parameters`/`hooks`/`catchup_window`/`overlap` + sql source with
 keyset pagination and watermarks + run history + `trigger`/`jobs` CLI);
@@ -251,7 +251,7 @@ implementation-time discoveries:
   machine-checked (generated scripts compiled under the real Starlark host,
   generated configs passed the real verify); route transforms folded into
   ordered edge guards, filters into their outgoing edges' `when`, and v2's
-  silent no-match drop became v3's settle-as-filtered with a counter.
+  silent no-match drop became v3's commit-as-filtered with a counter.
 - **starhost fixes found on the way**: `remove(dict, key)` glue added (the
   §4.8 `del()` migration target), and a **pre-existing silent-loss bug**
   fixed — nested writes through the lazy bindings (`payload.nested.k = v`)
@@ -295,16 +295,16 @@ The four behavioral gap-decisions the pre-implementation review required
   policy of the edge that delivered the message to the failing node; fan-in
   takes the strictest policy), then dead letters with the Starlark backtrace
   (review R6).
-- **fan-out with zero matching edges settles as filtered**: it is a
+- **fan-out with zero matching edges commits as filtered**: it is a
   normal outcome of conditional routing, counted in
   `eventboat_fanout_no_match_total`; it never dead letters silently (review R7).
 - **`split` turns a JSON array payload into one message per element**;
   children share the parent's spool identity and `message_id`, and the parent
-  settles only when all children settle (review R8).
+  commits only when all children commit (review R8).
 - **the spool stores raw bytes + codec marker**, not the decoded form:
   replay stays compatible with codec upgrades (review R9; spec open question
-  #6). Sources resume from their settled watermark after a crash; the
-  unsettled tail may be re-emitted on top of the spool replay — duplicate
+  #6). Sources resume from their committed watermark after a crash; the
+  uncommitted tail may be re-emitted on top of the spool replay — duplicate
   delivery, never loss.
 
 Other recorded trims:
@@ -388,7 +388,7 @@ Other recorded trims:
   HTTP surface); `run --config-dir` / `mcp --http` serve both.
 - **28 metrics, `eventboat_` prefix** — the review's list plus
   `eventboat_plugin_restarts_total` (beta round):
-  messages_in_total, messages_settled_total, dead_letter_total (with
+  messages_in_total, messages_committed_total, dead_letter_total (with
   reason_class), dlq_write_failures_total, cel_eval_errors_total,
   fanout_no_match_total, delivery_retries_total, optional_drops_total,
   decode_errors_total, spool_failures_total, backpressure_events_total,
@@ -397,7 +397,7 @@ Other recorded trims:
   jobs_completed_total (by status), job_rows_read_total,
   job_rows_delivered_total; histograms script_duration_seconds,
   sink_write_duration_seconds, job_duration_seconds,
-  settle_latency_seconds; gauges in_flight_messages, spool_depth,
+  commit_latency_seconds; gauges in_flight_messages, spool_depth,
   pipeline_paused.
 - **Spans** (review R16: no per-message spans at routing rates): one span
   per job run (`eventboat.job.run`, attributes pipeline/run_id/trigger,
@@ -407,7 +407,7 @@ Other recorded trims:
   (`telemetry.span_sample_rate`, beta round — default 0).
 - The M1 atomic counters remain the engine's internal bookkeeping and the
   `--json` CLI/status source; OTel instruments record the same events
-  (`SettledCount` split from the checkpoint pointer, review R5).
+  (`CommittedCount` split from the checkpoint pointer, review R5).
 
 ### explain / replay (M2, §3.3) — rulings
 
@@ -434,7 +434,7 @@ Other recorded trims:
 
 ### Job pipelines (M2, §5.8) — implemented semantics and decisions
 
-- **Lifecycle**: `pending → running → settling → success | partial | failed |
+- **Lifecycle**: `pending → running → committing → success | partial | failed |
   canceled`, one `job_run` history row per run (run-id, trigger,
   trigger-provided parameters, scheduled_for tick, counts, error) in the
   same SQLite store, pruned by `run.retention.history`.
@@ -447,9 +447,9 @@ Other recorded trims:
   `limits.drain_timeout` for in-flight work, then dead-letters the
   outstanding set with reason `job canceled` — terminal, auditable,
   replayable; the checkpoint prefix never wedges.
-- **Crash recovery**: runs found in `pending/running/settling` resume on
+- **Crash recovery**: runs found in `pending/running/committing` resume on
   startup: the engine replays the spool beyond the checkpoint (invariant 3)
-  while pull sources re-pull after the settled watermark (invariant 7) —
+  while pull sources re-pull after the committed watermark (invariant 7) —
   the kill-9 resume test (`TestJobKill9ResumeFromWatermark`) covers the
   combination.
 - **catchup_window** (review §三.2 / open question #9): at most ONE catchup
@@ -466,7 +466,7 @@ Other recorded trims:
   defaults, enum/pattern/min/max) and at trigger time; `${parameters.x}`
   substitutes anywhere in job pipelines only; scripts/predicates read the
   frozen `parameters.x` binding. The `cursor` binding resolves per pull
-  source against that source's own settled watermark (no watermark yet →
+  source against that source's own committed watermark (no watermark yet →
   empty string); `now` resolves to the run start. Multi-source job
   pipelines are legal but single-source is recommended (script-side `cursor`
   binds the first source's watermark).
@@ -494,12 +494,12 @@ Other recorded trims:
   `strings` module in go-starlark — string methods are built into the string
   type (review R3).
 - **Transform failures** retry on the incoming edge's delivery policy, then
-  dead letter (review R6). A fan-out with zero matching edges settles the
+  dead letter (review R6). A fan-out with zero matching edges commits the
   message as filtered and counts it (review R7). `split` turns a JSON array
   payload into one message per element; children share the parent
   message_id (review R8).
 - **Spool stores raw bytes + codec marker** (review R9). Sources resume from
-  their settled watermark after a crash; the unsettled tail may be re-emitted
+  their committed watermark after a crash; the uncommitted tail may be re-emitted
   in addition to the spool replay — duplicate delivery, never loss.
 - **`order_key`** is evaluated at sinks into the message key (e.g. Kafka
   partition key); full per-key ordered sharding is P1. `workers` gives
@@ -626,14 +626,14 @@ From [redesign-v3-review-beta.md](redesign-v3-review-beta.md) (verdict:
 pass; the doc also carries the full ledger triage — what stayed P2/P3 and
 why — and the before/after benchmark numbers):
 
-- **Settle persistence out of the tracker lock**: advances compute under
-  the settle lock and flush on the settling goroutine outside it;
+- **Commit persistence out of the tracker lock**: advances compute under
+  the commit lock and flush on the committing goroutine outside it;
   monotonic guards (persistMu) keep the checkpoint, per-source frontiers
   and metrics from regressing under out-of-order flushes. The pre-research
   "async worker" design was rejected at implementation time — invariant 7's
   mid-test store read depends on same-goroutine persistence ordering (the
   zero-modification constraint on the seven invariant tests decided it).
-  Observers (`WaitSettled`, quiescence) wait on an attempt-based durability
+  Observers (`WaitCommit`, quiescence) wait on an attempt-based durability
   barrier; a permanently failing store no longer wedges quiescence.
 - **Precise dirty tracking (starhost)**: map-tree mutations mark through a
   marker threaded into the converted dicts; container READS no longer
@@ -650,12 +650,12 @@ why — and the before/after benchmark numbers):
   before the 512-byte truncation — the spool/dead letters/deliveries are
   the data path and are never altered; non-JSON tails pass through.
   Per-message spans are opt-in (default 0 = none), roots named
-  `eventboat.message` ended at settled/dead_letter.
+  `eventboat.message` ended at committed/dead_letter.
 - **gRPC plugin crash policy** (M3 trim closed): `grpc.restart:
   fast-fail | restart` (default fast-fail = exact M3 semantics).
   `restart` respawns with exponential backoff (250ms doubling, 30s cap,
   ladder resets after 30s uptime), re-delivers config and the latest
-  Settled state (pull sources resume past the settled watermark —
+  Commit state (pull sources resume past the committed watermark —
   duplicates are the at-least-once contract), retries source streams and
   sink writes once per call; every respawn counts
   `eventboat_plugin_restarts_total{plugin}`.
@@ -663,7 +663,7 @@ why — and the before/after benchmark numbers):
   only), kafka testcontainers job (real KRaft broker: roundtrip, dead
   letters, rebalance), nightly + manual soak workflow
   (`.github/workflows/soak.yml`; mixed load + injected faults, asserts
-  settle-exactly-once and no goroutine leaks), bench job with loose
+  commit-exactly-once and no goroutine leaks), bench job with loose
   thresholds ([scripts/bench-gate.sh](scripts/bench-gate.sh) — an
   order-of-magnitude gate, not a noise gate; WASM stays informational).
 
@@ -738,7 +738,7 @@ internal/ir/          static IR: DAG, compiled CEL/Starlark/CESQL, topology chec
 internal/lang/        celhost (predicates), cesqlhost (CESQL dialect + official TCK), starhost (Starlark sandbox host)
 internal/wasmhost/    wazero host: capability sandbox, per-invoke budgets, guest under testdata/
 internal/rpcplugin/   gRPC plugin host: process spawn/handshake, source/sink adapters
-internal/engine/      spool admission, DAG execution, settle, delivery, DLQ, pull sources
+internal/engine/      spool admission, DAG execution, commit, delivery, DLQ, pull sources
 internal/jobs/        job runtime: scheduler, catchup, overlap, run lifecycle, hooks
 internal/store/       SQLite + in-memory spool/checkpoint/dead-letter/job-history stores
 internal/registry/    plugin registration: JSON Schemas generated from typed config structs (RegisterSourceT/…) + ABI versions; string-schema API retained as escape hatch

@@ -25,11 +25,11 @@ import (
 const _ = grpc.SupportPackageIsVersion7
 
 const (
-	Source_Init_FullMethodName    = "/eventboat.plugin.v1.Source/Init"
-	Source_Run_FullMethodName     = "/eventboat.plugin.v1.Source/Run"
-	Source_Pull_FullMethodName    = "/eventboat.plugin.v1.Source/Pull"
-	Source_Settled_FullMethodName = "/eventboat.plugin.v1.Source/Settled"
-	Source_Close_FullMethodName   = "/eventboat.plugin.v1.Source/Close"
+	Source_Init_FullMethodName   = "/eventboat.plugin.v1.Source/Init"
+	Source_Run_FullMethodName    = "/eventboat.plugin.v1.Source/Run"
+	Source_Pull_FullMethodName   = "/eventboat.plugin.v1.Source/Pull"
+	Source_Commit_FullMethodName = "/eventboat.plugin.v1.Source/Commit"
+	Source_Close_FullMethodName  = "/eventboat.plugin.v1.Source/Close"
 )
 
 // SourceClient is the client API for Source service.
@@ -39,7 +39,7 @@ type SourceClient interface {
 	Init(ctx context.Context, in *InitRequest, opts ...grpc.CallOption) (*InitResponse, error)
 	Run(ctx context.Context, in *RunRequest, opts ...grpc.CallOption) (Source_RunClient, error)
 	Pull(ctx context.Context, in *RunRequest, opts ...grpc.CallOption) (Source_PullClient, error)
-	Settled(ctx context.Context, in *SettledRequest, opts ...grpc.CallOption) (*SettledResponse, error)
+	Commit(ctx context.Context, in *CommitRequest, opts ...grpc.CallOption) (*CommitResponse, error)
 	Close(ctx context.Context, in *CloseRequest, opts ...grpc.CallOption) (*CloseResponse, error)
 }
 
@@ -124,9 +124,9 @@ func (x *sourcePullClient) Recv() (*Event, error) {
 	return m, nil
 }
 
-func (c *sourceClient) Settled(ctx context.Context, in *SettledRequest, opts ...grpc.CallOption) (*SettledResponse, error) {
-	out := new(SettledResponse)
-	err := c.cc.Invoke(ctx, Source_Settled_FullMethodName, in, out, opts...)
+func (c *sourceClient) Commit(ctx context.Context, in *CommitRequest, opts ...grpc.CallOption) (*CommitResponse, error) {
+	out := new(CommitResponse)
+	err := c.cc.Invoke(ctx, Source_Commit_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -149,7 +149,7 @@ type SourceServer interface {
 	Init(context.Context, *InitRequest) (*InitResponse, error)
 	Run(*RunRequest, Source_RunServer) error
 	Pull(*RunRequest, Source_PullServer) error
-	Settled(context.Context, *SettledRequest) (*SettledResponse, error)
+	Commit(context.Context, *CommitRequest) (*CommitResponse, error)
 	Close(context.Context, *CloseRequest) (*CloseResponse, error)
 	mustEmbedUnimplementedSourceServer()
 }
@@ -167,8 +167,8 @@ func (UnimplementedSourceServer) Run(*RunRequest, Source_RunServer) error {
 func (UnimplementedSourceServer) Pull(*RunRequest, Source_PullServer) error {
 	return status.Errorf(codes.Unimplemented, "method Pull not implemented")
 }
-func (UnimplementedSourceServer) Settled(context.Context, *SettledRequest) (*SettledResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method Settled not implemented")
+func (UnimplementedSourceServer) Commit(context.Context, *CommitRequest) (*CommitResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method Commit not implemented")
 }
 func (UnimplementedSourceServer) Close(context.Context, *CloseRequest) (*CloseResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Close not implemented")
@@ -246,20 +246,20 @@ func (x *sourcePullServer) Send(m *Event) error {
 	return x.ServerStream.SendMsg(m)
 }
 
-func _Source_Settled_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(SettledRequest)
+func _Source_Commit_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CommitRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(SourceServer).Settled(ctx, in)
+		return srv.(SourceServer).Commit(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: Source_Settled_FullMethodName,
+		FullMethod: Source_Commit_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(SourceServer).Settled(ctx, req.(*SettledRequest))
+		return srv.(SourceServer).Commit(ctx, req.(*CommitRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -294,8 +294,8 @@ var Source_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _Source_Init_Handler,
 		},
 		{
-			MethodName: "Settled",
-			Handler:    _Source_Settled_Handler,
+			MethodName: "Commit",
+			Handler:    _Source_Commit_Handler,
 		},
 		{
 			MethodName: "Close",

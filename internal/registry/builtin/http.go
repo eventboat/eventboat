@@ -75,7 +75,7 @@ func (s *httpServerSource) Run(ctx context.Context, emit func(registry.Message))
 	}
 }
 
-func (s *httpServerSource) Settled(ctx context.Context, throughSrcSeq int64) ([]byte, error) {
+func (s *httpServerSource) Commit(ctx context.Context, throughSrcSeq int64) ([]byte, error) {
 	return nil, nil
 }
 

@@ -361,10 +361,10 @@ func TestDecodeTypedRejectsUnknownAndMistyped(t *testing.T) {
 
 type demoSource struct{ group string }
 
-func (d *demoSource) Init([]byte) error                              { return nil }
-func (d *demoSource) Run(context.Context, func(Message))             {}
-func (d *demoSource) Settled(context.Context, int64) ([]byte, error) { return nil, nil }
-func (d *demoSource) Close() error                                   { return nil }
+func (d *demoSource) Init([]byte) error                             { return nil }
+func (d *demoSource) Run(context.Context, func(Message))            {}
+func (d *demoSource) Commit(context.Context, int64) ([]byte, error) { return nil, nil }
+func (d *demoSource) Close() error                                  { return nil }
 
 func TestRegisterSourceT(t *testing.T) {
 	type cfg struct {

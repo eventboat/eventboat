@@ -53,7 +53,7 @@ func TestMessageSpanSampling(t *testing.T) {
 	eng, _ := runEngine(t, pip, store.NewMemory("inv"), h.reg, opts)
 
 	h.source("in").Emit([]byte(`{"i":1}`), "")
-	waitSettled(t, eng)
+	waitCommit(t, eng)
 
 	spans := rec.GetSpans()
 	if len(spans) != 1 {
@@ -63,7 +63,7 @@ func TestMessageSpanSampling(t *testing.T) {
 		t.Fatalf("span name = %q", spans[0].Name)
 	}
 	requireSpanAttr(t, spans[0], "eventboat.pipeline", "inv")
-	requireSpanAttr(t, spans[0], "eventboat.terminal_state", "settled")
+	requireSpanAttr(t, spans[0], "eventboat.terminal_state", "committed")
 	if _, ok := spanAttr(spans[0], "eventboat.message_id"); !ok {
 		t.Fatalf("span lacks message_id: %+v", spans[0].Attributes)
 	}
@@ -88,7 +88,7 @@ func TestMessageSpanDeadLetterTerminal(t *testing.T) {
 
 	h.sink("out").fail = func(attempt int) error { return errString("sink down") }
 	h.source("in").Emit([]byte(`{"i":1}`), "")
-	waitSettled(t, eng)
+	waitCommit(t, eng)
 
 	spans := rec.GetSpans()
 	if len(spans) != 1 {
@@ -115,7 +115,7 @@ func TestMessageSpanSamplingDefaultOff(t *testing.T) {
 	eng, _ := runEngine(t, pip, store.NewMemory("inv"), h.reg, opts)
 
 	h.source("in").Emit([]byte(`{"i":1}`), "")
-	waitSettled(t, eng)
+	waitCommit(t, eng)
 	if n := len(rec.GetSpans()); n != 0 {
 		t.Fatalf("rate 0 emitted %d spans, want 0", n)
 	}

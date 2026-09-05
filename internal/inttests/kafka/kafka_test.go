@@ -162,21 +162,21 @@ func runPipeline(t *testing.T, yamlText string) (*engine.Engine, func()) {
 		}
 	}
 	t.Cleanup(stop)
-	// settle-wait helper bound to this engine
+	// commit-wait helper bound to this engine
 	return eng, stop
 }
 
-func waitSettledCount(t *testing.T, eng *engine.Engine, want int64, timeout time.Duration) {
+func waitCommittedCount(t *testing.T, eng *engine.Engine, want int64, timeout time.Duration) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		if eng.Metrics.SettledCount.Load() >= want {
+		if eng.Metrics.CommittedCount.Load() >= want {
 			return
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	t.Fatalf("settled %d, want >= %d (messagesIn=%d deadLettered=%d decodeErr=%d)",
-		eng.Metrics.SettledCount.Load(), want, eng.Metrics.MessagesIn.Load(),
+	t.Fatalf("committed %d, want >= %d (messagesIn=%d deadLettered=%d decodeErr=%d)",
+		eng.Metrics.CommittedCount.Load(), want, eng.Metrics.MessagesIn.Load(),
 		eng.Metrics.DeadLettered.Load(), eng.Metrics.DecodeErrors.Load())
 }
 
@@ -245,7 +245,7 @@ sinks:
 	produce(t, "int-in", n, func(i int) []byte {
 		return []byte(fmt.Sprintf(`{"i":%d}`, i))
 	})
-	waitSettledCount(t, eng, n, 60*time.Second)
+	waitCommittedCount(t, eng, n, 60*time.Second)
 
 	// The external consumer sees every message exactly once (single group,
 	// single partition, transform applied).
@@ -278,7 +278,7 @@ sinks:
 }
 
 // Path 2 (dead letter): malformed records dead-letter through the real
-// broker decode path and settle via the DLQ — never silently lost.
+// broker decode path and commit via the DLQ — never silently lost.
 func TestKafkaMalformedRecordDeadLetters(t *testing.T) {
 	mustCreateTopic(t, "int-bad", 1)
 	eng, _ := runPipeline(t, fmt.Sprintf(`
@@ -310,8 +310,8 @@ sinks:
 	if got := eng.Metrics.DeadLettered.Load(); got < 1 {
 		t.Fatalf("dead letters = %d, want >= 1", got)
 	}
-	// The good records around the bad one still settle.
-	waitSettledCount(t, eng, 7, 60*time.Second)
+	// The good records around the bad one still commit.
+	waitCommittedCount(t, eng, 7, 60*time.Second)
 }
 
 // Path 3 (rebalance): two engine instances in ONE consumer group on a
@@ -365,8 +365,8 @@ sinks:
 			break
 		}
 	}
-	// Drain: every produced message settles somewhere.
-	waitSettledCount(t, engA, 1, 90*time.Second)
+	// Drain: every produced message commits somewhere.
+	waitCommittedCount(t, engA, 1, 90*time.Second)
 	deadline = time.Now().Add(60 * time.Second)
 	for time.Now().Before(deadline) {
 		if len(readLines(t, outA)) > 0 && len(readLines(t, outB)) > 0 {
@@ -380,7 +380,7 @@ sinks:
 	}
 	// Consumer-group at-least-once: every produced message lands in at
 	// least one engine. A rebalance may REDELIVER messages whose offsets
-	// were not yet committed (settle-gated commits) — duplicates across
+	// were not yet committed (commit-gated commits) — duplicates across
 	// members are the contract, loss is not.
 	seen := map[string]bool{}
 	for _, m := range append(append([]map[string]any{}, a...), b...) {

@@ -198,12 +198,12 @@ func (s *source) streamOnce(p *process, ctx context.Context, emit func(registry.
 	}
 }
 
-func (s *source) Settled(ctx context.Context, throughSrcSeq int64) ([]byte, error) {
+func (s *source) Commit(ctx context.Context, throughSrcSeq int64) ([]byte, error) {
 	p, err := s.proc(ctx)
 	if err != nil {
 		return nil, err
 	}
-	resp, err := p.source.Settled(ctx, &pluginv1.SettledRequest{ThroughSrcSeq: throughSrcSeq})
+	resp, err := p.source.Commit(ctx, &pluginv1.CommitRequest{ThroughSrcSeq: throughSrcSeq})
 	if err != nil && s.sup != nil {
 		// One respawn-and-retry per call; the engine's own retry cadence
 		// handles persistent trouble.
@@ -211,13 +211,13 @@ func (s *source) Settled(ctx context.Context, throughSrcSeq int64) ([]byte, erro
 		if p, err = s.proc(ctx); err != nil {
 			return nil, err
 		}
-		resp, err = p.source.Settled(ctx, &pluginv1.SettledRequest{ThroughSrcSeq: throughSrcSeq})
+		resp, err = p.source.Commit(ctx, &pluginv1.CommitRequest{ThroughSrcSeq: throughSrcSeq})
 	}
 	if err != nil {
-		return nil, fmt.Errorf("plugin %q: settled transport error: %w", p.hs.Name, err)
+		return nil, fmt.Errorf("plugin %q: commit transport error: %w", p.hs.Name, err)
 	}
 	if resp.Error != "" {
-		return nil, fmt.Errorf("plugin %q: settled: %s", p.hs.Name, resp.Error)
+		return nil, fmt.Errorf("plugin %q: commit: %s", p.hs.Name, resp.Error)
 	}
 	if s.sup != nil {
 		s.sup.updateState(resp.State)

@@ -23,7 +23,7 @@ func registerKafkaSource(reg *registry.Registry) error {
 }
 
 // kafkaSource consumes Kafka topics with kafka-go. Offsets are committed only
-// when the engine reports messages settled (Settled), which preserves
+// when the engine reports messages committed (Commit), which preserves
 // at-least-once across crashes.
 type kafkaSource struct {
 	brokers []string
@@ -70,7 +70,7 @@ func (s *kafkaSource) Run(ctx context.Context, emit func(registry.Message)) {
 	}
 }
 
-func (s *kafkaSource) Settled(ctx context.Context, throughSrcSeq int64) ([]byte, error) {
+func (s *kafkaSource) Commit(ctx context.Context, throughSrcSeq int64) ([]byte, error) {
 	s.mu.Lock()
 	var toCommit []kafka.Message
 	for seq := int64(1); seq <= throughSrcSeq; seq++ {

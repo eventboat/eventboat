@@ -11,11 +11,11 @@ import (
 	"github.com/eventboat/eventboat/internal/testkit"
 )
 
-// The beta-round out-of-lock persistence refactor (settle callbacks no longer
+// The beta-round out-of-lock persistence refactor (commit callbacks no longer
 // hold the tracker mutex across store IO) needs its own guards locked by
 // tests beyond the seven invariants (which stay untouched):
 //
-//  1. concurrent settles flushing out of order must never regress the
+//  1. concurrent commits flushing out of order must never regress the
 //     checkpoint or per-source frontiers (monotonic guards under persistMu);
 //  2. the visibility barrier (durableThrough) must not wedge observers when
 //     persistence keeps failing — the flush position is consumed on failure,
@@ -37,10 +37,10 @@ sinks:
   out3: { from: [in], mem: { id: p3 } }
 `
 
-// TestSettleFlushOutOfLockUnderConcurrency drives concurrent settles through
+// TestCommitFlushOutOfLockUnderConcurrency drives concurrent commits through
 // a slow, jittering checkpoint write (simulated fsync): four sink workers
 // flush advances in arbitrary interleaving while emitters keep arriving.
-func TestSettleFlushOutOfLockUnderConcurrency(t *testing.T) {
+func TestCommitFlushOutOfLockUnderConcurrency(t *testing.T) {
 	h := newHarness(t)
 	pip := h.build(persistYAML)
 
@@ -74,7 +74,7 @@ func TestSettleFlushOutOfLockUnderConcurrency(t *testing.T) {
 		}()
 	}
 	wg.Wait()
-	waitSettled(t, eng)
+	waitCommit(t, eng)
 
 	total := int64(emitters * perEmitter)
 	if cp, _ := wrapped.Checkpoint("perst"); cp != total {
@@ -95,11 +95,11 @@ func TestSettleFlushOutOfLockUnderConcurrency(t *testing.T) {
 	}
 }
 
-// TestSettleFlushFailureDoesNotBlockWaitSettled locks the barrier semantics
-// for a permanently failing checkpoint store: WaitSettled observes the flush
+// TestCommitFlushFailureDoesNotBlockWaitCommit locks the barrier semantics
+// for a permanently failing checkpoint store: WaitCommit observes the flush
 // ATTEMPT, not its success — a failed persist widens the replay window
 // (invariant 3 covers it) but must not wedge quiescence detection.
-func TestSettleFlushFailureDoesNotBlockWaitSettled(t *testing.T) {
+func TestCommitFlushFailureDoesNotBlockWaitCommit(t *testing.T) {
 	h := newHarness(t)
 	pip := h.build(persistYAML)
 
@@ -111,8 +111,8 @@ func TestSettleFlushFailureDoesNotBlockWaitSettled(t *testing.T) {
 	h.source("in").Emit([]byte(`{"i":1}`), "")
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	if err := eng.WaitSettled(ctx); err != nil {
-		t.Fatalf("WaitSettled wedged on failing persistence: %v", err)
+	if err := eng.WaitCommit(ctx); err != nil {
+		t.Fatalf("WaitCommit wedged on failing persistence: %v", err)
 	}
 	if cp, _ := wrapped.Checkpoint("perst"); cp != 0 {
 		t.Fatalf("checkpoint = %d, want 0 (every write failed)", cp)

@@ -1,7 +1,7 @@
 # v3 从零重设计提案 — Agent 原生事件路由器（零自研语言版）
 
 > **状态：POC 阶段**（提案定稿：定名 Eventboat、License Apache-2.0；v3 全新实现，**不向后兼容 v2**——无迁移义务）
-> **日期：2026-09-03**（修订 v1.1：零自研语言 CEL + Starlark + 性能评估；v1.2：吸收 dagu 作业模型（pipeline 级 `run`/`params`）；v1.3：拓扑结构改为**三段式 `sources`/`transforms`/`sinks` + `from` 连边 + 插件名即键**，命名体系定稿——含 DAG 描述模式调研结论，见 §5.1；v1.4：钩子段 `on`→`hooks`（GH Actions 撞形不同义），新增 consts/params 语义小节 §5.9；v1.5：**全称原则**——自造缩写全部展开：`params`→`parameters`、`consts`→`constants`、`dlq`→`dead_letter_queue`、`catchup`→`catchup_window`、`args`→`arguments`、`max_inflight`→`max_in_flight`，见 §5.1；v1.6：全称原则细化——**约定俗成的行业缩写保留**：`dlq`、`args`、`dsn` 维持缩写，回退 v1.5 对前两项的展开；v1.7：**定名 Eventboat**（§8，六轮核查 + 三选一裁决），全文占位符替换；v1.8：**License 定为 Apache-2.0**（仓库 LICENSE 落地，开放问题 #11 关闭）；v1.9：**明确 POC 阶段、不向后兼容 v2**——`convert` 降为按需工具，开放问题 #12 关闭；v1.10：按实现前审查（redesign-v3-review.md R1–R3）修正 §4.3 沙箱表：`while`/递归/顶层控制流的机制归属统一为 `syntax.FileOptions`，删除不存在的 `strings` 模块；v1.11：M2 落地对账——sql 源补 sqlite 方言（§3.5）、重注入=进入节点执行（§3.3）、§5.8 示例 `%.2f` 修正（go-starlark 的 `%` 不支持浮点格式动词，改 `math.floor`）、§6.6 span 措辞改批粒度近似、开放问题 #10 关闭（`kind: Runtime` + CLI 覆盖，见 redesign-v3-review-m2.md R13）；v1.12：M3 落地对账——`when` 增对象形态 `{lang, expr}`（§4.7），CESQL 标识符为纯字母数字（CloudEvents 属性形状）：带下划线的 meta 键在本方言不可达、`data.*` 扩展经字面量感知重写为合成驼峰标识符（`data.amount`→`dataAmount`，`data` 前缀标识符保留给扩展）；§6.5 补 WASM 资源模型（wazero 无指令计量：每次调用 wall-clock + 内存页双上限；`timeout_ms: 0` = 快速模式无击杀开关——ctx 击杀机制实测约 5× 开销）、guest 形态 = wasip1 **reactor**（标准 Go 工具链 `go build -buildmode=c-shared` 即可构建，无需 TinyGo/Rust）；gRPC 插件协议定稿：stdout 单行 JSON 握手 + 静态 manifest 文件（verify 不 spawn 进程）+ 运行时握手交叉核对 + 节点级 `version:` 版本钉（不符 = verify 错误）；TCK 验收口径 = vendored 自 sdk-go v2.16.2 tag 的官方套件（275 例 100%，spec 仓库 main 已有两处后发漂移），见 redesign-v3-review-m3.md；v1.13：M3 审核裁决 J2——§6.5 WASM 资源模型改为**缺省快速模式**（`timeout_ms` 缺省 0 无击杀，保护显式开启；未设置时 verify 告警 + 慢调用看门狗日志），理由：ctx 击杀约 5× 开销与该档"性能唯一存在理由"（§4.5）冲突，失控 guest 属可用性而非正确性风险）；v1.14：M4 落地对账——`codecs:` 命名声明段落地（§5.10：`name: {type: <codec>, ...配置}`，`decoder`/`encoder` 按名引用，声明名与注册 codec 名两名字空间禁遮蔽）；csv/avro/protobuf codec 落地（选型与 CEL 类型映射见 docs/codecs.md 与 redesign-v3-review-m4.md）；LSP 落地（`eventboat lsp`，手写最小 JSON-RPC——go.lsp.dev/protocol 需 Go 1.26 超本仓 1.25；诊断/补全/hover 数据源全部复用 verify 管线与 registry schema）；`convert` 落地（§4.8 表逐条 + 配置映射，eql1 经 CEL-AST 渲染为 Starlark 并以真实编译器机检，"自动"定义=生成且编译通过；route/filter 折叠为有序边守卫，v2 无匹配静默丢弃 → v3 settle-as-filtered + 计数——结局相同、可观测性变好，记档）；`plugin schema` 独立分发、`repl`（§3.6 自 M1 裁剪后回归）；裁剪记档：Pebble profile（非锚点、查询面需重写）、Operator 降为示例 Deployment 清单 + docs/k8s.md（§6.7 本就 P2）；v1.15：`convert` 移除——确认无生产 v2 配置，迁移工具按 v1.9"按需"定位退役（§7.3 墓碑，§4.8/§7.2 留历史对照，§3.6/§6.8 同步）；v1.16：CLI 分发层迁移 lynx-go/commands v0.2.0（自有零依赖动词分发库，dogfood 落地）——§3.6 总览按实现对齐（test 位置参数、trigger --config、plugin catalog/schema、补 lsp/help 行），帮助三级与 usage 错误（退出码 2 + `usage:` 提示行）入档；v1.17：**内置插件配置的类型安全注册**——schema 与解析收敛到插件自己的 config 结构体（§5.6）：`registry.RegisterSourceT/RegisterSinkT/RegisterCodecT` 从结构体 + `schema` 标签生成 JSON Schema、同标签驱动解码后默认值注入（嵌套结构体递归适用），工厂收强类型 config；手写 schema 字符串与 `map[string]any` 手工断言退役（string 版注册 API 保留为逃生口），默认值"schema 文档与工厂各写一份"的漂移面消除；生成 schema 由 golden 钉住（`testdata/schemas/`，`-update-schemas`）；transforms（script/split/wasm）维持 sections.go 手工解析（精确到字段行号的诊断，价值高于统一性）
+> **日期：2026-09-03**（修订 v1.1：零自研语言 CEL + Starlark + 性能评估；v1.2：吸收 dagu 作业模型（pipeline 级 `run`/`params`）；v1.3：拓扑结构改为**三段式 `sources`/`transforms`/`sinks` + `from` 连边 + 插件名即键**，命名体系定稿——含 DAG 描述模式调研结论，见 §5.1；v1.4：钩子段 `on`→`hooks`（GH Actions 撞形不同义），新增 consts/params 语义小节 §5.9；v1.5：**全称原则**——自造缩写全部展开：`params`→`parameters`、`consts`→`constants`、`dlq`→`dead_letter_queue`、`catchup`→`catchup_window`、`args`→`arguments`、`max_inflight`→`max_in_flight`，见 §5.1；v1.6：全称原则细化——**约定俗成的行业缩写保留**：`dlq`、`args`、`dsn` 维持缩写，回退 v1.5 对前两项的展开；v1.7：**定名 Eventboat**（§8，六轮核查 + 三选一裁决），全文占位符替换；v1.8：**License 定为 Apache-2.0**（仓库 LICENSE 落地，开放问题 #11 关闭）；v1.9：**明确 POC 阶段、不向后兼容 v2**——`convert` 降为按需工具，开放问题 #12 关闭；v1.10：按实现前审查（redesign-v3-review.md R1–R3）修正 §4.3 沙箱表：`while`/递归/顶层控制流的机制归属统一为 `syntax.FileOptions`，删除不存在的 `strings` 模块；v1.11：M2 落地对账——sql 源补 sqlite 方言（§3.5）、重注入=进入节点执行（§3.3）、§5.8 示例 `%.2f` 修正（go-starlark 的 `%` 不支持浮点格式动词，改 `math.floor`）、§6.6 span 措辞改批粒度近似、开放问题 #10 关闭（`kind: Runtime` + CLI 覆盖，见 redesign-v3-review-m2.md R13）；v1.12：M3 落地对账——`when` 增对象形态 `{lang, expr}`（§4.7），CESQL 标识符为纯字母数字（CloudEvents 属性形状）：带下划线的 meta 键在本方言不可达、`data.*` 扩展经字面量感知重写为合成驼峰标识符（`data.amount`→`dataAmount`，`data` 前缀标识符保留给扩展）；§6.5 补 WASM 资源模型（wazero 无指令计量：每次调用 wall-clock + 内存页双上限；`timeout_ms: 0` = 快速模式无击杀开关——ctx 击杀机制实测约 5× 开销）、guest 形态 = wasip1 **reactor**（标准 Go 工具链 `go build -buildmode=c-shared` 即可构建，无需 TinyGo/Rust）；gRPC 插件协议定稿：stdout 单行 JSON 握手 + 静态 manifest 文件（verify 不 spawn 进程）+ 运行时握手交叉核对 + 节点级 `version:` 版本钉（不符 = verify 错误）；TCK 验收口径 = vendored 自 sdk-go v2.16.2 tag 的官方套件（275 例 100%，spec 仓库 main 已有两处后发漂移），见 redesign-v3-review-m3.md；v1.13：M3 审核裁决 J2——§6.5 WASM 资源模型改为**缺省快速模式**（`timeout_ms` 缺省 0 无击杀，保护显式开启；未设置时 verify 告警 + 慢调用看门狗日志），理由：ctx 击杀约 5× 开销与该档"性能唯一存在理由"（§4.5）冲突，失控 guest 属可用性而非正确性风险）；v1.14：M4 落地对账——`codecs:` 命名声明段落地（§5.10：`name: {type: <codec>, ...配置}`，`decoder`/`encoder` 按名引用，声明名与注册 codec 名两名字空间禁遮蔽）；csv/avro/protobuf codec 落地（选型与 CEL 类型映射见 docs/codecs.md 与 redesign-v3-review-m4.md）；LSP 落地（`eventboat lsp`，手写最小 JSON-RPC——go.lsp.dev/protocol 需 Go 1.26 超本仓 1.25；诊断/补全/hover 数据源全部复用 verify 管线与 registry schema）；`convert` 落地（§4.8 表逐条 + 配置映射，eql1 经 CEL-AST 渲染为 Starlark 并以真实编译器机检，"自动"定义=生成且编译通过；route/filter 折叠为有序边守卫，v2 无匹配静默丢弃 → v3 settle-as-filtered + 计数——结局相同、可观测性变好，记档）；`plugin schema` 独立分发、`repl`（§3.6 自 M1 裁剪后回归）；裁剪记档：Pebble profile（非锚点、查询面需重写）、Operator 降为示例 Deployment 清单 + docs/k8s.md（§6.7 本就 P2）；v1.15：`convert` 移除——确认无生产 v2 配置，迁移工具按 v1.9"按需"定位退役（§7.3 墓碑，§4.8/§7.2 留历史对照，§3.6/§6.8 同步）；v1.16：CLI 分发层迁移 lynx-go/commands v0.2.0（自有零依赖动词分发库，dogfood 落地）——§3.6 总览按实现对齐（test 位置参数、trigger --config、plugin catalog/schema、补 lsp/help 行），帮助三级与 usage 错误（退出码 2 + `usage:` 提示行）入档；v1.17：**内置插件配置的类型安全注册**——schema 与解析收敛到插件自己的 config 结构体（§5.6）：`registry.RegisterSourceT/RegisterSinkT/RegisterCodecT` 从结构体 + `schema` 标签生成 JSON Schema、同标签驱动解码后默认值注入（嵌套结构体递归适用），工厂收强类型 config；手写 schema 字符串与 `map[string]any` 手工断言退役（string 版注册 API 保留为逃生口），默认值"schema 文档与工厂各写一份"的漂移面消除；生成 schema 由 golden 钉住（`testdata/schemas/`，`-update-schemas`）；transforms（script/split/wasm）维持 sections.go 手工解析（精确到字段行号的诊断，价值高于统一性）；v1.18：**术语统一：Settled → Commit**（插件 ABI 与引擎内部全量更名，消除与行业词汇的错位）——源插件契约 `registry.Source.Settled` → `Commit`（gRPC 同步：`rpc Settled` → `rpc Commit`，`SettledRequest/SettledResponse` → `CommitRequest/CommitResponse`，外部插件需重新编译）；引擎内部 `settleTracker` → `commitTracker`、`WaitSettled` → `WaitCommit`、`SettledCount` → `CommittedCount`、span 终态 `settled` → `committed`；指标更名 `eventboat_messages_settled_total` → `eventboat_messages_committed_total`、`eventboat_settle_latency_seconds` → `eventboat_commit_latency_seconds`；作业状态 `settling` → `committing`（旧 SQLite 库中遗留的 settling 状态 run 升级后不再视为活跃，需重新触发）；基准 `BenchmarkSettleThroughput` → `BenchmarkCommitThroughput`；本文正文措辞同步，历史修订记录保留原词
 >
 > 本文回答一个问题：**如果抛开 v2 现有实现，从零重新设计这个产品的方案、功能、配置方式和架构，应该长成什么样。**
 >
@@ -73,7 +73,7 @@ review-2026-08 的核心发现（同日已修复大部分，但暴露的是**机
 - 非 Kafka 源（http_server / cron）没有重放能力——"at-least-once"对它们无从谈起。
 - 死信只进不出：死信没有配套的查询与回放工具，等于只做了"丢得体面"。
 
-结论：**v3 放弃 per-edge 磁盘缓冲与跨边 refCount，改为"入口持久化 + 管道级 settle + checkpoint"模型**（见 §6.2），机制减少一半，不变量可以逐条写成测试。
+结论：**v3 放弃 per-edge 磁盘缓冲与跨边 refCount，改为"入口持久化 + 管道级 commit + checkpoint"模型**（见 §6.2），机制减少一半，不变量可以逐条写成测试。
 
 #### 理由四：扩展体系空心
 
@@ -209,7 +209,7 @@ message sample.json enters at node "ingest" (source kafka / decoder json)
   enrich → us-out            when meta.region == "us"        ✗ no match
   eu-out: sink kafka         batch=100/1s, retry=5×backoff
 
-settle: 1 branch → settles when kafka ack (or retry exhausted → dead letter)
+commit: 1 branch → commits when kafka ack (or retry exhausted → dead letter)
 ```
 
 `--message` 可省略，此时输出符号化推演（各边条件的字段依赖与取值域）。`explain --topology` 输出渲染好的 DAG（mermaid/ASCII，nodes + edges 与配置一一对应）。**术语说明**：`node`（节点）是概念词，用于 explain/status/内部 IR；它不是配置键——配置里节点以 `sources/transforms/sinks` 三段的条目存在（§5.3）。
@@ -424,7 +424,7 @@ WASM / gRPC  重计算/任意语言/外部依赖（近原生，进程隔离）
 
 预估 95% 以上语句可自动迁移（谓词零成本 + 赋值同形是两大功臣）。
 
-M4 落地注记（v1.14）：`convert` 已实现——"自动迁移"的机器定义 = 生成物通过真实编译器（Starlark 经 starhost、CEL 经 ir.Build 全量 verify），子集外的构造逐条进报告（原因 + 建议改法），绝不猜。两处语义差异记档：① v2 route 无匹配时静默丢弃消息，v3 折叠后的边守卫全不匹配 → settle-as-filtered + `eventboat_fanout_no_match_total` 计数（消息结局相同，可观测性变好）；② 渲染器把 eql 的整除 `/` 渲染为 Starlark `//`——CEL 截断取整、Starlark 向下取整，负数语义不同，报告单列提示。
+M4 落地注记（v1.14）：`convert` 已实现——"自动迁移"的机器定义 = 生成物通过真实编译器（Starlark 经 starhost、CEL 经 ir.Build 全量 verify），子集外的构造逐条进报告（原因 + 建议改法），绝不猜。两处语义差异记档：① v2 route 无匹配时静默丢弃消息，v3 折叠后的边守卫全不匹配 → commit-as-filtered + `eventboat_fanout_no_match_total` 计数（消息结局相同，可观测性变好）；② 渲染器把 eql 的整除 `/` 渲染为 Starlark `//`——CEL 截断取整、Starlark 向下取整，负数语义不同，报告单列提示。
 
 ### 4.9 与备选方案对比
 
@@ -699,13 +699,13 @@ sinks:
 **语义要点**：
 
 1. **职责切割**：调度、错过补偿、重叠策略、作业历史、参数绑定——全部由引擎在 pipeline 层实现一次；源插件只实现"按参数取下一批"（`capabilities: [pull]`：分页、水位、取尽信号）。verify 检查 `run.mode: job` 的所有源具备 pull 能力。
-2. **作业生命周期**：`pending → running（源分页拉取 + DAG 执行）→ settling（在途消息 settle 完毕）→ success | partial（有死信）| failed | canceled`；每次运行产生一条**作业历史记录**（run-id、parameters、起止、行数/投递/死信计数），存同一 SQLite store，按 `run.retention` 清理。
-3. **水位跟随 settle**（不变量，与 §6.2 同族）：`cursor` 只推进到"已 settle 消息的 max(cursor_column)"——凌晨跑到第 40 万行崩溃，重启（补偿窗口或手动触发）从上次水位续传，不重跑整夜。
+2. **作业生命周期**：`pending → running（源分页拉取 + DAG 执行）→ committing（在途消息 commit 完毕）→ success | partial（有死信）| failed | canceled`；每次运行产生一条**作业历史记录**（run-id、parameters、起止、行数/投递/死信计数），存同一 SQLite store，按 `run.retention` 清理。
+3. **水位跟随 commit**（不变量，与 §6.2 同族）：`cursor` 只推进到"已 commit 消息的 max(cursor_column)"——凌晨跑到第 40 万行崩溃，重启（补偿窗口或手动触发）从上次水位续传，不重跑整夜。
 4. **背压互动**：作业内分页受 spool 高水位节制（spool 高 → 暂停翻页），夜间大流量由 spool 吸收、Kafka sink 按自身节奏消费。
 5. **回补（backfill）靠 parameters**：同一条管道，凌晨跑增量（默认 from=cursor），白天 `mcp trigger orders-nightly-sync --parameters '{"from":"2026-08-01","to":"2026-09-01"}'` 跑指定区间——参数进触发上下文，`args` 绑定被覆盖。constants 与 parameters 的完整语义对比见 §5.9。dagu rich parameters 的 `eval`（运行时执行命令取默认值）**不吸收**（违反纯函数边界）。
 6. **"restart failed" = `replay --job <run-id>`**：按作业 run-id 回放该次运行的死信子集到任意 node——零新机制，dagu 对应能力的语义等价物。
 
-**作业面 vs 数据面**的边界（为什么不直接用 dagu）：dagu 每步每运行执行一次、数据是命令输出经文件传递、重试=重跑整步；v3 逐行 settle + 水位续传 + 逐行 死信。**作业编排（何时跑/重叠/历史/参数）吸收自 dagu，逐消息可靠性是本产品的本分**。
+**作业面 vs 数据面**的边界（为什么不直接用 dagu）：dagu 每步每运行执行一次、数据是命令输出经文件传递、重试=重跑整步；v3 逐行 commit + 水位续传 + 逐行 死信。**作业编排（何时跑/重叠/历史/参数）吸收自 dagu，逐消息可靠性是本产品的本分**。
 
 ### 5.9 constants 与 parameters：两种值的两种生命周期
 
@@ -766,7 +766,7 @@ parameters:
         ┌───────────────────────┼────────────────────────────┐
         ▼                       ▼                            ▼
    Engine(per-pipeline supervisor)                      Admin/MCP/CLI
-   spool → DAG 执行(settle 跟踪) → sinks                      ▲
+   spool → DAG 执行(commit 跟踪) → sinks                      ▲
         │                   │                                 │
         │             jobs(调度/准入/历史)                      │
         └── OTel(metrics/traces) ── Prometheus/OTLP ───────────┘
@@ -774,33 +774,33 @@ parameters:
 
 三层职责：**Config 层**管语法与合并；**Static IR 层**管一切可静态确定的真相（DAG、编译后的程序、类型——explain 在这层即可运行）；**Runtime 层**只消费 IR，不含任何"理解配置"的逻辑。分层依赖方向明文化（吸收 dagu 工程纪律）：**可变运行时状态只许存在于 engine/jobs/store，不得进入 config/ir；storage 不得被 service 反向依赖；HTTP/MCP handler 不得直连存储适配器**。
 
-### 6.2 可靠性模型：spool + settle + checkpoint
+### 6.2 可靠性模型：spool + commit + checkpoint
 
 替代 v2 的"per-edge 磁盘缓冲 + 跨边 refCount"：
 
 ```
 source ──▶ [spool: 每管道一条 append-only 持久队列] ──▶ 内存 DAG 执行 ──▶ sinks
                     │                                      │
-                    └── checkpoint(消费位点) ◀── settle 跟踪器 ◀── 各分支终态
+                    └── checkpoint(消费位点) ◀── commit 跟踪器 ◀── 各分支终态
 ```
 
 - **入口持久化**：source 消息先写 spool（含解码后形态或原始字节+codec 标记、入口元数据 `ingest_time/message_id`），**落盘后才算接收**。崩溃恢复 = 从 checkpoint 重放 spool。
-- **settle 跟踪**：每条消息的执行分支集合在 fan-out 时确定；每个分支到达终态（sink 成功 / 死信 / `required:false` 边失败且策略允许丢弃）后递减；归零 = 消息 **settled**。
-- **checkpoint**：settled 消息的 spool 位点持久化 + source 位点提交（Kafka: consumer offset；file: 文件 offset；http_server: 无位可提交，spool 即真相；sql: 水位列，见 §5.8）。
-- **投递语义**：sink 失败按边 `delivery`（retries×backoff、timeout）重试；耗尽 → **死信库**（存 spool 同一存储，含完整原始消息 + 错误 + Starlark backtrace/CEL 错误 + 重试史）；死信写入成功 = 该分支终态（settle）。
+- **commit 跟踪**：每条消息的执行分支集合在 fan-out 时确定；每个分支到达终态（sink 成功 / 死信 / `required:false` 边失败且策略允许丢弃）后递减；归零 = 消息 **committed**。
+- **checkpoint**：committed 消息的 spool 位点持久化 + source 位点提交（Kafka: consumer offset；file: 文件 offset；http_server: 无位可提交，spool 即真相；sql: 水位列，见 §5.8）。
+- **投递语义**：sink 失败按边 `delivery`（retries×backoff、timeout）重试；耗尽 → **死信库**（存 spool 同一存储，含完整原始消息 + 错误 + Starlark backtrace/CEL 错误 + 重试史）；死信写入成功 = 该分支终态（commit）。
 - **背压**：spool 高水位 → 暂停 source 拉取（对作业管道 = 暂停翻页）；spool 低水位恢复。node 间为有界 channel（内存级 per-edge buffer 保留为削峰参数，不再是可靠性机制）。
 
 **可测试不变量**（每条一个专属测试，这是对 review-2026-08 的结构性回应；不变量集本身由 conformance 测试锁定，见 §6.9）：
 
 1. spool 落盘成功之前，消息对 DAG 不可见；
-2. settled 之前，checkpoint 不前进；
-3. 任意时刻 kill -9，重启后从 checkpoint 重放的集合 ⊇ 未 settled 消息集合（at-least-once）；
-4. 死信写入失败时消息不得 settle（死信本身带重试，死信不可用 = 管道降速而非丢消息）；
-5. `required:false` 边的失败只影响自身分支，不阻塞其他分支 settle；
+2. committed 之前，checkpoint 不前进；
+3. 任意时刻 kill -9，重启后从 checkpoint 重放的集合 ⊇ 未 committed 消息集合（at-least-once）；
+4. 死信写入失败时消息不得 commit（死信本身带重试，死信不可用 = 管道降速而非丢消息）；
+5. `required:false` 边的失败只影响自身分支，不阻塞其他分支 commit；
 6. 同一消息重复投递到幂等 sink 的结果是安全的（文档化的用户责任 + `meta.message_id` 供幂等键使用）；
-7. 拉取源水位只推进到已 settle 消息的 max(cursor_column)（作业管道续传正确性）。
+7. 拉取源水位只推进到已 commit 消息的 max(cursor_column)（作业管道续传正确性）。
 
-**被删除的机制**（复杂度减法）：per-edge 磁盘缓冲、跨边 per-message refCount、磁盘 buffer 的三态（memory/disk/overflow）与 when_full 矩阵——全部由"入口持久化 + settle"覆盖，且语义只强不弱。
+**被删除的机制**（复杂度减法）：per-edge 磁盘缓冲、跨边 per-message refCount、磁盘 buffer 的三态（memory/disk/overflow）与 when_full 矩阵——全部由"入口持久化 + commit"覆盖，且语义只强不弱。
 
 ### 6.3 存储选型：不手写 WAL
 
@@ -859,7 +859,7 @@ internal/
     starhost/        Starlark 宿主：预编译、惰性绑定+COW payload、
                      沙箱(白名单/预算)、safe_ 糖函数、backtrace 提取
     conformance/     CEL/Starlark 行为语料 + lint 规则测试 + 基准套件
-  engine/            supervisor、调度、settle 跟踪、背压、checkpoint
+  engine/            supervisor、调度、commit 跟踪、背压、checkpoint
   jobs/              作业面：cron 调度、catchup_window 补偿、准入队列、run 生命周期与历史
   store/             spool + 死信 + 位点 + 作业历史（SQLite/Pebble 后端抽象）
   registry/          插件注册 + JSON Schema 清单（catalog 数据源，按三段分组）
@@ -877,7 +877,7 @@ internal/
 
 ### 6.9 工程纪律（吸收自 dagu 的实现文化）
 
-1. **规范驱动的 conformance 测试**：管道语义（拓扑规则、delivery/settle/checkpoint、作业生命周期、verify 行为本身）写成可执行规范 + 二进制级一致性测试，进 CI——v2 的"文档说一套、代码做一套"（review-2026-08 发现的口径脱节）从机制上杜绝。
+1. **规范驱动的 conformance 测试**：管道语义（拓扑规则、delivery/commit/checkpoint、作业生命周期、verify 行为本身）写成可执行规范 + 二进制级一致性测试，进 CI——v2 的"文档说一套、代码做一套"（review-2026-08 发现的口径脱节）从机制上杜绝。
 2. **API-first 单源生成**：`api/` 的 OpenAPI 源生成 Go server 类型、前端 client、MCP schema；禁止手改生成物。
 3. **分层依赖方向明文化**（§6.1）；bug fix 先写能失败的回归测试再修。
 
@@ -895,7 +895,7 @@ internal/
 | 映射语言 | eql（CEL+赋值缝合） | **Starlark**（Python 方言，go-starlark 沙箱宿主） |
 | 语言维护成本 | 自研方言（漂移中） | **零**（两个现成实现 + 胶水） |
 | 定时/批处理 | 无（cron source 只产固定 payload） | **作业管道**：pipeline 级 `run`（schedule/overlap/catchup_window/retention）+ `parameters` 回补 + 作业历史 |
-| 可靠性 | per-edge 磁盘 WAL + 跨边 refCount | 入口 spool + settle + checkpoint（不变量可枚举测试） |
+| 可靠性 | per-edge 磁盘 WAL + 跨边 refCount | 入口 spool + commit + checkpoint（不变量可枚举测试） |
 | 存储 | 自研 WAL（分段+CRC+位点） | SQLite/Pebble（不手写 WAL） |
 | 死信 | 死信 sink（只进不出） | 死信库 + `replay`（查询、筛选、按 run-id 回灌） |
 | 推演 | 无 | `explain`（消息级路径推演）+ `simulate` 语义 |
@@ -919,7 +919,7 @@ internal/
 
 | 阶段 | 内容 | 验收标准 |
 |------|------|----------|
-| **M1 内核与语言** | engine（spool/settle/checkpoint/背压）+ **CEL 谓词宿主 + Starlark 映射宿主**（预编译、惰性绑定+COW、沙箱白名单、步数预算、safe_ 糖函数、lint）+ verify/test + 内置 P0 插件（kafka/http_server/cron/file 源；kafka/http/file/drop 汇；json/raw codec）+ CLI（run/verify/test/repl/plugin） | §6.2 七条不变量各有一条专属测试且通过；**§4.6 基准套件（三类脚本 × 速率）进 CI 回归门，数字写进文档**；conformance 语料（CEL/Starlark 行为 + lint 规则）进 CI；`_examples` 全部 verify+test 通过 |
+| **M1 内核与语言** | engine（spool/commit/checkpoint/背压）+ **CEL 谓词宿主 + Starlark 映射宿主**（预编译、惰性绑定+COW、沙箱白名单、步数预算、safe_ 糖函数、lint）+ verify/test + 内置 P0 插件（kafka/http_server/cron/file 源；kafka/http/file/drop 汇；json/raw codec）+ CLI（run/verify/test/repl/plugin） | §6.2 七条不变量各有一条专属测试且通过；**§4.6 基准套件（三类脚本 × 速率）进 CI 回归门，数字写进文档**；conformance 语料（CEL/Starlark 行为 + lint 规则）进 CI；`_examples` 全部 verify+test 通过 |
 | **M2 作业管道与操作面** | **作业面（`run`/`parameters`/`hooks`/`catchup_window`/`overlap` + 作业历史 + `sql` 源 + `trigger`/`jobs` 命令）** + explain/replay + MCP server + Admin REST + SSE + 内嵌只读 UI + OTel 全量 | 一个 Agent 仅凭 MCP tools 完成"生成配置→verify→test→explain→deploy→观察→手动触发回补→修错→再部署"闭环（真实 Agent 会话录制验收）；作业中断续传（kill -9 后从水位续跑）有专项测试 |
 | **M3 扩展阶梯** | WASM transform（wazero，标准 Go 工具链构建 wasip1 reactor guest）+ gRPC source/sink 协议 + 插件 SDK 文档 + CESQL 方言（TCK 进 CI） | 第三方按文档实现一个 gRPC source 插件并跑通全链路；TCK 纯模式 100% 通过；基准证明 WASM 档对重度脚本的收益（快速模式 ~2.3× + 分配数 ~30000×，默认击杀模式如实记录 ~5× 开销） |
 | **M4 生态** ✅ | Schema 发布（`plugin schema` 独立分发）、LSP、csv/avro/protobuf codec、性能 profile（Pebble 后端）、Operator（薄封装）、convert 工具完善 | IDE 内写管道有补全与诊断（v2 示例 convert 仅作为 convert 工具自身的按需验收）——M4 落地（v1.14 对账）：两个锚点达成（LSP 协议集成测试 + vscode 最小扩展；v2 全部 12 个示例/testdata convert 后 verify 全绿 + 快照入 CI + 三例语义等价抽查转正为永久测试）；Pebble profile 裁剪记档（查询面需重写，非锚点）；Operator 降为示例 Deployment 清单 + docs/k8s.md（§6.7 本就 P2）；repl 回归 |
@@ -937,7 +937,7 @@ internal/
 | "restart failed" → `replay --job` | human.task / approval 人工审批——超定位 |
 | conformance 测试纪律、API-first 生成、分层依赖约束 | — |
 
-根本差异：dagu 是**作业面编排器**（每步每运行执行一次，数据=命令输出经文件传递，重试=重跑整步）；v3 是**数据面路由器**（算子常驻，逐消息 settle/水位/死信）。凌晨 DB→Kafka 这类批式搬运 = **dagu 的作业编排语义 + 我们的逐消息可靠性**。
+根本差异：dagu 是**作业面编排器**（每步每运行执行一次，数据=命令输出经文件传递，重试=重跑整步）；v3 是**数据面路由器**（算子常驻，逐消息 commit/水位/死信）。凌晨 DB→Kafka 这类批式搬运 = **dagu 的作业编排语义 + 我们的逐消息可靠性**。
 
 ---
 

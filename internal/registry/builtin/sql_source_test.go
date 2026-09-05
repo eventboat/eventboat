@@ -89,8 +89,8 @@ func TestSQLSourcePullPagesAndCommits(t *testing.T) {
 		}
 	}
 
-	// Settled at the full frontier commits the watermark.
-	state, err := src.Settled(context.Background(), 25)
+	// Commit at the full frontier commits the watermark.
+	state, err := src.Commit(context.Background(), 25)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,7 +99,7 @@ func TestSQLSourcePullPagesAndCommits(t *testing.T) {
 	}
 }
 
-// Resume: a restored key pulls only rows after the settled frontier.
+// Resume: a restored key pulls only rows after the committed frontier.
 func TestSQLSourceResumesFromState(t *testing.T) {
 	path := t.TempDir() + "/orders.db"
 	db := openTestDB(t, path)
@@ -111,7 +111,7 @@ func TestSQLSourceResumesFromState(t *testing.T) {
 		"cursor":     map[string]any{"column": "id"},
 		"pagination": map[string]any{"key": []any{"id"}, "page_size": 100},
 	})
-	// Pretend rows 0..9 were pulled and settled in a previous life.
+	// Pretend rows 0..9 were pulled and committed in a previous life.
 	if err := src.Init([]byte(`{"watermark":"9","last_key":[9]}`)); err != nil {
 		t.Fatal(err)
 	}

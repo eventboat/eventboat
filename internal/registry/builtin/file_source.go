@@ -32,7 +32,7 @@ func registerFileSource(reg *registry.Registry) error {
 }
 
 // fileSource tails a file line by line. Commit state is the committed byte
-// offset; the engine restores it via Init and advances it via Settled, which
+// offset; the engine restores it via Init and advances it via Commit, which
 // makes the file source genuinely at-least-once across restarts.
 type fileSource struct {
 	path      string
@@ -136,7 +136,7 @@ func (s *fileSource) pump(ctx context.Context, emit func(registry.Message)) {
 	}
 }
 
-func (s *fileSource) Settled(ctx context.Context, throughSrcSeq int64) ([]byte, error) {
+func (s *fileSource) Commit(ctx context.Context, throughSrcSeq int64) ([]byte, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for seq := int64(1); seq <= throughSrcSeq; seq++ {

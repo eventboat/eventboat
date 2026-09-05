@@ -42,7 +42,7 @@ type Obs struct {
 
 	// The 25 instruments (review §六), created once.
 	MessagesIn            metric.Int64Counter
-	MessagesSettled       metric.Int64Counter
+	MessagesCommitted     metric.Int64Counter
 	DeadLettered          metric.Int64Counter
 	DlqWriteFailures      metric.Int64Counter
 	CelEvalErrors         metric.Int64Counter
@@ -65,7 +65,7 @@ type Obs struct {
 	ScriptDuration    metric.Float64Histogram
 	SinkWriteDuration metric.Float64Histogram
 	JobDuration       metric.Float64Histogram
-	SettleLatency     metric.Float64Histogram
+	CommitLatency     metric.Float64Histogram
 	WasmDuration      metric.Float64Histogram
 
 	InFlight       metric.Float64Gauge
@@ -213,9 +213,9 @@ func (o *Obs) createInstruments() error {
 	}
 
 	o.MessagesIn = newCounter("eventboat_messages_in_total", "Messages accepted into the spool")
-	o.MessagesSettled = newCounter("eventboat_messages_settled_total", "Messages reached a terminal state")
+	o.MessagesCommitted = newCounter("eventboat_messages_committed_total", "Messages reached a terminal state")
 	o.DeadLettered = newCounter("eventboat_dead_letter_total", "Messages dead-lettered")
-	o.DlqWriteFailures = newCounter("eventboat_dlq_write_failures_total", "Dead letter writes that failed (settle blocked)")
+	o.DlqWriteFailures = newCounter("eventboat_dlq_write_failures_total", "Dead letter writes that failed (commit blocked)")
 	o.CelEvalErrors = newCounter("eventboat_cel_eval_errors_total", "CEL predicate evaluation errors (treated as not-passed)")
 	o.FanoutNoMatch = newCounter("eventboat_fanout_no_match_total", "Messages filtered by zero matching edges")
 	o.DeliveryRetries = newCounter("eventboat_delivery_retries_total", "Delivery retry attempts")
@@ -237,9 +237,9 @@ func (o *Obs) createInstruments() error {
 	o.WasmDuration = newHist("eventboat_wasm_transform_duration_seconds", "WASM transform invocation duration")
 	o.SinkWriteDuration = newHist("eventboat_sink_write_duration_seconds", "Sink batch write duration")
 	o.JobDuration = newHist("eventboat_job_duration_seconds", "Job run wall-clock duration")
-	o.SettleLatency = newHist("eventboat_settle_latency_seconds", "Accept-to-settle latency")
+	o.CommitLatency = newHist("eventboat_commit_latency_seconds", "Accept-to-commit latency")
 
-	o.InFlight = newGauge("eventboat_in_flight_messages", "Unsettled messages in execution")
+	o.InFlight = newGauge("eventboat_in_flight_messages", "Uncommitted messages in execution")
 	o.SpoolDepth = newGauge("eventboat_spool_depth", "Spooled messages beyond the checkpoint")
 	o.PipelinePaused = newGauge("eventboat_pipeline_paused", "1 when the pipeline is paused, else 0")
 	return err
@@ -284,17 +284,17 @@ func (o *Obs) RecordDeadLetter(pipeline, node, class string) {
 		attribute.String("pipeline", pipeline), attribute.String("node", node), attribute.String("reason_class", class)))
 }
 
-// RecordSettled counts one settled message and its latency.
-func (o *Obs) RecordSettled(pipeline string, latency time.Duration) {
+// RecordCommit counts one committed message and its latency.
+func (o *Obs) RecordCommit(pipeline string, latency time.Duration) {
 	if o == nil {
 		return
 	}
 	ctx := context.Background()
-	if o.MessagesSettled != nil {
-		o.MessagesSettled.Add(ctx, 1, metric.WithAttributes(attribute.String("pipeline", pipeline)))
+	if o.MessagesCommitted != nil {
+		o.MessagesCommitted.Add(ctx, 1, metric.WithAttributes(attribute.String("pipeline", pipeline)))
 	}
-	if o.SettleLatency != nil && latency > 0 {
-		o.SettleLatency.Record(ctx, latency.Seconds(), metric.WithAttributes(attribute.String("pipeline", pipeline)))
+	if o.CommitLatency != nil && latency > 0 {
+		o.CommitLatency.Record(ctx, latency.Seconds(), metric.WithAttributes(attribute.String("pipeline", pipeline)))
 	}
 }
 

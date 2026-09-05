@@ -38,20 +38,20 @@ type DeadLetter struct {
 
 // Job statuses (redesign-v3.md §5.8 lifecycle).
 const (
-	JobPending  = "pending"
-	JobRunning  = "running"
-	JobSettling = "settling"
-	JobSuccess  = "success"
-	JobPartial  = "partial"
-	JobFailed   = "failed"
-	JobCanceled = "canceled"
+	JobPending    = "pending"
+	JobRunning    = "running"
+	JobCommitting = "committing"
+	JobSuccess    = "success"
+	JobPartial    = "partial"
+	JobFailed     = "failed"
+	JobCanceled   = "canceled"
 )
 
 // JobRun is one job-pipeline execution record (run history, §5.8).
 type JobRun struct {
 	RunID        string         `json:"run_id"`
 	Pipeline     string         `json:"pipeline"`
-	Status       string         `json:"status"`  // pending|running|settling|success|partial|failed|canceled
+	Status       string         `json:"status"`  // pending|running|committing|success|partial|failed|canceled
 	TriggerType  string         `json:"trigger"` // schedule|manual|catchup
 	Parameters   map[string]any `json:"parameters"`
 	ScheduledFor string         `json:"scheduled_for"` // RFC3339 tick identity ("" for manual runs)
@@ -67,7 +67,7 @@ type JobRun struct {
 // Runnable reports whether the run was in flight when its process died and
 // must be resumed (or failed) on restart.
 func (j JobRun) Runnable() bool {
-	return j.Status == JobPending || j.Status == JobRunning || j.Status == JobSettling
+	return j.Status == JobPending || j.Status == JobRunning || j.Status == JobCommitting
 }
 
 // Store is the persistence surface used by the engine. All methods must be
@@ -86,11 +86,11 @@ type Store interface {
 	// returns the last sequence visited and whether more remain.
 	ReplayPage(pipeline string, afterSeq int64, limit int, fn func(seq int64, msg registry.Message, ingestTime time.Time) error) (lastSeq int64, more bool, err error)
 
-	// SetCheckpoint persists the contiguous settled-through spool sequence
-	// (invariant 2: only after settle).
+	// SetCheckpoint persists the contiguous committed-through spool sequence
+	// (invariant 2: only after commit).
 	SetCheckpoint(pipeline string, seq int64) error
 
-	// Checkpoint reads the persisted settled-through sequence.
+	// Checkpoint reads the persisted committed-through sequence.
 	Checkpoint(pipeline string) (int64, error)
 
 	// SetSourceState persists a source's commit state at srcSeq.
@@ -100,7 +100,7 @@ type Store interface {
 	SourceState(pipeline, source string) (state []byte, srcSeq int64, err error)
 
 	// WriteDeadLetter durably records a dead letter. Failure here must block
-	// settle (invariant 4), never drop the message.
+	// commit (invariant 4), never drop the message.
 	WriteDeadLetter(dl DeadLetter) error
 
 	// DeadLetters lists dead letters for a pipeline (newest first).

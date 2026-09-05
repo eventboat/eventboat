@@ -74,7 +74,7 @@ sinks:
 
 	// The pool (cap 2) is exhausted: a third emission must not be accepted
 	// until a slot frees. The block is structural — both holds are wedged on
-	// the gate, nothing can settle — so the negative window is deterministic.
+	// the gate, nothing can commit — so the negative window is deterministic.
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
@@ -86,12 +86,12 @@ sinks:
 		t.Fatalf("third message admitted despite exhausted shared pool (messagesIn=%d)", got)
 	}
 
-	// Free both slots: the wedged writes complete, messages settle, the
-	// blocked emission proceeds and settles too.
+	// Free both slots: the wedged writes complete, messages commit, the
+	// blocked emission proceeds and commits too.
 	safeClose(gate)
 	wg.Wait()
-	waitSettled(t, engA)
-	waitSettled(t, engB)
+	waitCommit(t, engA)
+	waitCommit(t, engB)
 	if got := engA.Metrics.MessagesIn.Load(); got != 2 {
 		t.Fatalf("third message never admitted after slot release (messagesIn=%d)", got)
 	}

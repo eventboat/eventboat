@@ -93,7 +93,7 @@ jobs:
         run: |
           cd internal/wasmhost/testdata/guest
           GOOS=wasip1 GOARCH=wasm go build -buildmode=c-shared -o ../aggregate.wasm
-      - name: Threshold gate (CEL predicate, starhost scripts, settle throughput)
+      - name: Threshold gate (CEL predicate, starhost scripts, commit throughput)
         run: bash scripts/bench-gate.sh
       - name: "Benchmarks (informational — Starlark vs WASM)"
         run: go test -bench BenchmarkHeavyTransform -benchtime 1s -run XXX ./internal/wasmhost/...

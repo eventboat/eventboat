@@ -217,7 +217,7 @@ func runCase(baseDir, pipelinePath string, pip *ir.Pipeline, c specCase, reg *re
 	}
 
 	waitCtx, waitCancel := context.WithTimeout(ctx, 5*time.Second)
-	werr := eng.WaitSettled(waitCtx)
+	werr := eng.WaitCommit(waitCtx)
 	waitCancel()
 	if werr != nil {
 		fail("engine: %v", werr)

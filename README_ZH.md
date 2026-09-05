@@ -38,13 +38,13 @@ DAG 流动（过滤、映射、路由），落到目的地——全程 at-least-
         ▼                         ▼                          ▼
    Engine（每管道）                                    CLI / 未来 MCP
    source ─▶ spool（SQLite）─▶ 内存 DAG ─▶ sinks
-                  │              settle 跟踪           │
+                  │              commit 跟踪           │
                   └─ checkpoint ◀──── 各分支终态 ┘
                     （sink 成功 / 死信 / 可选边丢弃）
 ```
 
 可靠性模型（redesign-v3.md §6.2）：入口消息**先落 spool 再对 DAG 可见**；
-settle 跟踪器统计每条消息到终态的执行分支；checkpoint 只在消息 settle 后
+commit 跟踪器统计每条消息到终态的执行分支；checkpoint 只在消息 commit 后
 前进；崩溃恢复 = 从 checkpoint 重放 spool。七条不变量每条一个专属测试
 （`TestInvariant_*`，位于 [internal/engine](internal/engine/invariants_test.go)）。
 
@@ -181,7 +181,7 @@ cases:
 已实现：三段式配置（严格白名单 + `${VAR}`/`${?VAR}` 替换）；CEL 谓词宿主
 （零自定义函数，求值错误 = 条件不通过 + 计数）；Starlark 宿主（程序预编译
 复用、payload/meta 惰性 + 写时复制绑定、`json`/`math` 白名单、100k 步数预
-算、backtrace 进死信）；引擎（spool/settle/checkpoint/背压/回放，SQLite
+算、backtrace 进死信）；引擎（spool/commit/checkpoint/背压/回放，SQLite
 承载——`modernc.org/sqlite` 纯 Go，不手写 WAL）；死信库；强制 JSON Schema
 的插件注册（源：kafka/http_server/cron/file；汇：kafka/http/file/drop；
 编解码：json/raw/csv/avro/protobuf）；CLI `verify`/`test`/`run`（`--json`）。
@@ -198,10 +198,10 @@ cases:
 - **模块：** load 白名单为 `json` + `math`；go-starlark 无可 load 的
   `strings` 模块——字符串方法是 string 类型内建（审查 R3）。
 - **transform 失败**按入边 delivery 策略重试后死信（审查 R6）；fan-out 零
-  匹配 = 正常 settle + 计数（审查 R7）；`split` = JSON 数组逐元素成消息，
+  匹配 = 正常 commit + 计数（审查 R7）；`split` = JSON 数组逐元素成消息，
   子消息继承父 message_id（审查 R8）。
-- **spool 存原始字节 + codec 标记**（审查 R9）。崩溃后源从已 settle 水位
-  恢复，未 settle 尾部可能在 spool 重放之外被源再次送出——可能重复投递，
+- **spool 存原始字节 + codec 标记**（审查 R9）。崩溃后源从已 commit 水位
+  恢复，未 commit 尾部可能在 spool 重放之外被源再次送出——可能重复投递，
   绝不丢失。
 - **`order_key`** 在 sink 侧求值为消息键（如 Kafka 分区键）；完整 per-key
   有序分片为 P1。`workers` 提供 transform 节点级并发。
@@ -213,7 +213,7 @@ cases:
 [redesign-v3-review-beta.md](redesign-v3-review-beta.md)；用户视角摘要见
 [CHANGELOG.md](CHANGELOG.md)：
 
-- **settle 持久化移出 tracker 锁**：前缀推进在锁内计算、落盘在结算
+- **commit 持久化移出 tracker 锁**：前缀推进在锁内计算、落盘在执行提交的
   goroutine 锁外执行；单调守卫保证 checkpoint/水位/指标乱序 flush 不回退。
   预研的"异步 worker"方案被实现期否决——不变量 7 测试中途直读存储依赖同
   goroutine 持久化序（七不变量零改动约束拍板）。观察者走尝试型持久屏障。
@@ -227,10 +227,10 @@ cases:
   （spool/死信/投递）永不改动；逐消息 span 按率可选（默认 0）。
 - **gRPC 插件崩溃策略**（M3 裁剪关闭）：`grpc.restart: fast-fail | restart`
   （默认 fast-fail = M3 语义原样）；`restart` 指数退避重生 + 重发配置与
-  最新 Settled 状态 + 流/写重试，计数 `eventboat_plugin_restarts_total`。
+  最新 Commit 状态 + 流/写重试，计数 `eventboat_plugin_restarts_total`。
 - **CI 面**：golangci-lint v2 基线（零发现）；kafka testcontainers 集成
   job（真实 KRaft broker）；夜间 + 手动 soak workflow（注入故障的长跑，
-  断言恰好一次结算与无 goroutine 泄漏）；bench job 升级为宽松阈值门
+  断言恰好一次提交与无 goroutine 泄漏）；bench job 升级为宽松阈值门
   （[scripts/bench-gate.sh](scripts/bench-gate.sh)）。
 
 ## 仓库布局
@@ -242,7 +242,7 @@ internal/ir/          静态 IR：DAG、CEL/Starlark/CESQL 编译产物、拓扑
 internal/lang/        celhost（谓词）、cesqlhost（CESQL 方言 + 官方 TCK）、starhost（Starlark 沙箱宿主）
 internal/wasmhost/    wazero 宿主：能力沙箱、逐调用预算（guest 在 testdata/）
 internal/rpcplugin/   gRPC 插件宿主：进程 spawn/握手、source/sink 适配
-internal/engine/      spool 准入、DAG 执行、settle、投递、死信、拉取源
+internal/engine/      spool 准入、DAG 执行、commit、投递、死信、拉取源
 internal/jobs/        作业运行时：调度、补偿、重叠、run 生命周期、钩子
 internal/store/       SQLite + 内存版 spool/checkpoint/死信/作业历史存储
 internal/registry/    插件注册（强制 JSON Schema + ABI 版本，M4 起 codec 同规）

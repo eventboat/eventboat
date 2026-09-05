@@ -54,7 +54,7 @@ func (e *Engine) processTransform(node *ir.Node, inst *instance, wasmInvoker *wa
 			if attempt > 0 {
 				e.Metrics.Retries.Add(1)
 				if !e.sleepBackoff(backoff, attempt) {
-					// Shutting down mid-retry: leave unsettled for replay.
+					// Shutting down mid-retry: leave uncommitted for replay.
 					return
 				}
 			}
@@ -104,7 +104,7 @@ func (e *Engine) processTransform(node *ir.Node, inst *instance, wasmInvoker *wa
 			if attempt > 0 {
 				e.Metrics.Retries.Add(1)
 				if !e.sleepBackoff(backoff, attempt) {
-					// Shutting down mid-retry: leave unsettled for replay.
+					// Shutting down mid-retry: leave uncommitted for replay.
 					return
 				}
 			}
@@ -148,7 +148,7 @@ func (e *Engine) processTransform(node *ir.Node, inst *instance, wasmInvoker *wa
 
 // processSplit turns an array payload into one message per element (review
 // R8). Children share the parent's spool identity and message_id; the parent
-// settles only when all children's branches settle.
+// commits only when all children's branches commit.
 func (e *Engine) processSplit(node *ir.Node, inst *instance) {
 	items, ok := inst.msg.Decoded.([]any)
 	if !ok {
@@ -156,10 +156,10 @@ func (e *Engine) processSplit(node *ir.Node, inst *instance) {
 		return
 	}
 	if len(items) == 0 {
-		e.settle.done(inst.seq)
+		e.commit.done(inst.seq)
 		return
 	}
-	e.settle.add(inst.seq, len(items)-1)
+	e.commit.add(inst.seq, len(items)-1)
 	for _, item := range items {
 		child := inst.msg // shallow copy; COW bindings protect payload/meta
 		child.Decoded = item
@@ -215,7 +215,7 @@ func (e *Engine) runSink(node *ir.Node) {
 	}
 }
 
-// writeBatch encodes, writes with per-edge delivery retries, and settles or
+// writeBatch encodes, writes with per-edge delivery retries, and commits or
 // dead letters. Mixed-edge batches take the strictest retry policy and
 // dead-letter attribution stays per instance (its own via-edge).
 func (e *Engine) writeBatch(node *ir.Node, sink registry.Sink, insts []*instance) {
@@ -276,7 +276,7 @@ func (e *Engine) writeBatch(node *ir.Node, sink registry.Sink, insts []*instance
 			e.Metrics.Retries.Add(1)
 			e.Opts.Obs.RecordRetry(e.IR.Config.Name, node.Name)
 			if !e.sleepBackoff(backoff, attempt) {
-				return // shutdown: unsettled, replayed later
+				return // shutdown: uncommitted, replayed later
 			}
 		}
 		writeCtx, cancel := context.WithTimeout(e.ctx, timeout)
@@ -286,7 +286,7 @@ func (e *Engine) writeBatch(node *ir.Node, sink registry.Sink, insts []*instance
 		cancel()
 		if werr == nil {
 			for _, r := range batch {
-				e.settle.done(r.inst.seq)
+				e.commit.done(r.inst.seq)
 			}
 			return
 		}
@@ -295,14 +295,14 @@ func (e *Engine) writeBatch(node *ir.Node, sink registry.Sink, insts []*instance
 		if r.inst.via != nil && !r.inst.via.Required {
 			e.Metrics.OptionalDrops.Add(1)
 			e.Opts.Obs.RecordOptionalDrop(e.IR.Config.Name, r.inst.via.From+" -> "+node.Name)
-			e.settle.done(r.inst.seq)
+			e.commit.done(r.inst.seq)
 			continue
 		}
 		e.deadLetter(r.inst, node.Name, "delivery: sink write failed after retries", "")
 	}
 }
 
-// deadLetter writes a durable dead letter and settles the branch. A failing
+// deadLetter writes a durable dead letter and commits the branch. A failing
 // dead letter write NEVER drops the message: it retries until it succeeds or
 // the engine shuts down (invariant 4: degraded, not lossy).
 func (e *Engine) deadLetter(inst *instance, node, reason, backtrace string) {
@@ -342,7 +342,7 @@ func (e *Engine) deadLetterMsg(seq int64, msg registry.Message, node, edge, reas
 			e.Metrics.DeadLettered.Add(1)
 			e.Opts.Obs.RecordDeadLetter(e.IR.Config.Name, node, obs.ReasonClass(reason))
 			e.finishSpan(seq, "dead_letter", reason)
-			e.settle.done(seq)
+			e.commit.done(seq)
 			return
 		}
 		e.Metrics.DlqFailures.Add(1)
@@ -350,7 +350,7 @@ func (e *Engine) deadLetterMsg(seq int64, msg registry.Message, node, edge, reas
 		select {
 		case <-time.After(e.Opts.DLBackoff):
 		case <-e.ctx.Done():
-			return // stays unsettled; replayed on restart
+			return // stays uncommitted; replayed on restart
 		}
 	}
 }

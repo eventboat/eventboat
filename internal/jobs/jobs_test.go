@@ -270,7 +270,7 @@ func TestJobKill9ResumeFromWatermark(t *testing.T) {
 	}
 
 	// Manager 1 with a wedging sink: every write after the second wedges —
-	// rows 0..1 settle, row 2 freezes mid-delivery (a process frozen mid-job).
+	// rows 0..1 commit, row 2 freezes mid-delivery (a process frozen mid-job).
 	lr := config.LoadFile(h.yamlPath)
 	if lr.HasErrors() {
 		t.Fatal(lr.Diagnostics)
@@ -298,7 +298,7 @@ func TestJobKill9ResumeFromWatermark(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Wait until the crash point: two messages settled (checkpoint = 2).
+	// Wait until the crash point: two messages committed (checkpoint = 2).
 	// Budgets carry 3x headroom and scale with EVENTBOAT_TEST_TIMEOUT_FACTOR:
 	// this test keeps two live managers plus a wedged writer schedulable, and
 	// under -count=N machine saturation fixed 5s/10s budgets flaked (the M4
@@ -341,7 +341,7 @@ func TestJobKill9ResumeFromWatermark(t *testing.T) {
 	if runs[0].Status != store.JobSuccess {
 		t.Fatalf("resumed run status = %s", runs[0].Status)
 	}
-	// at-least-once: every row delivered; the unsettled tail may appear
+	// at-least-once: every row delivered; the uncommitted tail may appear
 	// twice (spool replay + source re-pull), never zero times.
 	delivered := map[string]bool{}
 	for _, raw := range h.sink("out").snapshot() {

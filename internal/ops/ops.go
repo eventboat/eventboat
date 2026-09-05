@@ -357,7 +357,7 @@ type PipelineStatus struct {
 	InFlight     int            `json:"in_flight"`
 	Checkpoint   int64          `json:"checkpoint"`
 	MessagesIn   int64          `json:"messages_in"`
-	Settled      int64          `json:"settled"`
+	Committed    int64          `json:"committed"`
 	DeadLettered int64          `json:"dead_lettered"`
 	MsgPerSec    float64        `json:"messages_per_sec"`
 	RecentRuns   []store.JobRun `json:"recent_runs,omitempty"`
@@ -398,11 +398,11 @@ func (s *Service) Status() []PipelineStatus {
 			}
 		}
 		if m.eng != nil {
-			outstanding, settledThrough, _ := m.eng.SettleSnapshot()
+			outstanding, committedThrough, _ := m.eng.CommitSnapshot()
 			st.InFlight = outstanding
-			st.Checkpoint = settledThrough
+			st.Checkpoint = committedThrough
 			st.MessagesIn = m.eng.Metrics.MessagesIn.Load()
-			st.Settled = m.eng.Metrics.SettledCount.Load()
+			st.Committed = m.eng.Metrics.CommittedCount.Load()
 			st.DeadLettered = m.eng.Metrics.DeadLettered.Load()
 		}
 		if m.jobs != nil {
@@ -432,8 +432,8 @@ func (s *Service) Status() []PipelineStatus {
 		m := s.pipelines[st.Pipeline]
 		spoolDepth := 0
 		if m != nil && m.eng != nil {
-			_, settledThrough, arrivedMax := m.eng.SettleSnapshot()
-			spoolDepth = int(arrivedMax - settledThrough)
+			_, committedThrough, arrivedMax := m.eng.CommitSnapshot()
+			spoolDepth = int(arrivedMax - committedThrough)
 			if spoolDepth < 0 {
 				spoolDepth = 0
 			}
@@ -628,13 +628,13 @@ func (s *Service) DeadLetterReplay(pipeline string, ids []int64, at string) (int
 	}
 	if replayed > 0 {
 		waitCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		_ = m.eng.WaitSettled(waitCtx)
+		_ = m.eng.WaitCommit(waitCtx)
 		cancel()
 	}
 	return replayed, nil
 }
 
-// Drain stops a pipeline's sources and waits for in-flight work to settle.
+// Drain stops a pipeline's sources and waits for in-flight work to commit.
 // The pipeline stays deployed (drained).
 func (s *Service) Drain(pipeline string) error {
 	m, err := s.of(pipeline)

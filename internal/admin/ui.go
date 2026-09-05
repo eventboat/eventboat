@@ -56,13 +56,13 @@ async function refresh() {
 function render(pipelines) {
   const pl = document.getElementById('pipelines');
   if (!pipelines.length) { pl.innerHTML = '<div class="muted">nothing deployed</div>'; return; }
-  let html = '<table><tr><th>pipeline</th><th>mode</th><th>status</th><th>in-flight</th><th>msg/s</th><th>settled</th><th>dead</th></tr>';
+  let html = '<table><tr><th>pipeline</th><th>mode</th><th>status</th><th>in-flight</th><th>msg/s</th><th>committed</th><th>dead</th></tr>';
   for (const p of pipelines) {
     const cls = p.status === 'running' ? 'ok' : (p.status === 'paused' || p.status === 'drained' ? 'paused' : 'err');
     html += '<tr><td>' + esc(p.pipeline) + '</td><td>' + esc(p.mode) + '</td>' +
       '<td><span class="pill ' + cls + '">' + esc(p.status) + '</span></td>' +
       '<td>' + p.in_flight + '</td><td>' + p.messages_per_sec.toFixed(1) + '</td>' +
-      '<td>' + p.settled + '</td><td>' + p.dead_lettered + '</td></tr>';
+      '<td>' + p.committed + '</td><td>' + p.dead_lettered + '</td></tr>';
   }
   html += '</table>';
   pl.innerHTML = html;

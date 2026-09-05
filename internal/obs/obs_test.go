@@ -19,7 +19,7 @@ func TestPrometheusExposition(t *testing.T) {
 	defer func() { _ = o.Shutdown(context.Background()) }()
 
 	o.RecordMessageIn("p1", "in")
-	o.RecordSettled("p1", 0)
+	o.RecordCommit("p1", 0)
 	o.RecordDeadLetter("p1", "out", ReasonClass("script: boom"))
 	o.RecordScript("p1", "t", time.Millisecond, true)
 	o.RecordJobStart("p1", "schedule")
@@ -37,7 +37,7 @@ func TestPrometheusExposition(t *testing.T) {
 	body := rec.Body.String()
 	for _, want := range []string{
 		"eventboat_messages_in_total",
-		"eventboat_messages_settled_total",
+		"eventboat_messages_committed_total",
 		"eventboat_dead_letter_total",
 		`reason_class="script"`,
 		"eventboat_script_step_budget_exhausted_total",
@@ -59,7 +59,7 @@ func TestPrometheusExposition(t *testing.T) {
 func TestNilObsIsInert(t *testing.T) {
 	var o *Obs
 	o.RecordMessageIn("p", "s")
-	o.RecordSettled("p", 0)
+	o.RecordCommit("p", 0)
 	o.RecordDeadLetter("p", "n", "script")
 	o.RecordScript("p", "n", 0, false)
 	o.RecordSinkWrite("p", "n", 0)
