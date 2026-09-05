@@ -9,7 +9,7 @@ import (
 
 	"github.com/eventboat/eventboat/internal/config"
 	"github.com/eventboat/eventboat/internal/registry"
-	pluginv1 "github.com/eventboat/eventboat/pkg/pluginv1"
+	"github.com/eventboat/eventboat/pkg/pluginproto"
 )
 
 // SpawnOption tunes SpawnSource/SpawnSink (variadic to keep call sites
@@ -49,7 +49,7 @@ func SpawnSource(ctx context.Context, cfg *config.GrpcConfig, manifest *config.P
 	}
 	s := &source{plug: p, cfgJSON: cfgJSON, isPull: contains(manifest.Capabilities, "pull"), logf: logf}
 	s.initRPC = func(p *process, state []byte) error {
-		resp, err := p.source.Init(context.Background(), &pluginv1.InitRequest{
+		resp, err := p.source.Init(context.Background(), &pluginproto.InitRequest{
 			State:      state,
 			ConfigJson: string(s.cfgJSON),
 		})
@@ -166,13 +166,13 @@ func (s *source) stream(ctx context.Context, emit func(registry.Message), pull b
 
 func (s *source) streamOnce(p *process, ctx context.Context, emit func(registry.Message), pull bool) error {
 	var (
-		stream pluginv1.Source_RunClient
+		stream pluginproto.Source_RunClient
 		err    error
 	)
 	if pull {
-		stream, err = p.source.Pull(ctx, &pluginv1.RunRequest{})
+		stream, err = p.source.Pull(ctx, &pluginproto.RunRequest{})
 	} else {
-		stream, err = p.source.Run(ctx, &pluginv1.RunRequest{})
+		stream, err = p.source.Run(ctx, &pluginproto.RunRequest{})
 	}
 	if err != nil {
 		if s.logf != nil {
@@ -203,7 +203,7 @@ func (s *source) Commit(ctx context.Context, throughSrcSeq int64) ([]byte, error
 	if err != nil {
 		return nil, err
 	}
-	resp, err := p.source.Commit(ctx, &pluginv1.CommitRequest{ThroughSrcSeq: throughSrcSeq})
+	resp, err := p.source.Commit(ctx, &pluginproto.CommitRequest{ThroughSrcSeq: throughSrcSeq})
 	if err != nil && s.sup != nil {
 		// One respawn-and-retry per call; the engine's own retry cadence
 		// handles persistent trouble.
@@ -211,7 +211,7 @@ func (s *source) Commit(ctx context.Context, throughSrcSeq int64) ([]byte, error
 		if p, err = s.proc(ctx); err != nil {
 			return nil, err
 		}
-		resp, err = p.source.Commit(ctx, &pluginv1.CommitRequest{ThroughSrcSeq: throughSrcSeq})
+		resp, err = p.source.Commit(ctx, &pluginproto.CommitRequest{ThroughSrcSeq: throughSrcSeq})
 	}
 	if err != nil {
 		return nil, fmt.Errorf("plugin %q: commit transport error: %w", p.hs.Name, err)
@@ -232,7 +232,7 @@ func (s *source) Close() error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), closeRPCTimeout)
 	defer cancel()
-	if _, err := s.plug.source.Close(ctx, &pluginv1.CloseRequest{}); err != nil && s.logf != nil {
+	if _, err := s.plug.source.Close(ctx, &pluginproto.CloseRequest{}); err != nil && s.logf != nil {
 		s.logf("plugin %q: close rpc: %v", s.plug.hs.Name, err)
 	}
 	s.plug.stop()

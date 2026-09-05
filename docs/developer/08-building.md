@@ -72,7 +72,7 @@ The per-pipeline name is the store key namespace, which is why
 
 ## Regenerating protocol code
 
-`pkg/pluginv1` is generated from `proto/eventboat/plugin/v1/plugin.proto`.
+`pkg/pluginproto` is generated from `proto/eventboat/plugin/v1/plugin.proto`.
 Regenerate it only with the pinned protoc-gen-go toolchain the existing
 stubs were built with (see the git history for the toolchain version), and
 expect a matching ABI bump ripple: external plugins import the generated

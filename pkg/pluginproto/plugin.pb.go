@@ -10,7 +10,7 @@
 // 	protoc        v6.31.1
 // source: proto/eventboat/plugin/v1/plugin.proto
 
-package pluginv1
+package pluginproto
 
 import (
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
@@ -678,7 +678,7 @@ const file_proto_eventboat_plugin_v1_plugin_proto_rawDesc = "" +
 	"\x04Sink\x12K\n" +
 	"\x04Init\x12 .eventboat.plugin.v1.InitRequest\x1a!.eventboat.plugin.v1.InitResponse\x12N\n" +
 	"\x05Write\x12!.eventboat.plugin.v1.WriteRequest\x1a\".eventboat.plugin.v1.WriteResponse\x12N\n" +
-	"\x05Close\x12!.eventboat.plugin.v1.CloseRequest\x1a\".eventboat.plugin.v1.CloseResponseB-Z+github.com/eventboat/eventboat/pkg/pluginv1b\x06proto3"
+	"\x05Close\x12!.eventboat.plugin.v1.CloseRequest\x1a\".eventboat.plugin.v1.CloseResponseB0Z.github.com/eventboat/eventboat/pkg/pluginprotob\x06proto3"
 
 var (
 	file_proto_eventboat_plugin_v1_plugin_proto_rawDescOnce sync.Once

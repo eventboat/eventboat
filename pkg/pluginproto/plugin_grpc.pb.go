@@ -10,7 +10,7 @@
 // - protoc             v6.31.1
 // source: proto/eventboat/plugin/v1/plugin.proto
 
-package pluginv1
+package pluginproto
 
 import (
 	context "context"

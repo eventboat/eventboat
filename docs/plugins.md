@@ -24,7 +24,7 @@ Eventboat internals.
 The protocol files:
 
 - `proto/eventboat/plugin/v1/plugin.proto` — the contract
-- `pkg/pluginv1` — generated Go stubs (host side AND plugin side, if you write
+- `pkg/pluginproto` — generated Go stubs (host side AND plugin side, if you write
   in Go; for other languages generate from the `.proto` with your own toolchain)
 
 ## How a plugin's lifetime looks
@@ -232,7 +232,7 @@ func main() {
         grpc.MaxRecvMsgSize(64<<20), grpc.MaxSendMsgSize(64<<20), // the transport cap above
         grpc.ChainUnaryInterceptor(authUnary(token)),
         grpc.ChainStreamInterceptor(authStream(token)))
-    pluginv1.RegisterSourceServer(srv, &mySource{})
+    pluginproto.RegisterSourceServer(srv, &mySource{})
     go func() { _, _ = io.Copy(io.Discard, os.Stdin); srv.GracefulStop() }() // stop on stdin EOF
     _ = srv.Serve(lis)
 }

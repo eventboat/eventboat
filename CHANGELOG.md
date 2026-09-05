@@ -25,6 +25,15 @@ All notable changes to Eventboat. The format follows
 
 ### Changed
 
+- **`pkg/pluginv1` renamed to `pkg/pluginproto`** (generated from the same
+  `proto/eventboat/plugin/v1/plugin.proto`, go_package updated, stubs
+  regenerated with the pinned toolchain — protoc-gen-go v1.36.11,
+  protoc-gen-go-grpc v1.3.0). The old name read as "plugin API v1" next to
+  the registration API; the new name says wire-protocol stubs. Out-of-process
+  plugin authors must update the import path and the `pluginv1.` qualifier
+  (see the updated reference implementation
+  [examples/plugins/ticker-source](examples/plugins/ticker-source)); the
+  wire protocol itself is untouched.
 - **Transforms are now registered plugins, peers of sources and sinks**
   (spec v1.19). `registry` gains `KindTransform`, a `Transform` interface
   (`Init(TransformEnv)` / `Apply(*Message) ([]*Message, error)` / `Close`)

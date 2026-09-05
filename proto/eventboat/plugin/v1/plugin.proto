@@ -7,7 +7,7 @@ syntax = "proto3";
 
 package eventboat.plugin.v1;
 
-option go_package = "github.com/eventboat/eventboat/pkg/pluginv1";
+option go_package = "github.com/eventboat/eventboat/pkg/pluginproto";
 
 // MetaValue is one metadata entry. Scalars only; rich values travel as
 // JSON-encoded strings. Keeping this a plain oneof (instead of

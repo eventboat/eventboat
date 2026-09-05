@@ -556,7 +556,7 @@ discoveries:
   (external) or the handshake (runtime) is an error — the §6.5 rule that
   makes "documented but absent" impossible. `eventboat plugin catalog`
   lists everything with versions.
-- **Generated protocol code lives in `pkg/pluginv1`, not `internal/`**:
+- **Generated protocol code lives in `pkg/pluginproto`, not `internal/`**:
   Go's internal-package visibility would make it unimportable from the
   separate-module third-party example — the exact audience the protocol
   exists for.
@@ -756,7 +756,7 @@ NoMatch counter). Out-of-process gRPC transforms remain future work.
 ```
 cmd/eventboat/        CLI: verify / test / run / trigger / jobs / explain / replay / repl / lsp / plugin / mcp
 proto/                 eventboat.plugin.v1 — the out-of-process plugin protocol (.proto source)
-pkg/pluginv1/          generated protocol stubs (importable by third-party plugins)
+pkg/pluginproto/       generated protocol stubs (importable by third-party plugins)
 docs/                  plugins.md (gRPC SDK + crash policy), wasm.md (guest ABI and tier guide), codecs.md (codec guide), k8s.md (deployment), naming-checklist.md (§8.4 record)
 internal/config/      typed config, strict loader, env+constants+parameters substitution, codecs: declarations
 internal/ir/          static IR: DAG, compiled CEL/Starlark/CESQL, topology checks, job semantics, lint, codec resolution

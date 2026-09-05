@@ -8,7 +8,7 @@ import (
 
 	"github.com/eventboat/eventboat/internal/config"
 	"github.com/eventboat/eventboat/internal/registry"
-	pluginv1 "github.com/eventboat/eventboat/pkg/pluginv1"
+	"github.com/eventboat/eventboat/pkg/pluginproto"
 )
 
 // SpawnSink launches an external sink plugin and returns it as a
@@ -35,7 +35,7 @@ func SpawnSink(ctx context.Context, cfg *config.GrpcConfig, manifest *config.Plu
 	}
 	s := &sink{plug: p, cfgJSON: cfgJSON}
 	s.initRPC = func(p *process, _ []byte) error {
-		resp, err := p.sink.Init(context.Background(), &pluginv1.InitRequest{
+		resp, err := p.sink.Init(context.Background(), &pluginproto.InitRequest{
 			ConfigJson: string(s.cfgJSON),
 		})
 		if err != nil {
@@ -94,7 +94,7 @@ func (s *sink) Write(ctx context.Context, msgs []registry.Message) error {
 			return err
 		}
 	}
-	resp, err := p.sink.Write(ctx, &pluginv1.WriteRequest{Batch: writeBatch(msgs)})
+	resp, err := p.sink.Write(ctx, &pluginproto.WriteRequest{Batch: writeBatch(msgs)})
 	if err != nil && s.sup != nil {
 		// Transport error: the process may be dead or wedged — respawn once
 		// and retry this batch; the engine's edge policy handles the rest.
@@ -102,7 +102,7 @@ func (s *sink) Write(ctx context.Context, msgs []registry.Message) error {
 		if p, err = s.sup.live(ctx); err != nil {
 			return err
 		}
-		resp, err = p.sink.Write(ctx, &pluginv1.WriteRequest{Batch: writeBatch(msgs)})
+		resp, err = p.sink.Write(ctx, &pluginproto.WriteRequest{Batch: writeBatch(msgs)})
 	}
 	if err != nil {
 		return fmt.Errorf("plugin %q: write transport error: %w", p.hs.Name, err)
@@ -113,8 +113,8 @@ func (s *sink) Write(ctx context.Context, msgs []registry.Message) error {
 	return nil
 }
 
-func writeBatch(msgs []registry.Message) []*pluginv1.Event {
-	batch := make([]*pluginv1.Event, len(msgs))
+func writeBatch(msgs []registry.Message) []*pluginproto.Event {
+	batch := make([]*pluginproto.Event, len(msgs))
 	for i, m := range msgs {
 		batch[i] = messageToEvent(m)
 	}
@@ -129,7 +129,7 @@ func (s *sink) Close() error {
 	_ = s.init() // zero-write sinks still receive their config before Close
 	ctx, cancel := context.WithTimeout(context.Background(), closeRPCTimeout)
 	defer cancel()
-	if _, err := s.plug.sink.Close(ctx, &pluginv1.CloseRequest{}); err != nil {
+	if _, err := s.plug.sink.Close(ctx, &pluginproto.CloseRequest{}); err != nil {
 		// Best effort: still stop the process.
 		_ = err
 	}

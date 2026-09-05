@@ -53,7 +53,7 @@ Rules of thumb distilled from the log:
 - **gofmt and golangci-lint clean.** `.golangci.yml` is deliberately small:
   the standard set (errcheck, govet, ineffassign, staticcheck, unused) plus
   misspell and gofmt — a hygiene floor, not a style machine. Exclusions
-  (generated stubs in `pkg/pluginv1`, the vendored CESQL TCK, a quickfix
+  (generated stubs in `pkg/pluginproto`, the vendored CESQL TCK, a quickfix
   class) must be justified in the config; new linters join with a ruling.
 - **Comment voice: comments state constraints and rationale, never narrate
   the obvious.** A representative example,
@@ -141,5 +141,5 @@ after later renames (the Settled→Commit rename explicitly left them alone).
 
 Eventboat is Apache-2.0 (`LICENSE`). By contributing you agree your
 contributions are licensed under the same terms. Keep the generated protocol
-stubs in `pkg/pluginv1` regenerable from
+stubs in `pkg/pluginproto` regenerable from
 `proto/eventboat/plugin/v1/plugin.proto` — do not hand-edit them.

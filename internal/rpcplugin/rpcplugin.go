@@ -1,6 +1,6 @@
 // Package rpcplugin hosts out-of-process source/sink plugins over gRPC
 // (redesign-v3.md §6.5, M3). The wire contract lives in
-// proto/eventboat/plugin/v1 (generated Go: pkg/pluginv1) and is documented
+// proto/eventboat/plugin/v1 (generated Go: pkg/pluginproto) and is documented
 // for third-party implementers in docs/plugins.md.
 //
 // Startup: the host launches grpc.command, the plugin listens on 127.0.0.1,
@@ -25,7 +25,7 @@ import (
 	"google.golang.org/grpc/metadata"
 
 	"github.com/eventboat/eventboat/internal/config"
-	pluginv1 "github.com/eventboat/eventboat/pkg/pluginv1"
+	"github.com/eventboat/eventboat/pkg/pluginproto"
 )
 
 // ProtocolVersion is the plugin ABI this host speaks (handshake field
@@ -71,8 +71,8 @@ type process struct {
 	cmd    *exec.Cmd
 	stdin  io.WriteCloser
 	conn   *grpc.ClientConn
-	source pluginv1.SourceClient
-	sink   pluginv1.SinkClient
+	source pluginproto.SourceClient
+	sink   pluginproto.SinkClient
 	hs     Handshake
 	logf   func(format string, args ...any)
 
@@ -182,8 +182,8 @@ func spawn(ctx context.Context, cfg *config.GrpcConfig, manifest *config.PluginM
 		return nil, fmt.Errorf("rpcplugin: dial %s: %w", p.hs.Listen, err)
 	}
 	p.conn = conn
-	p.source = pluginv1.NewSourceClient(conn)
-	p.sink = pluginv1.NewSinkClient(conn)
+	p.source = pluginproto.NewSourceClient(conn)
+	p.sink = pluginproto.NewSinkClient(conn)
 	return p, nil
 }
 

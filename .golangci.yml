@@ -13,7 +13,7 @@ linters:
     # generated protocol stubs (protoc-gen-go)
     # vendored official CESQL TCK (pinned to the sdk-go v2.16.2 tag)
     paths:
-      - pkg/pluginv1
+      - pkg/pluginproto
       - internal/lang/cesqlhost/tck
     # quickfix-class suggestions; not churning stable M4 code
     rules:

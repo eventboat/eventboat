@@ -1,7 +1,7 @@
 // Command ticker-source is a third-party-style Eventboat source plugin: a
 // price ticker that emits a configurable number of events per pull. It is a
 // separate Go module and depends only on the generated protocol code in
-// pkg/pluginv1 — exactly what an outside implementer would use, per
+// pkg/pluginproto — exactly what an outside implementer would use, per
 // docs/plugins.md.
 package main
 
@@ -25,7 +25,7 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
-	pluginv1 "github.com/eventboat/eventboat/pkg/pluginv1"
+	"github.com/eventboat/eventboat/pkg/pluginproto"
 )
 
 func main() {
@@ -63,7 +63,7 @@ func main() {
 		grpc.MaxSendMsgSize(64<<20),
 		grpc.ChainUnaryInterceptor(authUnary(token)),
 		grpc.ChainStreamInterceptor(authStream(token)))
-	pluginv1.RegisterSourceServer(srv, src)
+	pluginproto.RegisterSourceServer(srv, src)
 	healthpb.RegisterHealthServer(srv, health.NewServer())
 
 	// Stop convention: the host closes our stdin to shut us down.
@@ -87,19 +87,19 @@ type config struct {
 // tickerSource emits Events events per pull, one every IntervalMs, resuming
 // from the persisted state (the last committed sequence number).
 type tickerSource struct {
-	pluginv1.UnimplementedSourceServer
+	pluginproto.UnimplementedSourceServer
 	mu       sync.Mutex
 	cfg      config
 	state    int64 // last committed sequence (from Init)
 	lastSent int64 // last sequence emitted this session
 }
 
-func (t *tickerSource) Init(ctx context.Context, req *pluginv1.InitRequest) (*pluginv1.InitResponse, error) {
+func (t *tickerSource) Init(ctx context.Context, req *pluginproto.InitRequest) (*pluginproto.InitResponse, error) {
 	fmt.Fprintf(os.Stderr, "ticker-source: init config=%q state=%q\n", req.ConfigJson, req.State)
 	if req.ConfigJson != "" {
 		var c config
 		if err := json.Unmarshal([]byte(req.ConfigJson), &c); err != nil {
-			return &pluginv1.InitResponse{Error: "bad config json: " + err.Error()}, nil
+			return &pluginproto.InitResponse{Error: "bad config json: " + err.Error()}, nil
 		}
 		if c.Symbol != "" {
 			t.cfg.Symbol = c.Symbol
@@ -119,16 +119,16 @@ func (t *tickerSource) Init(ctx context.Context, req *pluginv1.InitRequest) (*pl
 			Last int64 `json:"last"`
 		}
 		if err := json.Unmarshal(req.State, &s); err != nil {
-			return &pluginv1.InitResponse{Error: "bad state: " + err.Error()}, nil
+			return &pluginproto.InitResponse{Error: "bad state: " + err.Error()}, nil
 		}
 		t.state = s.Last
 		t.lastSent = s.Last
 	}
-	return &pluginv1.InitResponse{}, nil
+	return &pluginproto.InitResponse{}, nil
 }
 
 // Run is the continuous mode: keep ticking until the host cancels.
-func (t *tickerSource) Run(req *pluginv1.RunRequest, stream pluginv1.Source_RunServer) error {
+func (t *tickerSource) Run(req *pluginproto.RunRequest, stream pluginproto.Source_RunServer) error {
 	fmt.Fprintf(os.Stderr, "ticker-source: RUN (continuous)\n")
 	for i := t.lastSent + 1; ; i++ {
 		if err := stream.Context().Err(); err != nil {
@@ -149,7 +149,7 @@ func (t *tickerSource) Run(req *pluginv1.RunRequest, stream pluginv1.Source_RunS
 // The end bound is fixed up front: Commit RPCs advance t.state concurrently
 // with this stream, and re-reading the bound each iteration would turn the
 // bounded pull into an endless generator.
-func (t *tickerSource) Pull(req *pluginv1.RunRequest, stream pluginv1.Source_PullServer) error {
+func (t *tickerSource) Pull(req *pluginproto.RunRequest, stream pluginproto.Source_PullServer) error {
 	fmt.Fprintf(os.Stderr, "ticker-source: PULL events=%d\n", t.cfg.Events)
 	start := t.state
 	end := start + int64(t.cfg.Events)
@@ -168,25 +168,25 @@ func (t *tickerSource) Pull(req *pluginv1.RunRequest, stream pluginv1.Source_Pul
 	return nil // exhausted
 }
 
-func (t *tickerSource) Commit(ctx context.Context, req *pluginv1.CommitRequest) (*pluginv1.CommitResponse, error) {
+func (t *tickerSource) Commit(ctx context.Context, req *pluginproto.CommitRequest) (*pluginproto.CommitResponse, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if req.ThroughSrcSeq > 0 && req.ThroughSrcSeq <= t.lastSent {
 		t.state = req.ThroughSrcSeq
 	}
 	state, _ := json.Marshal(map[string]int64{"last": t.state})
-	return &pluginv1.CommitResponse{State: state}, nil
+	return &pluginproto.CommitResponse{State: state}, nil
 }
 
-func (t *tickerSource) Close(ctx context.Context, req *pluginv1.CloseRequest) (*pluginv1.CloseResponse, error) {
-	return &pluginv1.CloseResponse{}, nil
+func (t *tickerSource) Close(ctx context.Context, req *pluginproto.CloseRequest) (*pluginproto.CloseResponse, error) {
+	return &pluginproto.CloseResponse{}, nil
 }
 
 // event builds one wire Event. The sequence is deterministic: the price is a
 // stable function of the tick number. pad_bytes (when configured) appends a
 // filler field so the payload crosses a chosen size — used by transport
 // tests to exercise large messages.
-func (t *tickerSource) event(seq int64) *pluginv1.Event {
+func (t *tickerSource) event(seq int64) *pluginproto.Event {
 	payload, _ := json.Marshal(map[string]any{
 		"symbol": t.cfg.Symbol,
 		"seq":    seq,
@@ -198,10 +198,10 @@ func (t *tickerSource) event(seq int64) *pluginv1.Event {
 		padded := append(payload[:len(payload)-1], []byte(`,"pad":"`+string(padding)+`"}`)...)
 		payload = padded
 	}
-	return &pluginv1.Event{
+	return &pluginproto.Event{
 		Payload: payload,
-		Meta: map[string]*pluginv1.MetaValue{
-			"symbol": {Kind: &pluginv1.MetaValue_StringValue{StringValue: t.cfg.Symbol}},
+		Meta: map[string]*pluginproto.MetaValue{
+			"symbol": {Kind: &pluginproto.MetaValue_StringValue{StringValue: t.cfg.Symbol}},
 		},
 		Codec:   "json",
 		Cursor:  strconv.FormatInt(seq, 10),
