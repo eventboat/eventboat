@@ -1,0 +1,20 @@
+{{define "doc"}}{{template "head" .}}{{template "siteheader" .}}
+<div class="wrap shell">
+  <aside class="sidebar">
+    {{template "sidebar" .}}
+  </aside>
+  <main class="content">
+    <article class="doc">
+      <h1 class="page-title">{{.Title}}</h1>
+      {{.Body}}
+    </article>
+    {{if or .Prev .Next}}
+    <nav class="pager" aria-label="Pagination">
+      {{with .Prev}}<a class="pager-link prev" href="./{{.Slug}}.html"><span class="dir">&larr; Previous</span><span class="where">{{.DisplayTitle}}</span></a>{{else}}<span></span>{{end}}
+      {{with .Next}}<a class="pager-link next" href="./{{.Slug}}.html"><span class="dir">Next &rarr;</span><span class="where">{{.DisplayTitle}}</span></a>{{else}}<span></span>{{end}}
+    </nav>
+    {{end}}
+  </main>
+</div>
+{{template "sitefooter" .}}
+{{end}}

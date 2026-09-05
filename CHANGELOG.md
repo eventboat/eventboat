@@ -6,6 +6,18 @@ All notable changes to Eventboat. The format follows
 
 ## Unreleased
 
+### Added
+
+- **Developer documentation** ([docs/developer/](docs/developer/)): nine
+  guides (architecture through contributing) with YAML frontmatter
+  (`title:` + `order:`) that drives ordering on the documentation site.
+- **Documentation site**: [tools/sitegen](tools/sitegen) — a separate Go
+  module (zero-CDN static generator: goldmark, embedded templates, one
+  hand-written stylesheet) that renders `docs/developer/`, `docs/*.md` and
+  the landing page into a flat, relative-URL tree, deployed to GitHub Pages
+  by [.github/workflows/pages.yml](.github/workflows/pages.yml); live at
+  <https://eventboat.github.io/eventboat/>.
+
 ### Changed
 
 - **Transforms are now registered plugins, peers of sources and sinks**

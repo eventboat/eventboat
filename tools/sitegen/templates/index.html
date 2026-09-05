@@ -1,0 +1,12 @@
+{{define "index"}}{{template "head" .}}{{template "siteheader" .}}
+<main class="landing">
+  <section class="hero wrap">
+    <p class="kicker">Eventboat <span class="badge">{{.Version}}</span></p>
+    <h1 class="hero-title">Agent-native event routing</h1>
+    <div class="hero-body">
+      {{.Body}}
+    </div>
+  </section>
+</main>
+{{template "sitefooter" .}}
+{{end}}

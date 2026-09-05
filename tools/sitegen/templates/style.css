@@ -1,0 +1,420 @@
+/* Eventboat documentation site — single hand-written stylesheet.
+   No external fonts, no JS frameworks, no CDN: system stack only. */
+
+:root {
+  --bg: #ffffff;
+  --fg: #1f2430;
+  --muted: #5b6472;
+  --faint: #8a93a3;
+  --border: #e3e6eb;
+  --border-strong: #cdd3db;
+  --accent: #0b7285;
+  --accent-soft: #e7f4f6;
+  --code-bg: #f2f4f7;
+  --pre-bg: #16181d;
+  --pre-fg: #e6e8ee;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+
+* { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  font-family: var(--sans);
+  font-size: 16px;
+  line-height: 1.65;
+  color: var(--fg);
+  background: var(--bg);
+}
+
+/* ---- chrome ------------------------------------------------------------ */
+
+.wrap {
+  max-width: 72rem;
+  margin: 0 auto;
+  padding: 0 1.25rem;
+}
+
+.site-header {
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+}
+
+.bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  min-height: 3.25rem;
+}
+
+.brand {
+  font-weight: 700;
+  font-size: 1.05rem;
+  color: var(--fg);
+  text-decoration: none;
+  letter-spacing: -0.01em;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+}
+
+.badge {
+  font-family: var(--mono);
+  font-size: 0.68rem;
+  font-weight: 500;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border: 1px solid #c8e6ec;
+  border-radius: 999px;
+  padding: 0.05rem 0.55rem;
+}
+
+.top-nav a {
+  color: var(--muted);
+  text-decoration: none;
+  font-size: 0.92rem;
+}
+
+.top-nav a:hover { color: var(--accent); }
+
+/* ---- layout ------------------------------------------------------------ */
+
+.shell {
+  display: grid;
+  grid-template-columns: 15rem minmax(0, 1fr);
+  gap: 2.75rem;
+  padding-top: 2rem;
+  padding-bottom: 3rem;
+}
+
+.sidebar {
+  align-self: start;
+  position: sticky;
+  top: 1.5rem;
+  max-height: calc(100vh - 3rem);
+  overflow-y: auto;
+}
+
+.content {
+  max-width: 46rem;
+  min-width: 0;
+}
+
+/* ---- sidebar nav ------------------------------------------------------- */
+
+.nav-group { margin: 0 0 1.6rem; }
+
+.nav-heading {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  color: var(--faint);
+  margin: 0 0 0.4rem 0.65rem;
+}
+
+.nav-group ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border-left: 1px solid var(--border);
+}
+
+.nav-group li a {
+  display: block;
+  padding: 0.22rem 0.75rem;
+  margin-left: -1px;
+  border-left: 2px solid transparent;
+  color: var(--muted);
+  text-decoration: none;
+  font-size: 0.92rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.nav-group li a:hover {
+  color: var(--fg);
+  border-left-color: var(--border-strong);
+}
+
+.nav-group li a.active {
+  color: var(--accent);
+  border-left-color: var(--accent);
+  background: var(--accent-soft);
+  font-weight: 600;
+}
+
+/* ---- typography -------------------------------------------------------- */
+
+.doc h1, .doc h2, .doc h3, .doc h4 {
+  line-height: 1.3;
+  letter-spacing: -0.01em;
+  overflow-wrap: anywhere;
+}
+
+.page-title {
+  font-size: 2rem;
+  margin: 0 0 1.4rem;
+}
+
+.doc h2 {
+  font-size: 1.35rem;
+  margin: 2.2rem 0 0.8rem;
+  padding-bottom: 0.35rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.doc h3 { font-size: 1.1rem; margin: 1.8rem 0 0.6rem; }
+
+.doc p, .doc ul, .doc ol { margin: 0.85rem 0; }
+
+.doc li { margin: 0.3rem 0; }
+
+.doc a { color: var(--accent); }
+
+.doc a:hover { text-decoration: underline; }
+
+.page-title + p, .doc > p:first-of-type { margin-top: 0; }
+
+/* ---- code -------------------------------------------------------------- */
+
+code, pre, kbd {
+  font-family: var(--mono);
+  font-size: 0.855em;
+}
+
+code {
+  background: var(--code-bg);
+  border-radius: 4px;
+  padding: 0.12em 0.38em;
+  overflow-wrap: anywhere;
+}
+
+pre {
+  background: var(--pre-bg);
+  color: var(--pre-fg);
+  border-radius: 8px;
+  padding: 1rem 1.15rem;
+  overflow-x: auto;
+  line-height: 1.55;
+  margin: 1.1rem 0;
+}
+
+pre code {
+  background: none;
+  color: inherit;
+  padding: 0;
+  font-size: 0.84rem;
+  overflow-wrap: normal;
+}
+
+/* Fenced blocks carry language-* classes even unhighlighted; keep them
+   looking identical to plain blocks. */
+pre code[class^="language-"] { color: inherit; }
+
+/* ---- tables ------------------------------------------------------------ */
+
+.doc table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 1.2rem 0;
+  font-size: 0.92rem;
+  display: block;
+  overflow-x: auto;
+}
+
+.doc th, .doc td {
+  border: 1px solid var(--border-strong);
+  padding: 0.45rem 0.7rem;
+  text-align: left;
+  vertical-align: top;
+}
+
+.doc thead th {
+  background: #f6f7f9;
+  font-weight: 600;
+}
+
+.doc tbody tr:nth-child(even) { background: #fafbfc; }
+
+/* ---- misc blocks ------------------------------------------------------- */
+
+.doc blockquote {
+  margin: 1.1rem 0;
+  padding: 0.15rem 0 0.15rem 1rem;
+  border-left: 3px solid var(--border-strong);
+  color: var(--muted);
+}
+
+.doc blockquote p { margin: 0.4rem 0; }
+
+.doc hr {
+  border: 0;
+  border-top: 1px solid var(--border);
+  margin: 2.2rem 0;
+}
+
+.doc img { max-width: 100%; }
+
+/* ---- pager ------------------------------------------------------------- */
+
+.pager {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-top: 3rem;
+  border-top: 1px solid var(--border);
+  padding-top: 1.25rem;
+}
+
+.pager-link {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+  max-width: 48%;
+  padding: 0.7rem 0.9rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  text-decoration: none;
+}
+
+.pager-link:hover { border-color: var(--accent); }
+
+.pager-link.next { margin-left: auto; text-align: right; }
+
+.pager-link .dir {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--faint);
+}
+
+.pager-link .where {
+  color: var(--accent);
+  font-weight: 600;
+  font-size: 0.95rem;
+}
+
+/* ---- landing page ------------------------------------------------------ */
+
+/* the landing has no sidebar — narrow its container so the single
+   content column sits centered instead of hugging the left edge */
+.landing .wrap { max-width: 52rem; }
+
+.landing { padding-bottom: 2rem; }
+
+.hero { padding-top: 3.5rem; }
+
+.kicker {
+  font-size: 0.85rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--accent);
+  margin: 0 0 0.8rem;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.kicker .badge { text-transform: none; letter-spacing: normal; }
+
+.hero-title {
+  font-size: 2.4rem;
+  line-height: 1.15;
+  letter-spacing: -0.02em;
+  margin: 0 0 1.2rem;
+  max-width: 46rem;
+}
+
+.hero-body { max-width: 46rem; }
+
+.hero-body > p:first-child { font-size: 1.08rem; }
+
+.cards {
+  list-style: none;
+  margin: 1.4rem 0 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(14.5rem, 1fr));
+  gap: 0.9rem;
+}
+
+.cards li a {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  height: 100%;
+  padding: 0.85rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  text-decoration: none;
+}
+
+.cards li a:hover {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.cards strong {
+  color: var(--fg);
+  font-size: 0.98rem;
+}
+
+.cards span {
+  color: var(--muted);
+  font-size: 0.85rem;
+  line-height: 1.45;
+}
+
+/* ---- footer ------------------------------------------------------------ */
+
+.site-footer {
+  border-top: 1px solid var(--border);
+  padding: 1.4rem 0 2rem;
+  color: var(--faint);
+  font-size: 0.85rem;
+}
+
+/* ---- narrow screens ---------------------------------------------------- */
+
+@media (max-width: 56rem) {
+  .shell {
+    grid-template-columns: 1fr;
+    gap: 1.5rem;
+  }
+
+  .sidebar {
+    position: static;
+    max-height: none;
+    overflow: visible;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 0.9rem 0.9rem 0.4rem;
+  }
+
+  .nav-group { margin-bottom: 1.1rem; }
+
+  .nav-group ul { border-left: 0; }
+
+  .nav-group li a {
+    margin-left: 0;
+    border-left-width: 0;
+    border-radius: 5px;
+    padding: 0.28rem 0.55rem;
+  }
+
+  .nav-group li a.active {
+    border-left-width: 0;
+    background: var(--accent-soft);
+  }
+
+  .hero { padding-top: 2rem; }
+
+  .hero-title { font-size: 1.85rem; }
+}

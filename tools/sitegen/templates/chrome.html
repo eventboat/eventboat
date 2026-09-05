@@ -1,0 +1,47 @@
+{{define "head"}}<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{.Title}} · Eventboat</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+{{end}}
+
+{{define "siteheader"}}<header class="site-header">
+  <div class="wrap bar">
+    <a class="brand" href="index.html">Eventboat<span class="badge">{{.Version}}</span></a>
+    <nav class="top-nav"><a href="https://github.com/eventboat/eventboat">GitHub</a></nav>
+  </div>
+</header>
+{{end}}
+
+{{define "sidebar"}}<nav class="nav" aria-label="Site">
+  <section class="nav-group">
+    <h2 class="nav-heading">Guide</h2>
+    <ul>
+      {{range .Guides}}<li><a href="./{{.Slug}}.html"{{if .Active}} class="active" aria-current="page"{{end}}>{{.DisplayTitle}}</a></li>{{end}}
+    </ul>
+  </section>
+  <section class="nav-group">
+    <h2 class="nav-heading">Reference</h2>
+    <ul>
+      {{range .References}}<li><a href="./{{.Slug}}.html"{{if .Active}} class="active" aria-current="page"{{end}}>{{.DisplayTitle}}</a></li>{{end}}
+    </ul>
+  </section>
+  <section class="nav-group">
+    <h2 class="nav-heading">Project</h2>
+    <ul>
+      {{range .ProjectLinks}}<li><a href="{{.Href}}">{{.Label}}</a></li>{{end}}
+    </ul>
+  </section>
+</nav>
+{{end}}
+
+{{define "sitefooter"}}<footer class="site-footer">
+  <div class="wrap">© Eventboat contributors. Apache-2.0.</div>
+</footer>
+</body>
+</html>
+{{end}}

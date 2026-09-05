@@ -9,6 +9,10 @@ DAG 流动（过滤、映射、路由），落到目的地——全程 at-least-
 语言），映射就是 [Starlark](https://github.com/google/starlark-go)（Python
 方言）：零自研语言，Agent 语料最大化。
 
+**文档：** https://eventboat.github.io/eventboat/ —— 开发者指南
+（[docs/developer/](docs/developer/)）与参考文档，由
+[tools/sitegen](tools/sitegen) 生成并发布到 GitHub Pages。
+
 > **状态：v0.1.0-beta**（[redesign-v3.md](redesign-v3.md) 的 M1 + M2 + M3 + M4
 > 里程碑，加上 [redesign-v3-review-beta.md](redesign-v3-review-beta.md) 的
 > beta 硬化轮——除 [CHANGELOG.md](CHANGELOG.md) 所列旋钮外无新产品面）。

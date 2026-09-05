@@ -8,6 +8,9 @@ data/
 /eventboat
 /eventboat.exe
 output/
+# generated documentation site (tools/sitegen output; the Pages artifact)
+site-public/
+tools/sitegen/bin/
 # the job example ships a seeded source database (regenerate: go run ./examples/job-sync/seed)
 !examples/job-sync/data/orders.db
 examples/job-sync/out/
