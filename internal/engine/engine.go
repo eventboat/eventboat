@@ -213,9 +213,9 @@ type Engine struct {
 	fatalMu  sync.Mutex
 	fatalErr error // first worker-fatal error (transform clone failure); stops the engine
 
-	ctx     context.Context
-	cancel  context.CancelFunc
-	wg      sync.WaitGroup
+	ctx    context.Context
+	cancel context.CancelFunc
+	wg     sync.WaitGroup
 	// runCalled guards against a second Run (CAS first, before Run mutates
 	// anything); started is the readiness publication and is set only AFTER
 	// ctx/cancel are assigned, so injectAt's started gate (and Ready()) also
