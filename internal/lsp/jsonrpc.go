@@ -51,6 +51,19 @@ const (
 // request that was never framed).
 const maxMessageBytes = 16 << 20
 
+// maxHeaderLineBytes caps one LSP header line. Real headers are tiny —
+// Content-Length and Content-Type fit in a few dozen bytes — so 4 KiB is
+// two orders of magnitude of headroom while closing the gap in front of the
+// Content-Length cap: the header line must be read before the body cap can
+// be checked, and an unbounded line read would let a hostile client grow
+// the heap with megabytes of unterminated bytes that no later check ever
+// sees. The Serve loop sizes its bufio.Reader to exactly this value, so
+// ReadSlice reports ErrBufferFull precisely when the cap is exceeded (the
+// reader never buffers more than the cap — no allocation grows with the
+// attacker's input). Violations are transport errors, same as an oversized
+// Content-Length: Serve closes the connection.
+const maxHeaderLineBytes = 4 << 10
+
 // IsRequest reports whether the message expects a response (has an id).
 func (m *Message) IsRequest() bool { return len(m.ID) > 0 && m.Method != "" }
 
@@ -58,23 +71,30 @@ func (m *Message) IsRequest() bool { return len(m.ID) > 0 && m.Method != "" }
 func (m *Message) IsNotification() bool { return len(m.ID) == 0 && m.Method != "" }
 
 // readMessage reads one Content-Length framed message (LSP base protocol).
+// Header lines are read with ReadSlice, not ReadString: the slice points
+// into the reader's fixed buffer, so an unterminated line is bounded by
+// maxHeaderLineBytes (ErrBufferFull) instead of accumulating until a
+// newline the client may never send.
 func readMessage(r *bufio.Reader) (*Message, error) {
 	contentLength := -1
 	for {
-		line, err := r.ReadString('\n')
+		line, err := r.ReadSlice('\n')
+		if err == bufio.ErrBufferFull {
+			return nil, fmt.Errorf("lsp: header line exceeds the %d-byte header cap", maxHeaderLineBytes)
+		}
 		if err != nil {
-			if err == io.EOF && line == "" {
+			if err == io.EOF && len(line) == 0 {
 				return nil, io.EOF
 			}
 			return nil, err
 		}
-		line = strings.TrimRight(line, "\r\n")
-		if line == "" {
+		header := strings.TrimRight(string(line), "\r\n")
+		if header == "" {
 			break // end of headers
 		}
-		name, value, ok := strings.Cut(line, ":")
+		name, value, ok := strings.Cut(header, ":")
 		if !ok {
-			return nil, fmt.Errorf("lsp: malformed header %q", line)
+			return nil, fmt.Errorf("lsp: malformed header %q", header)
 		}
 		if strings.EqualFold(strings.TrimSpace(name), "Content-Length") {
 			n, err := strconv.Atoi(strings.TrimSpace(value))

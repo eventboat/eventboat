@@ -22,7 +22,7 @@ All notable changes to Eventboat. The format follows
   unchanged (`script: |`, `split: {}`, `wasm: {...}` keep working), the
   plugin-name-as-key convention now applies to `transforms:` nodes, and
   `version:` pins work there too. A plugin transform returning zero outputs
-  filters the message (settled + NoMatch counter, the same semantics as an
+  filters the message (committed + NoMatch counter, the same semantics as an
   edge predicate with no matching edge). `plugin catalog` / `plugin schema`,
   the MCP catalog, LSP completion/hover and the schema goldens expose the
   new kind; third-party compile-in transforms register through the same
@@ -129,6 +129,25 @@ All notable changes to Eventboat. The format follows
 
 ### Fixed
 
+- **Three hardening findings from the adversarial re-review of the security
+  round.** The LSP header read is now bounded: a hostile stdio client could
+  grow the heap with megabytes of unterminated header line before the
+  16 MiB Content-Length cap ever got to run — header lines are capped at
+  4 KiB (LSP headers are a few dozen bytes) and overflow is a transport
+  error that closes the connection, the same path as an oversized
+  Content-Length. `mcp --stdio` no longer validates the admin surface it
+  will never start: the `admin.NewSecurity` check (refuse non-loopback
+  binds without a token) ran unconditionally, so a pure stdio MCP session
+  was refused whenever `admin.listen` was non-loopback without a token,
+  although stdio has no admin listener at all; the check now runs exactly
+  when the surface starts (the `--http` path — the same only-when-enabled
+  guard `run --config-dir` applies via `admin.enable`), and the refusal
+  itself is unchanged. `metadata.name` now rejects Windows reserved device
+  names (CON, PRN, AUX, NUL, COM1-9, LPT1-9 — case-insensitive, also as
+  the stem before a dot: `con.yaml`), which the deploy persist would
+  otherwise write straight to the device instead of
+  `<data-dir>/pipelines/<name>.yaml`; the `mcp` store-file sanitizer
+  applies the same shared check (`config.WindowsReservedName`).
 - **`explain --message` prints the wasm disclosure line again.** The
   transform-plugin refactor left non-explain-safe transforms silent in
   message traces: a pipeline with a wasm transform showed downstream
@@ -168,10 +187,10 @@ All notable changes to Eventboat. The format follows
   (`run` single-pipeline and `--config-dir`, `mcp`, `replay`,
   `trigger`). Previously only SIGINT was registered, so `docker stop`
   and Kubernetes pod termination killed the process mid-flight without
-  the final settle report (at-least-once still held via checkpoint
+  the final commit report (at-least-once still held via checkpoint
   recovery, but the clean drain was skipped). `lsp` already handled
   both signals; the others now match it. Verified against the published
-  image shape: `docker stop` now logs the settle status line and exits
+  image shape: `docker stop` now logs the commit status line and exits
   0.
 - **A third hot-path defect from the same performance review**: the
   commit tracker's advance sweep scanned the ENTIRE in-flight srcRefs map

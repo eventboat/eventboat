@@ -47,7 +47,9 @@ func (s *Server) Serve(ctx context.Context, r io.Reader, w io.Writer) error {
 	s.outMu.Lock()
 	s.out = w
 	s.outMu.Unlock()
-	reader := bufio.NewReader(r)
+	// Sized to maxHeaderLineBytes so ReadSlice's ErrBufferFull is exactly
+	// the "header line exceeded the cap" signal — see jsonrpc.go.
+	reader := bufio.NewReaderSize(r, maxHeaderLineBytes)
 	for {
 		if ctx.Err() != nil {
 			return ctx.Err()

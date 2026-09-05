@@ -590,7 +590,10 @@ func TestMetadataNameValidation(t *testing.T) {
 			"sources:\n  in: { decoder: json, file: { path: a } }\n" +
 			"sinks:\n  out: { from: [in], file: { path: o } }\n"
 	}
-	for _, name := range []string{"orders", "orders-eu", "a.b_c-d", "x0", "p1.q2_r3-s4"} {
+	// Windows reserved device names target the device instead of a file when
+	// the name is persisted (<data-dir>/pipelines/<name>.yaml); longer names
+	// that merely contain them are fine.
+	for _, name := range []string{"orders", "orders-eu", "a.b_c-d", "x0", "p1.q2_r3-s4", "console", "Com1x", "acon"} {
 		if res := LoadBytes("p.yaml", []byte(pipeline(name))); res.HasErrors() {
 			t.Errorf("name %q: unexpected errors: %+v", name, res.Diagnostics)
 		}
@@ -609,6 +612,12 @@ func TestMetadataNameValidation(t *testing.T) {
 		{"has space", "cfg_name_invalid"},             // charset
 		{"订单", "cfg_name_invalid"},                    // charset (non-ASCII)
 		{strings.Repeat("a", 65), "cfg_name_invalid"}, // length cap
+		{"CON", "cfg_name_invalid"},                   // windows reserved device
+		{"con", "cfg_name_invalid"},                   // reserved, case-insensitive
+		{"Com1", "cfg_name_invalid"},                  // reserved COM port
+		{"lpt9", "cfg_name_invalid"},                  // reserved LPT port
+		{"NUL", "cfg_name_invalid"},                   // reserved device
+		{"con.yaml", "cfg_name_invalid"},              // reserved stem before the dot
 		{"", "cfg_metadata_name"},                     // missing (pre-existing rule)
 	} {
 		var res *Result

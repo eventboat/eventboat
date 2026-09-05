@@ -33,16 +33,42 @@ var envPattern = regexp.MustCompile(`\$\{(\??)([A-Za-z_][A-Za-z0-9_.]*)\}`)
 // namePattern is the metadata.name contract. The name flows into file paths
 // (<data-dir>/pipelines/<name>.yaml) and store keys, so it is a conservative
 // identifier: alphanumerics plus . _ -, starting with a letter or digit, no
-// ".." substring (path traversal defense) and capped at 64 characters. The
-// loader is the single gate — every consumer (CLI, LSP, MCP tools, Admin
-// REST) loads through it before a name reaches the filesystem.
+// ".." substring (path traversal defense), no Windows reserved device name
+// (WindowsReservedName — CON.yaml would target the console, not a file) and
+// capped at 64 characters. The loader is the single gate — every consumer
+// (CLI, LSP, MCP tools, Admin REST) loads through it before a name reaches
+// the filesystem.
 var namePattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]*$`)
 
 const maxNameLen = 64
 
+// WindowsReservedName reports whether name collides with a Windows reserved
+// device name (CON, PRN, AUX, NUL, COM1-9, LPT1-9): Windows resolves such
+// file names to the devices themselves, so os.WriteFile silently writes the
+// device instead of creating a file. Names derived from user input end up as
+// file base names here — the deployed pipeline (<name>.yaml) and the per-
+// pipeline store file (cmd/eventboat's name sanitizer + ".db") — so both
+// gate on this check. Case-insensitive on the name's first dot-component
+// (the would-be base stem): "con" and "con.yaml" are reserved, while
+// "console" and "acon" are ordinary names.
+func WindowsReservedName(name string) bool {
+	stem := name
+	if i := strings.IndexByte(name, '.'); i >= 0 {
+		stem = name[:i]
+	}
+	switch strings.ToUpper(stem) {
+	case "CON", "PRN", "AUX", "NUL",
+		"COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+		"LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9":
+		return true
+	}
+	return false
+}
+
 // validName reports whether a pipeline name satisfies namePattern.
 func validName(name string) bool {
-	return len(name) <= maxNameLen && !strings.Contains(name, "..") && namePattern.MatchString(name)
+	return len(name) <= maxNameLen && !strings.Contains(name, "..") &&
+		namePattern.MatchString(name) && !WindowsReservedName(name)
 }
 
 // LoadFile reads and parses a pipeline configuration file.
@@ -185,7 +211,7 @@ func LoadBytes(file string, data []byte) *Result {
 	} else if !validName(p.Name) {
 		res.Diagnostics = append(res.Diagnostics, Diagnostic{
 			Severity: "error", Code: "cfg_name_invalid", File: file, Line: lines.line("metadata", "name"),
-			Message: fmt.Sprintf("metadata.name %q must be 1-64 characters of [a-zA-Z0-9._-], start with a letter or digit, and contain no \"..\"", p.Name),
+			Message: fmt.Sprintf("metadata.name %q must be 1-64 characters of [a-zA-Z0-9._-], start with a letter or digit, and contain no \"..\" or Windows reserved device name (CON, PRN, AUX, NUL, COM1-9, LPT1-9)", p.Name),
 			Hint:    "the name becomes the deployed file name (<data-dir>/pipelines/<name>.yaml); e.g. orders-eu",
 		})
 	}

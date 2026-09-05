@@ -15,6 +15,7 @@ import (
 	mcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/eventboat/eventboat/internal/admin"
+	"github.com/eventboat/eventboat/internal/config"
 	"github.com/eventboat/eventboat/internal/mcpserver"
 	"github.com/eventboat/eventboat/internal/obs"
 	"github.com/eventboat/eventboat/internal/ops"
@@ -54,10 +55,17 @@ func cmdMCP(args []string, jsonOut bool) int {
 	if *ephemeral {
 		rt.Storage.Ephemeral = true
 	}
-	sec, err := admin.NewSecurity(resolveAdminToken(*adminToken, rt), rt.Admin.Listen)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "mcp: %v\n", err)
-		return 2
+	// The security combination is checked only when the admin surface will
+	// actually start: a pure --stdio MCP session has no admin listener at
+	// all, so a non-loopback admin.listen without a token must not refuse it
+	// (the same only-when-enabled guard run-dir applies via admin.enable).
+	var sec admin.Security
+	if !*stdio {
+		sec, err = admin.NewSecurity(resolveAdminToken(*adminToken, rt), rt.Admin.Listen)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "mcp: %v\n", err)
+			return 2
+		}
 	}
 
 	reg, err := commandRegistry()
@@ -125,7 +133,15 @@ func newOpsService(reg *registry.Registry, rt runtimecfg.Config) (svc *ops.Servi
 			if err := os.MkdirAll(sdir, 0o755); err != nil {
 				return nil, err
 			}
-			return store.OpenSQLite(filepath.Join(sdir, sanitize(pipeline)+".db"))
+			name := sanitize(pipeline)
+			// sanitize keeps [A-Za-z0-9_-], which can still spell a Windows
+			// reserved device name — CON.db targets the console, not a file
+			// (the same check the loader's name validation applies, shared
+			// from internal/config).
+			if config.WindowsReservedName(name) {
+				return nil, fmt.Errorf("pipeline %q: store name %q is a Windows reserved device name", pipeline, name)
+			}
+			return store.OpenSQLite(filepath.Join(sdir, name+".db"))
 		},
 	})
 	if observer != nil {

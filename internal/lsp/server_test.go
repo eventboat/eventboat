@@ -497,3 +497,28 @@ func TestOversizedContentLengthRejected(t *testing.T) {
 		t.Fatalf("server should stop with the cap error, got %v", err)
 	}
 }
+
+// A header line longer than the cap is a transport error, and the read
+// itself is bounded: ReadSlice fails on the reader's fixed 4 KiB buffer, so
+// the megabytes that follow never enter the heap (ReadString used to
+// accumulate the whole line before any check could run — a hostile client
+// could grow it at will with a line that never ends).
+func TestOversizedHeaderLineRejected(t *testing.T) {
+	line := strings.Repeat("X", 1<<20) + "\r\n" // 1 MiB, no colon — garbage under any parse
+	r := bufio.NewReader(strings.NewReader(line))
+	if _, err := readMessage(r); err == nil || !strings.Contains(err.Error(), "header") {
+		t.Fatalf("oversized header line should be rejected, got %v", err)
+	}
+
+	// The full server loop surfaces it as a transport error and closes the
+	// connection. The writes run asynchronously: the server stops reading
+	// once the cap trips, and an io.Pipe write would block forever.
+	h := newHarness(t)
+	go func() {
+		_, _ = h.w.Write([]byte(line))
+		_, _ = h.w.Write([]byte("garbage without framing"))
+	}()
+	if err := h.waitExit(5 * time.Second); err == nil || !strings.Contains(err.Error(), "header") {
+		t.Fatalf("server should stop with the header cap error, got %v", err)
+	}
+}
