@@ -185,7 +185,8 @@ token 拒绝启动；回环绑定强制 Host 白名单，防 DNS rebinding。
 - **存储。** SQLite（`modernc.org/sqlite`，纯 Go）承载 spool、
   checkpoint、死信与作业历史；`--ephemeral` 换成内存存储便于本地
   开发。spool 保留窗口由 Runtime 配置的 `storage.spool_retention`
-  限定。
+  限定；死信保留为管道级显式开启（`dlq.retention`——缺省永不删除，
+  死信是 `replay` 的输入数据）。
 
 ## 如何使用
 

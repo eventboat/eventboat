@@ -136,6 +136,40 @@ func TestSQLitePragmasApplied(t *testing.T) {
 	}
 }
 
+// The dead-letter query plans lean on pipeline-scoped indexes: (pipeline, id)
+// orders the newest-first listings, (pipeline, job_run_id) serves run
+// attribution, and (pipeline, created_at) is the range scan behind
+// DeadLettersSince and the dlq.retention sweep — a batched DELETE over a
+// large backlog must not degrade to a per-pipeline table scan.
+func TestSQLiteDeadLetterIndexes(t *testing.T) {
+	st, err := OpenSQLite(t.TempDir() + "/dlq-indexes.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+	rows, err := st.DB().Query(`SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'dead_letter'`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rows.Close() }()
+	got := map[string]bool{}
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			t.Fatal(err)
+		}
+		got[name] = true
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"idx_dlq_pipeline_time", "idx_dlq_pipeline_created", "idx_dlq_run"} {
+		if !got[want] {
+			t.Errorf("dead_letter index %q missing; have %v", want, got)
+		}
+	}
+}
+
 // WAL allows one writer plus concurrent readers: with two pooled connections,
 // status-style reads must proceed while spool writes land (the admin/jobs
 // queries used to convoy behind writes on the single connection).
@@ -376,6 +410,87 @@ func TestSQLiteSpoolRetention(t *testing.T) {
 		t.Fatal(err)
 	}
 	exerciseSpoolRetention(t, st)
+}
+
+// exerciseDLQRetention covers the dlq.retention sweep on both backends: rows
+// strictly before the cutoff vanish, rows at or after it stay, other
+// pipelines are untouched, and a later sweep is a clean no-op. The
+// strictly-before comparison keeps SQLite's RFC3339Nano text comparison and
+// the in-memory time comparison in agreement.
+func exerciseDLQRetention(t *testing.T, st Store) {
+	t.Helper()
+	defer func() { _ = st.Close() }()
+	now := time.Date(2026, 9, 3, 12, 0, 0, 0, time.UTC)
+	for i := 0; i < 5; i++ {
+		dl := DeadLetter{Pipeline: "p", MessageID: fmt.Sprintf("m-%d", i), Node: "out", Reason: "x", Raw: []byte(`{}`), CreatedAt: now.Add(time.Duration(i) * time.Minute)}
+		if err := st.WriteDeadLetter(dl); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := st.WriteDeadLetter(DeadLetter{Pipeline: "other", MessageID: "o-1", Node: "out", Reason: "x", Raw: []byte(`{}`), CreatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Cutoff at m-2's timestamp: m-0 and m-1 go, m-2 itself (== cutoff) stays.
+	if n, err := st.DeleteDeadLettersBefore("p", now.Add(2*time.Minute)); err != nil || n != 2 {
+		t.Fatalf("dlq retention: n=%d err=%v, want 2", n, err)
+	}
+	kept, err := st.DeadLetters("p")
+	if err != nil || len(kept) != 3 {
+		t.Fatalf("kept after sweep: n=%d err=%v, want 3", len(kept), err)
+	}
+	for _, dl := range kept {
+		if dl.CreatedAt.Before(now.Add(2 * time.Minute)) {
+			t.Errorf("expired dead letter survived: %+v", dl)
+		}
+	}
+	if others, _ := st.DeadLetters("other"); len(others) != 1 {
+		t.Errorf("retention swept another pipeline: %+v", others)
+	}
+
+	// A sweep past everything deletes the rest; repeating it deletes nothing.
+	if n, err := st.DeleteDeadLettersBefore("p", now.Add(time.Hour)); err != nil || n != 3 {
+		t.Fatalf("final sweep: n=%d err=%v, want 3", n, err)
+	}
+	if n, err := st.DeleteDeadLettersBefore("p", now.Add(2*time.Hour)); err != nil || n != 0 {
+		t.Fatalf("empty sweep: n=%d err=%v, want 0", n, err)
+	}
+}
+
+func TestMemoryDLQRetention(t *testing.T) {
+	exerciseDLQRetention(t, NewMemory())
+}
+
+func TestSQLiteDLQRetention(t *testing.T) {
+	st, err := OpenSQLite(t.TempDir() + "/dlqret.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	exerciseDLQRetention(t, st)
+}
+
+// The retention sweep must batch: more than one batch of expired rows all go
+// in bounded transactions, without leaving stragglers behind.
+func TestSQLiteDLQRetentionBatches(t *testing.T) {
+	st, err := OpenSQLite(t.TempDir() + "/dlqbatch.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+	now := time.Date(2026, 9, 3, 12, 0, 0, 0, time.UTC)
+	const total = dlqRetentionBatch + 5
+	for i := 0; i < total; i++ {
+		dl := DeadLetter{Pipeline: "p", MessageID: fmt.Sprintf("m-%d", i), Node: "out", Reason: "x", Raw: []byte(`{}`), CreatedAt: now}
+		if err := st.WriteDeadLetter(dl); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n, err := st.DeleteDeadLettersBefore("p", now.Add(time.Minute)); err != nil || n != total {
+		t.Fatalf("batched sweep: n=%d err=%v, want %d", n, err, total)
+	}
+	if left, _ := st.DeadLetters("p"); len(left) != 0 {
+		t.Fatalf("batched sweep left %d rows behind", len(left))
+	}
 }
 
 // A database created by the M1 schema (no job_run_id column) migrates in

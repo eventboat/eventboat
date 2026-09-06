@@ -355,7 +355,7 @@ func TestCompletionTopLevel(t *testing.T) {
 	doc := "apiVersion: eventboat/v3\nkind: Pipeline\n"
 	items := completionAt(t, h, doc, 2, 0)
 	got := labels(items)
-	if !got["sources"] || !got["sinks"] || !got["transforms"] || !got["constants"] {
+	if !got["sources"] || !got["sinks"] || !got["transforms"] || !got["constants"] || !got["dlq"] {
 		t.Errorf("top-level completion incomplete: %v", got)
 	}
 }

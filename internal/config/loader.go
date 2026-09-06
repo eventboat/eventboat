@@ -169,19 +169,16 @@ func LoadBytes(file string, data []byte) *Result {
 		"edge_defaults": true, "constants": true, "limits": true,
 		"telemetry": true,
 		"run":       true, "parameters": true, "hooks": true,
-		"codecs":  true,
+		"codecs": true, "dlq": true,
 		"sources": true, "transforms": true, "sinks": true,
 	}
 	for _, kv := range mappingPairs(root) {
 		key := kv.key
 		if !allowedTop[key] {
-			hint := "supported top-level keys: apiVersion, kind, metadata, edge_defaults, constants, limits, telemetry, run, parameters, hooks, codecs, sources, transforms, sinks"
-			if key == "dlq" {
-				hint = key + " is defined by redesign-v3.md §5.10 but not implemented yet"
-			}
 			res.Diagnostics = append(res.Diagnostics, Diagnostic{
 				Severity: "error", Code: "cfg_unknown_top_section", File: file, Line: kv.line,
-				Message: fmt.Sprintf("unknown top-level key %q", key), Hint: hint,
+				Message: fmt.Sprintf("unknown top-level key %q", key),
+				Hint:    "supported top-level keys: apiVersion, kind, metadata, edge_defaults, constants, limits, telemetry, run, parameters, hooks, codecs, dlq, sources, transforms, sinks",
 			})
 		}
 	}
@@ -277,6 +274,7 @@ func LoadBytes(file string, data []byte) *Result {
 	parseParameters(file, raw, p, lines, res)
 	parseHooks(file, raw, p, lines, res)
 	parseTelemetry(file, raw, p, lines, res)
+	parseDLQ(file, raw, p, lines, res)
 
 	parseSection(file, raw, "sources", SectionSource, p, lines, res)
 	parseSection(file, raw, "transforms", SectionTransform, p, lines, res)
@@ -565,6 +563,55 @@ func parseTelemetry(file string, raw map[string]any, p *Pipeline, lines *lineInd
 		}
 	}
 	p.Telemetry = t
+}
+
+// parseDLQ parses the `dlq:` section (§5.10): dead-letter policy. Retention
+// is opt-in — the loader deliberately applies no non-zero default, because
+// dead letters are operator data for `replay` and automatic deletion would
+// silently destroy them; an unset retention keeps everything forever.
+func parseDLQ(file string, raw map[string]any, p *Pipeline, lines *lineIndex, res *Result) {
+	dn, present := raw["dlq"]
+	if !present {
+		return
+	}
+	dm, ok := dn.(map[string]any)
+	if !ok {
+		res.Diagnostics = append(res.Diagnostics, Diagnostic{
+			Severity: "error", Code: "cfg_dlq_type", File: file, Line: lines.line("dlq"),
+			Message: "dlq must be a mapping", Hint: `dlq: { retention: 30d }`,
+		})
+		return
+	}
+	for k := range dm {
+		if k != "retention" {
+			res.Diagnostics = append(res.Diagnostics, Diagnostic{
+				Severity: "error", Code: "cfg_unknown_field", File: file, Line: lines.line("dlq"),
+				Message: fmt.Sprintf("unknown dlq field %q", k),
+				Hint:    "allowed: retention",
+			})
+		}
+	}
+	d := &DLQSpec{}
+	if v, ok := dm["retention"]; ok {
+		s, ok := v.(string)
+		if !ok {
+			res.Diagnostics = append(res.Diagnostics, Diagnostic{
+				Severity: "error", Code: "cfg_dlq_retention", File: file, Line: lines.line("dlq", "retention"),
+				Message: "dlq.retention must be a duration (e.g. 30d)", Hint: "",
+			})
+		} else {
+			dur, err := ParseDuration(s)
+			if err != nil || dur <= 0 {
+				res.Diagnostics = append(res.Diagnostics, Diagnostic{
+					Severity: "error", Code: "cfg_dlq_retention", File: file, Line: lines.line("dlq", "retention"),
+					Message: fmt.Sprintf("dlq.retention %q is not a positive duration", s), Hint: "",
+				})
+			} else {
+				d.Retention = dur
+			}
+		}
+	}
+	p.DLQ = d
 }
 
 // parseParameters validates typed parameter declarations (§5.9).

@@ -27,7 +27,7 @@ tool and the admin UI all render the same structs.
    (`run.mode: job`) — anywhere else it is a `cfg_scope_unknown` error. The
    optional marker `?` is only legal for plain environment variables.
 4. **Structural validation with whitelists**: top-level keys, `metadata.name`
-   validation, the `limits`/`run`/`parameters`/`hooks`/`telemetry`/`codecs`
+   validation, the `limits`/`run`/`parameters`/`hooks`/`telemetry`/`codecs`/`dlq`
    sections, the three node sections with their framework-field whitelists,
    and finally manifest reads for every external (`grpc:`) node.
 
@@ -112,7 +112,7 @@ Every diagnostic code that exists in the code, by emitting layer. Severity
 | `io_read` | error | the config file cannot be read | `open p.yaml: The system cannot find the file specified.` |
 | `yaml_parse` | error | YAML syntax error, top level not a mapping, or decode failure | `top level must be a mapping` |
 | `empty_config` | error | the document is empty | `configuration is empty` |
-| `cfg_unknown_top_section` | error | unknown top-level key (`dlq` gets a "defined §5.10, not implemented" hint) | `unknown top-level key "codecs2"` |
+| `cfg_unknown_top_section` | error | unknown top-level key | `unknown top-level key "codecs2"` |
 | `cfg_api_version` | error | `apiVersion` is not `eventboat/v3` | `apiVersion must be "eventboat/v3"` |
 | `cfg_kind` | error | `kind` is not `Pipeline` | `kind must be "Pipeline"` |
 | `cfg_metadata_name` | error | `metadata.name` missing/blank | `metadata.name is required` |
@@ -134,6 +134,8 @@ Every diagnostic code that exists in the code, by emitting layer. Severity
 | `cfg_run_catchup` | error | `catchup_window` not a valid duration |
 | `cfg_run_skip` | error | `skip_if_successful` not a boolean |
 | `cfg_run_retention` | error | `retention` shape/type/range errors |
+| `cfg_dlq_type` | error | `dlq` not a mapping |
+| `cfg_dlq_retention` | error | `dlq.retention` missing/not a duration/not positive |
 | `cfg_telemetry_type` | error | `telemetry` not a mapping |
 | `cfg_telemetry_redact` | error | `redact` not a list of non-empty strings |
 | `cfg_telemetry_span_rate` | error | `span_sample_rate` not a number in [0,1] |
@@ -144,7 +146,7 @@ Every diagnostic code that exists in the code, by emitting layer. Severity
 | `cfg_parameters_decl` | error | any parameter-declaration rule: type mismatch, bad enum/pattern/min/max, default violating constraints, `required` + `default` |
 | `cfg_hooks_type` | error | `hooks` not a mapping |
 | `cfg_hooks_sink` | error | unknown hook name, or hook not exactly one inline sink block |
-| `cfg_unknown_field` | error | unknown field inside `limits`, `run`, `retention`, `parameters`, `grpc`, `batch`, edge attribute blocks, `when` objects, `buffer`, `delivery` |
+| `cfg_unknown_field` | error | unknown field inside `limits`, `run`, `retention`, `dlq`, `parameters`, `grpc`, `batch`, edge attribute blocks, `when` objects, `buffer`, `delivery` |
 
 ### Loader/sections: nodes and edges
 
@@ -215,6 +217,7 @@ Every diagnostic code that exists in the code, by emitting layer. Severity
 | `expr_starlark_compile` | error | script plugin: Starlark resolve failed (via `TransformError.DiagCode`, with backtrace context) |
 | `expr_wasm_compile` | error | wasm plugin: module unreadable, not a reactor, or missing ABI exports (via `TransformError.DiagCode`) |
 | `wasm_no_kill_switch` | warning | wasm transform without `timeout_ms`: no kill switch (escalated by `--strict`) |
+| `run_retention_unset` | warning | job pipeline without `run.retention.history`: run history keeps forever (escalated by `--strict`) |
 | `job_bad_schedule` | error | `run.schedule` is not a valid 5-field cron |
 | `job_source_not_pull` | error | job pipeline source lacks the `pull` capability |
 | `job_multiple_pull_sources` | warning | job pipeline with >1 pull source (`cursor` binds the first) |

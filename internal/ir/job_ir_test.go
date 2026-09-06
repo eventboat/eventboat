@@ -221,3 +221,51 @@ sinks:
 		t.Errorf("actual parameter not bound: %+v", pip2.Parameters)
 	}
 }
+
+// A job pipeline without run.retention.history draws a lint warning (same
+// warning/--strict contract as wasm_no_kill_switch): the job_run table would
+// otherwise accumulate one record per run, forever. An explicit retention —
+// and any continuous pipeline — stay silent.
+func TestJobRunRetentionUnsetWarns(t *testing.T) {
+	job := func(run string) string {
+		return `
+apiVersion: eventboat/v3
+kind: Pipeline
+metadata: { name: retjob }
+run: { mode: job` + run + ` }
+sources:
+  pull:
+    decoder: json
+    sql: { driver: sqlite, dsn: file:x.db, query: "SELECT 1 AS id", cursor: { column: id } }
+sinks:
+  out: { depends_on: [pull], file: { path: out.jsonl } }
+`
+	}
+	_, diags := build(t, job(""))
+	if !hasCode(diags, "run_retention_unset") {
+		t.Fatalf("unset retention.history: want run_retention_unset warning, got %+v", diags)
+	}
+	for _, d := range diags {
+		if d.Code == "run_retention_unset" && d.Severity != "warning" {
+			t.Fatalf("run_retention_unset must be a warning (--strict escalates), got %q", d.Severity)
+		}
+	}
+	_, diags = build(t, job(`, retention: { history: 90d }`))
+	if hasCode(diags, "run_retention_unset") {
+		t.Fatalf("explicit retention must not warn: %+v", diags)
+	}
+
+	// Continuous pipelines have no run history — out of scope.
+	_, diags = build(t, `
+apiVersion: eventboat/v3
+kind: Pipeline
+metadata: { name: cont }
+sources:
+  in: { decoder: json, file: { path: a } }
+sinks:
+  out: { depends_on: [in], file: { path: o } }
+`)
+	if hasCode(diags, "run_retention_unset") {
+		t.Fatalf("continuous pipeline must not warn: %+v", diags)
+	}
+}

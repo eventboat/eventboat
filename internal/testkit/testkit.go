@@ -288,6 +288,10 @@ func (w *StoreWrapper) DeleteDeadLetters(pipeline string, ids []int64) (int64, e
 	return w.Inner.DeleteDeadLetters(pipeline, ids)
 }
 
+func (w *StoreWrapper) DeleteDeadLettersBefore(pipeline string, cutoff time.Time) (int64, error) {
+	return w.Inner.DeleteDeadLettersBefore(pipeline, cutoff)
+}
+
 func (w *StoreWrapper) CreateJobRun(jr store.JobRun) error { return w.Inner.CreateJobRun(jr) }
 
 func (w *StoreWrapper) UpdateJobRun(jr store.JobRun) error { return w.Inner.UpdateJobRun(jr) }

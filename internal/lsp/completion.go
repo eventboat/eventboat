@@ -18,7 +18,7 @@ import (
 
 var topLevelSections = []string{
 	"apiVersion", "kind", "metadata", "edge_defaults", "constants", "limits",
-	"telemetry", "run", "parameters", "hooks", "codecs", "sources", "transforms", "sinks",
+	"telemetry", "run", "parameters", "hooks", "codecs", "dlq", "sources", "transforms", "sinks",
 }
 
 // Framework fields per section (mirrors config.sections.go nodeWhitelist).

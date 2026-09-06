@@ -687,6 +687,17 @@ func checkJobSemantics(p *Pipeline, reg *registry.Registry, parameters map[strin
 			}
 		}
 	}
+
+	// Run history retention lint (same warning/--strict contract as
+	// wasm_no_kill_switch): without run.retention.history the job_run table
+	// grows without bound — one record per run, every run, forever. A warning
+	// because full history may be deliberate; --strict turns it into a gate.
+	if cfg.Run.Retention <= 0 {
+		add(config.Diagnostic{Severity: "warning", Code: "run_retention_unset", File: file,
+			Line:    0,
+			Message: "job pipeline keeps run history forever (run.retention.history unset): finished runs accumulate in the store without bound",
+			Hint:    "set run.retention.history to a positive duration (e.g. 90d) to prune finished runs"})
+	}
 }
 
 // declaredAnyBinding reports whether a parameters.* binding in text names at

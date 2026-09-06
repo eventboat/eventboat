@@ -123,6 +123,14 @@ type Store interface {
 	// replay reinjection) and returns how many were removed.
 	DeleteDeadLetters(pipeline string, ids []int64) (int64, error)
 
+	// DeleteDeadLettersBefore removes dead letters of a pipeline created
+	// strictly before cutoff and returns how many were removed (dlq
+	// retention). Dead letters are terminal artifacts, so deletion never
+	// affects the reliability invariants — but the removed rows are gone
+	// from replay for good. The delete is batched so a first sweep over a
+	// large backlog stays a series of bounded transactions.
+	DeleteDeadLettersBefore(pipeline string, cutoff time.Time) (int64, error)
+
 	// --- job run history (§5.8) ---
 
 	// CreateJobRun inserts a run record.
@@ -353,6 +361,26 @@ func (s *memStore) DeleteDeadLetters(pipeline string, ids []int64) (int64, error
 	var removed int64
 	for _, dl := range s.deadLetters {
 		if dl.Pipeline == pipeline && drop[dl.ID] {
+			removed++
+			continue
+		}
+		kept = append(kept, dl)
+	}
+	s.deadLetters = kept
+	return removed, nil
+}
+
+// DeleteDeadLettersBefore drops the pipeline's dead letters created strictly
+// before cutoff, zeroing dropped entries so their payloads are reclaimable
+// (same hygiene as DeleteSpoolThrough). WriteDeadLetter stamps every row, so
+// the zero-time case cannot occur.
+func (s *memStore) DeleteDeadLettersBefore(pipeline string, cutoff time.Time) (int64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	kept := s.deadLetters[:0:0]
+	var removed int64
+	for _, dl := range s.deadLetters {
+		if dl.Pipeline == pipeline && dl.CreatedAt.Before(cutoff) {
 			removed++
 			continue
 		}

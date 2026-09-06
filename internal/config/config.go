@@ -67,6 +67,7 @@ type Pipeline struct {
 	Limits        *Limits
 	Telemetry     *Telemetry // per-pipeline telemetry customization (§5.10; nil = defaults)
 	Run           *RunSpec
+	DLQ           *DLQSpec                  // dead-letter policy (§5.10; nil = keep everything forever)
 	Parameters    map[string]*ParameterSpec // declared job parameters (nil without a run block)
 	Hooks         *HooksSpec
 	Codecs        map[string]*CodecDecl // named codec declarations (§5.10); decoder/encoder reference by name
@@ -113,6 +114,14 @@ type RunSpec struct {
 	CatchupWindow    time.Duration // missed-tick compensation window; 0 = no catchup
 	SkipIfSuccessful bool
 	Retention        time.Duration // run history retention (retention.history); 0 = keep forever
+}
+
+// DLQSpec is the pipeline-level dead-letter policy (redesign-v3.md §5.10).
+// Retention is OPT-IN with no non-zero default: dead letters are operator
+// data for `replay`, so automatic deletion keeps everything forever unless
+// explicitly configured.
+type DLQSpec struct {
+	Retention time.Duration // prune dead letters older than this; 0 (unset) = keep forever
 }
 
 // IsJob reports whether the pipeline runs in job mode.

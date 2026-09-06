@@ -559,6 +559,78 @@ sinks:
 	}
 }
 
+// The dlq section parses into a typed DLQSpec (§5.10). Retention is opt-in:
+// no section or an unset retention keeps dead letters forever — the loader
+// applies no non-zero default because deletion destroys `replay` input.
+func TestDLQSection(t *testing.T) {
+	res := LoadBytes("p.yaml", []byte(`
+apiVersion: eventboat/v3
+kind: Pipeline
+metadata: { name: x }
+dlq:
+  retention: 30d
+sources:
+  in: { decoder: json, file: { path: a } }
+sinks:
+  out: { depends_on: [in], file: { path: o } }
+`))
+	if res.HasErrors() {
+		t.Fatalf("unexpected errors: %+v", res.Diagnostics)
+	}
+	if d := res.Pipeline.DLQ; d == nil || d.Retention != 30*24*time.Hour {
+		t.Errorf("dlq = %+v", res.Pipeline.DLQ)
+	}
+
+	// Unset: DLQ nil (keep forever) and dlq is no longer an unknown section.
+	res = LoadBytes("p.yaml", []byte(`
+apiVersion: eventboat/v3
+kind: Pipeline
+metadata: { name: x }
+sources:
+  in: { decoder: json, file: { path: a } }
+sinks:
+  out: { depends_on: [in], file: { path: o } }
+`))
+	if res.HasErrors() {
+		t.Fatalf("unset dlq: unexpected errors: %+v", res.Diagnostics)
+	}
+	if res.Pipeline.DLQ != nil {
+		t.Errorf("unset dlq = %+v, want nil", res.Pipeline.DLQ)
+	}
+
+	for _, tc := range []struct {
+		name string
+		body string
+		code string
+	}{
+		{"unknown field", "dlq: { retention: 30d, max_rows: 10 }", "cfg_unknown_field"},
+		{"zero retention", "dlq: { retention: 0 }", "cfg_dlq_retention"},
+		{"bad duration", "dlq: { retention: soon }", "cfg_dlq_retention"},
+		{"non-string retention", "dlq: { retention: 10 }", "cfg_dlq_retention"},
+		{"not a mapping", "dlq: 10", "cfg_dlq_type"},
+	} {
+		res := LoadBytes("p.yaml", []byte(`
+apiVersion: eventboat/v3
+kind: Pipeline
+metadata: { name: x }
+`+tc.body+`
+sources:
+  in: { decoder: json, file: { path: a } }
+sinks:
+  out: { depends_on: [in], file: { path: o } }
+`))
+		found := false
+		for _, d := range res.Diagnostics {
+			if d.Code == tc.code {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("%s: expected %s, got %+v", tc.name, tc.code, res.Diagnostics)
+		}
+	}
+}
+
 func TestParseDurationWithDays(t *testing.T) {
 	cases := map[string]time.Duration{
 		"90d":   90 * 24 * time.Hour,

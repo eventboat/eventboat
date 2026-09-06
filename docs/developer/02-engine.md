@@ -154,6 +154,18 @@ regressing:
   at-least-once into loss while checkpoint writes fail. `DefaultSpoolRetention`
   is 10_000 rows; `storage.spool_retention` in the Runtime config overrides it
   (`internal/runtimecfg`).
+- **Dead-letter retention (opt-in).** Rides the same window: a pipeline that
+  sets `dlq.retention` sweeps dead letters older than
+  `Clock() - DLQRetention` once per retention window
+  (`Store.DeleteDeadLettersBefore`, bounded 10,000-row batches, driven by the
+  `dead_letter(pipeline, created_at)` index so a large backlog stays a range
+  scan). Unset (the
+  default) keeps everything forever — dead letters are operator data for
+  `replay`, so the engine never deletes what the pipeline did not ask to
+  delete; removed rows are gone from `replay` for good. A failed sweep is
+  logged and retried by the next window, exactly like the spool trim — it
+  never blocks the commit path (deleting terminal artifacts cannot affect
+  the invariants).
 - Per-source `Commit` states persist alongside the checkpoint, with their own
   monotonic guard (`srcPersisted`).
 

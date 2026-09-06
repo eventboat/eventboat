@@ -63,6 +63,10 @@ CREATE TABLE IF NOT EXISTS dead_letter (
   created_at  TEXT    NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_dlq_pipeline_time ON dead_letter(pipeline, id);
+-- idx_dlq_pipeline_created serves DeadLettersSince (created_at >= ?) and the
+-- DeleteDeadLettersBefore retention sweep (created_at < ?): without it the
+-- first sweep over a large backlog is a per-pipeline table scan per batch.
+CREATE INDEX IF NOT EXISTS idx_dlq_pipeline_created ON dead_letter(pipeline, created_at);
 
 CREATE TABLE IF NOT EXISTS job_run (
   run_id        TEXT PRIMARY KEY,
@@ -397,6 +401,38 @@ func (s *SQLite) DeleteDeadLetters(pipeline string, ids []int64) (int64, error) 
 		return 0, fmt.Errorf("store: delete dead letters: %w", err)
 	}
 	return res.RowsAffected()
+}
+
+// dlqRetentionBatch bounds one DELETE of the dlq.retention sweep: a first
+// sweep over a large backlog must stay a series of small fixed transactions,
+// not one giant one ("small fixed batches only", as in DeleteDeadLetters).
+const dlqRetentionBatch = 10_000
+
+// DeleteDeadLettersBefore removes the pipeline's dead letters created before
+// cutoff (dlq.retention sweep), batch after batch until none remain, and
+// returns the total. created_at is RFC3339Nano UTC text compared
+// lexicographically — the same sub-second caveat as DeadLettersSince and
+// DeleteJobRunsBefore, kept consistent rather than re-stored here.
+func (s *SQLite) DeleteDeadLettersBefore(pipeline string, cutoff time.Time) (int64, error) {
+	cutoffText := cutoff.UTC().Format(time.RFC3339Nano)
+	var total int64
+	for {
+		res, err := s.db.Exec(
+			`DELETE FROM dead_letter WHERE pipeline = ? AND id IN (
+			   SELECT id FROM dead_letter WHERE pipeline = ? AND created_at < ? LIMIT ?)`,
+			pipeline, pipeline, cutoffText, dlqRetentionBatch)
+		if err != nil {
+			return total, fmt.Errorf("store: dlq retention: %w", err)
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return total, fmt.Errorf("store: dlq retention: %w", err)
+		}
+		total += n
+		if n < dlqRetentionBatch {
+			return total, nil
+		}
+	}
 }
 
 // --- job run history ---

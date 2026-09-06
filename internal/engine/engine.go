@@ -56,6 +56,14 @@ type Options struct {
 	// the retained window.
 	SpoolRetention int64
 
+	// DLQRetention prunes dead letters older than this duration (the
+	// pipeline's dlq.retention, §5.10), swept on the same checkpoint window
+	// as the spool trim. OPT-IN with no default: dead letters are operator
+	// data for `replay`, so 0 keeps everything forever. New() falls back to
+	// the IR's dlq.retention when this is 0; a positive value here overrides
+	// the pipeline config (tests, or a caller with its own policy).
+	DLQRetention time.Duration
+
 	// Admission optionally replaces the per-engine admission semaphore with a
 	// SHARED pool (same capacity semantics: one slot per uncommitted message).
 	// The jobs manager hands one pool to every concurrent run of a pipeline
@@ -266,6 +274,11 @@ func New(p *ir.Pipeline, st store.Store, reg *registry.Registry, opts Options) (
 	if opts.SpoolRetention <= 0 {
 		opts.SpoolRetention = DefaultSpoolRetention
 	}
+	if opts.DLQRetention <= 0 && p.Config != nil && p.Config.DLQ != nil {
+		// No non-zero default here by design: unset dlq.retention keeps dead
+		// letters forever (they are `replay` input, not garbage).
+		opts.DLQRetention = p.Config.DLQ.Retention
+	}
 	if opts.WasmSlowCallWarnMs == 0 {
 		// Negative explicitly disables; zero keeps the default watchdog so a
 		// hand-built Options{} does not silently lose it (review-2026-09).
@@ -448,6 +461,11 @@ func (e *Engine) persistCheckpoint(committedThrough int64, frontiers map[string]
 				e.Opts.Logf("engine: spool retention: %v", err)
 			}
 		}
+		// DLQ retention rides the same window (opt-in; a no-op unless
+		// dlq.retention is configured). Dead letters are terminal artifacts:
+		// trimming them cannot affect the invariants — but the rows are gone
+		// from `replay` for good, which is why the sweep never runs unset.
+		e.trimDeadLetters()
 		e.retentionDue = pt + e.Opts.SpoolRetention
 	}
 	for name, src := range e.sources {
@@ -462,6 +480,30 @@ func (e *Engine) persistCheckpoint(committedThrough int64, frontiers map[string]
 		if err := e.Store.SetSourceState(e.IR.Config.Name, name, state, frontier); err == nil {
 			e.srcPersisted[name] = frontier
 		}
+	}
+}
+
+// trimDeadLetters prunes dead letters older than the configured retention
+// (dlq.retention, §5.10). OPT-IN: retention 0 (unset) means keep forever —
+// dead letters are operator data for `replay`, and automatic deletion would
+// silently destroy it. The cutoff rides the engine clock so tests can move
+// time deterministically. Errors only log and retry on the next retention
+// window (same contract as the spool sweep): the commit path must never
+// block on a store that fails to prune history.
+func (e *Engine) trimDeadLetters() {
+	if e.Opts.DLQRetention <= 0 {
+		return
+	}
+	cutoff := e.Opts.Clock().Add(-e.Opts.DLQRetention)
+	n, err := e.Store.DeleteDeadLettersBefore(e.IR.Config.Name, cutoff)
+	if err != nil {
+		if e.Opts.Logf != nil {
+			e.Opts.Logf("engine: dlq retention: %v", err)
+		}
+		return
+	}
+	if n > 0 && e.Opts.Logf != nil {
+		e.Opts.Logf("engine: dlq retention: removed %d dead letter(s) older than %s", n, cutoff.UTC().Format(time.RFC3339))
 	}
 }
 

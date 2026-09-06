@@ -206,7 +206,9 @@ allowlist against DNS rebinding.
 - **Storage.** SQLite (`modernc.org/sqlite`, pure Go) carries the spool,
   checkpoints, dead letters and job history; `--ephemeral` swaps in the
   in-memory stores for local development. Spool retention is bounded by
-  `storage.spool_retention` in the Runtime config.
+  `storage.spool_retention` in the Runtime config; dead-letter retention is
+  opt-in per pipeline (`dlq.retention` — unset keeps every dead letter,
+  because they are `replay` input).
 
 ## Usage
 

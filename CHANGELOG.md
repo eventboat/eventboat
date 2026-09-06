@@ -10,6 +10,33 @@ The architecture review pass (review-2026-09): one proven P0 concurrency
 defect, two engine correctness fixes, an admin security hardening, and the
 hygiene findings.
 
+### Added
+
+- **`dlq` configuration section with opt-in dead-letter retention**
+  (`dlq.retention`, redesign-v3.md §5.10): the `dead_letter` table previously
+  grew without bound — its only deletion path was a successful `replay`
+  reinjection. A pipeline can now set `dlq.retention` (a duration, `30d`
+  style); the engine sweeps dead letters older than the cutoff on the
+  checkpoint retention window (piggybacking on the spool trim's window),
+  in bounded 10,000-row batches (`Store.DeleteDeadLettersBefore`, SQLite and
+  in-memory stores), logging failures and retrying on the next window — the
+  commit path never blocks on the sweep, and deleting terminal artifacts
+  cannot affect the invariants. **The default is 0 = keep forever, by
+  ruling**: dead letters are operator data for `replay`, so automatic
+  deletion would silently destroy it; retention must be switched on
+  explicitly, and swept rows are gone from `replay` for good. New loader
+  diagnostics `cfg_dlq_type` / `cfg_dlq_retention`; the `dlq` top-level key
+  is no longer rejected as unknown (the "defined §5.10, not implemented"
+  hint is retired); the LSP completes the section. A
+  `dead_letter(pipeline, created_at)` index backs the sweep's range scan
+  (and `DeadLettersSince`) so a large backlog never degrades to a
+  per-pipeline table scan per batch.
+- **`run_retention_unset` verify warning**: a job pipeline without
+  `run.retention.history` keeps its job_run history forever (one record per
+  run, unbounded) — verify now warns, with `--strict` escalating to an
+  error, exactly mirroring the `wasm_no_kill_switch` warning/strict
+  contract.
+
 ### Fixed
 
 - **Branch isolation (new invariant 8, `TestInvariant_BranchIsolation`)**:
