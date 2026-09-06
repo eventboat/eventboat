@@ -5,6 +5,7 @@ package builtin
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -182,6 +183,55 @@ func TestFileSinkWritesAndSchema(t *testing.T) {
 	}
 	if _, err := reg.NewSink("drop", map[string]any{"nope": 1}); err == nil {
 		t.Error("drop sink with unknown field accepted")
+	}
+}
+
+// --- debug sink ---
+
+func TestDebugSinkWritesStderr(t *testing.T) {
+	reg := newReg(t)
+	if _, err := reg.NewSink("debug", map[string]any{"nope": 1}); err == nil {
+		t.Error("debug sink with unknown field accepted")
+	}
+	if _, err := reg.NewSink("debug", nil); err != nil {
+		t.Errorf("bare debug sink rejected: %v", err)
+	}
+
+	// The factory pins os.Stderr at construction time: swap it out before
+	// NewSink so the output lands in a pipe we can read.
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	realStderr := os.Stderr
+	os.Stderr = w
+	defer func() { os.Stderr = realStderr }()
+
+	sink, err := reg.NewSink("debug", map[string]any{"prefix": "b1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sink.Write(context.Background(), []registry.Message{
+		{Out: []byte(`{"a":1}`)},
+		{Raw: []byte("raw-bytes")}, // no Out: sinks fall back to Raw
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := sink.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	out, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(out), "b1 {\"a\":1}\n") {
+		t.Errorf("debug sink output lacks the prefixed line: %q", out)
+	}
+	if !strings.Contains(string(out), "b1 raw-bytes\n") {
+		t.Errorf("debug sink output lacks the Raw fallback line: %q", out)
 	}
 }
 

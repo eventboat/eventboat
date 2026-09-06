@@ -267,6 +267,6 @@ registered plugins, but compiled-in only).
 
 `internal/registry/builtin/register.go` wires everything:
 `source-file`/`cron`/`http_server`/`kafka`/`sql`,
-`transform-script`/`split`/`wasm`, `sink-file`/`http`/`kafka`/`drop`,
+`transform-script`/`split`/`wasm`, `sink-file`/`http`/`kafka`/`drop`/`debug`,
 `codec-json`/`raw`/`csv`/`avro`/`protobuf`. Each registration is a ~30-line
 typed function — the best templates for writing your own.

@@ -94,7 +94,8 @@ sinks:
   PostgreSQL / SQLite, keyset pagination with resumable watermarks).
 - **Transforms:** `script` (Starlark), `split` (one message per array
   element), `wasm` (see below) — or your own registered transform.
-- **Sinks:** `kafka`, `http`, `file`, `drop`.
+- **Sinks:** `kafka`, `http`, `file`, `drop`, `debug` (one JSON line per
+  message on stderr).
 - **Codecs:** `json`, `raw`, `csv`, `avro`, `protobuf` — declared once under
   `codecs:` and referenced by name on any node (`decoder:` / `encoder:`).
 - **Routing:** CEL predicates on every edge, fan-in / fan-out, per-node
@@ -325,7 +326,7 @@ internal/engine/      spool admission, DAG execution, commit tracking, DLQ, pull
 internal/jobs/        job runtime: scheduler, catch-up, overlap, run lifecycle, hooks
 internal/store/       SQLite + in-memory spool/checkpoint/dead-letter/job-history stores
 internal/registry/    plugin registration: JSON Schemas from typed config structs + ABI versions
-internal/registry/builtin/  kafka/http_server/cron/file/sql sources, script/split/wasm transforms, kafka/http/file/drop sinks, json/raw/csv/avro/protobuf codecs
+internal/registry/builtin/  kafka/http_server/cron/file/sql sources, script/split/wasm transforms, kafka/http/file/drop/debug sinks, json/raw/csv/avro/protobuf codecs
 internal/lsp/         language server (JSON-RPC 2.0 over stdio)
 internal/explain/     deterministic walkthroughs + topology rendering
 internal/ops/         the operations service behind MCP and Admin REST

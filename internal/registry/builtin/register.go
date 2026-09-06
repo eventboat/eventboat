@@ -25,6 +25,7 @@ func RegisterAll(reg *registry.Registry) error {
 		registerHTTPSink,
 		registerKafkaSink,
 		registerDropSink,
+		registerDebugSink,
 	} {
 		if err := fn(reg); err != nil {
 			return err

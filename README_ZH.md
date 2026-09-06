@@ -84,7 +84,8 @@ sinks:
   PostgreSQL / SQLite，keyset 分页 + 可续读水位）。
 - **Transform：** `script`（Starlark）、`split`（JSON 数组逐元素成消息）、
   `wasm`（见下）——或你自己注册的 transform。
-- **汇：** `kafka`、`http`、`file`、`drop`。
+- **汇：** `kafka`、`http`、`file`、`drop`、`debug`（每条消息一行打到
+  stderr）。
 - **编解码：** `json`、`raw`、`csv`、`avro`、`protobuf`——在 `codecs:`
   段命名声明一次，任意节点按名引用（`decoder:` / `encoder:`）。
 - **路由：** 每条边可挂 CEL 谓词，fan-in / fan-out，节点级 `workers`，
@@ -301,7 +302,7 @@ internal/engine/      spool 准入、DAG 执行、commit 跟踪、死信、拉�
 internal/jobs/        作业运行时：调度、补偿、重叠、run 生命周期、钩子
 internal/store/       SQLite + 内存版 spool/checkpoint/死信/作业历史存储
 internal/registry/    插件注册：由类型化配置结构体生成 JSON Schema + ABI 版本
-internal/registry/builtin/  kafka/http_server/cron/file/sql 源、script/split/wasm transform、kafka/http/file/drop 汇、json/raw/csv/avro/protobuf 编解码
+internal/registry/builtin/  kafka/http_server/cron/file/sql 源、script/split/wasm transform、kafka/http/file/drop/debug 汇、json/raw/csv/avro/protobuf 编解码
 internal/lsp/         语言服务器（JSON-RPC 2.0 over stdio）
 internal/explain/     确定性推演 + 拓扑渲染
 internal/ops/         MCP 与 Admin REST 背后的操作服务

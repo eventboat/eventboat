@@ -12,6 +12,16 @@ hygiene findings.
 
 ### Added
 
+- **Built-in `debug` sink**: prints each message as one line on stderr —
+  the "just show me the data" edge for pipeline debugging. An optional
+  `prefix` labels the output so fan-out branches can be told apart; stderr
+  rather than stdout because the CLI dispatch contract keeps stdout for
+  data, and a sink must never interleave with it. A debugging convenience,
+  not a production edge: no roll-over, no buffering, and a closed stderr
+  fails the batch like any sink error (dead letters / retries apply).
+  Registered through the same typed path as the other builtins (schema
+  golden pinned; unknown-field rejection covered) with a pipe-capture
+  behavior test.
 - **`dlq` configuration section with opt-in dead-letter retention**
   (`dlq.retention`, redesign-v3.md §5.10): the `dead_letter` table previously
   grew without bound — its only deletion path was a successful `replay`
