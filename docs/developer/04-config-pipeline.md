@@ -39,18 +39,18 @@ COM1-9, LPT1-9) — the name becomes the deployed file name and the store key.
 ## The three-section topology
 
 `sources`, `transforms`, `sinks` — each node is `name: {plugin block, ...framework
-fields}`. `from` edges join them. Sources and sinks are required; the
+fields}`. `depends_on` edges join them. Sources and sinks are required; the
 transforms section is optional. Exact node-level whitelists
 (`internal/config/sections.go`):
 
 | Section | Allowed framework fields |
 |---|---|
-| `sources` | `decoder`, `grpc`, `version` (never `from`) |
-| `transforms` | `from`, `workers`, `version` |
-| `sinks` | `from`, `encoder`, `workers`, `order_key`, `batch`, `grpc`, `version` |
+| `sources` | `decoder`, `grpc`, `version` (never `depends_on`) |
+| `transforms` | `depends_on`, `workers`, `version` |
+| `sinks` | `depends_on`, `encoder`, `workers`, `order_key`, `batch`, `grpc`, `version` |
 
 Everything else at node level must be exactly one plugin key. Edge
-attributes (`from` object elements and `edge_defaults`): `when`, `route`,
+attributes (`depends_on` object elements and `edge_defaults`): `when`, `route`,
 `buffer`, `delivery`, `required`. `when` accepts a string (CEL) or
 `{lang: cel|cesql, expr: "..."}`; `route` is sugar compiled to
 `meta.route == "<name>"` and is mutually exclusive with `when`.
@@ -154,12 +154,13 @@ Every diagnostic code that exists in the code, by emitting layer. Severity
 | `cfg_section_type` | error | a section is not a mapping |
 | `cfg_empty_section` | error | a section present but empty |
 | `cfg_node_type` | error | a node is not a mapping |
-| `cfg_source_with_from` | error | a source declares `from` (sources have no in-edges) |
+| `cfg_source_with_depends_on` | error | a source declares `depends_on` (sources have no in-edges) |
+| `cfg_from_renamed` | error | node still uses the old `from` key, renamed to `depends_on` (migration diagnostic) |
 | `cfg_missing_plugin` | error | node has no plugin block |
 | `cfg_multiple_plugins` | error | node has more than one plugin block |
 | `cfg_plugin_block_type` | error | source/sink plugin block is not a mapping |
-| `cfg_missing_from` | error | transform/sink without `from` |
-| `cfg_bad_from` | error | `from` not a name/list/single-key mapping; empty name; multi-key element; non-mapping attrs |
+| `cfg_missing_depends_on` | error | transform/sink without `depends_on` |
+| `cfg_bad_depends_on` | error | `depends_on` not a name/list/single-key mapping; empty name; multi-key element; non-mapping attrs |
 | `cfg_when_type` | error | `when` empty, not a string/object, or `expr` empty |
 | `cfg_when_lang` | error | `when.lang` not `cel`/`cesql` |
 | `cfg_when_route_exclusive` | error | `when` and `route` on one edge |
@@ -193,8 +194,8 @@ Every diagnostic code that exists in the code, by emitting layer. Severity
 
 | Code | Sev | Fires when |
 |---|---|---|
-| `topo_missing_ref` | error | `from` references an unknown node |
-| `topo_sink_as_upstream` | error | `from` references a sink (sinks have no out-edges) |
+| `topo_missing_ref` | error | `depends_on` references an unknown node |
+| `topo_sink_as_upstream` | error | `depends_on` references a sink (sinks have no out-edges) |
 | `topo_cycle` | error | the DAG has a cycle |
 | `topo_no_path` | error | no source-to-sink path exists |
 | `topo_orphan` | error | source with no downstream; non-source with no in-edges |

@@ -132,7 +132,7 @@ sources:
     fakepull: { id: redact-feed }
 sinks:
   out:
-    from: [in]
+    depends_on: [in]
     file: { path: out.jsonl }
 `); err != nil {
 		t.Fatal(err)

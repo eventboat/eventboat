@@ -17,14 +17,14 @@ sources:
 
 transforms:
   stamp:
-    from: [orders, refunds]
+    depends_on: [orders, refunds]
     script: |
       meta.stream = meta.source
       payload.seen_by = constants.system
 
 sinks:
   audit:
-    from: [stamp]
+    depends_on: [stamp]
     encoder: json
     file:
       path: output/audit.jsonl

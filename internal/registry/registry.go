@@ -158,9 +158,12 @@ type Codec interface {
 // split and wasm are NOT reserved — they are the built-in transform plugin
 // names, ordinary members of the transform namespace (spec v1.19).
 var reservedNames = map[string]bool{
-	"from": true, "decoder": true, "encoder": true, "workers": true,
+	"depends_on": true, "decoder": true, "encoder": true, "workers": true,
 	"order_key": true, "batch": true,
 	"when": true, "route": true, "buffer": true, "delivery": true, "required": true,
+	// "from" stays reserved: the cfg_from_renamed migration diagnostic claims
+	// the key so old configs get a targeted message, not a plugin-name clash.
+	"from": true,
 }
 
 type sourceEntry struct {

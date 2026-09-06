@@ -10,7 +10,7 @@ sources:
 
 sinks:
   echoed:
-    from: [ingest]
+    depends_on: [ingest]
     encoder: json
     myecho:
       path: output/echoed.out.jsonl

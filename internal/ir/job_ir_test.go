@@ -30,7 +30,7 @@ sources:
     decoder: json
     file: { path: in.jsonl }
 sinks:
-  out: { from: [pull], file: { path: out.jsonl } }
+  out: { depends_on: [pull], file: { path: out.jsonl } }
 `)
 	if !hasCode(diags, "job_source_not_pull") {
 		t.Fatalf("expected job_source_not_pull, got %+v", diags)
@@ -51,7 +51,7 @@ sources:
     decoder: json
     sql: { driver: sqlite, dsn: file:x.db, query: "SELECT 1 AS id", cursor: { column: id } }
 sinks:
-  out: { from: [pull], file: { path: out.jsonl } }
+  out: { depends_on: [pull], file: { path: out.jsonl } }
 `)
 	if !hasCode(diags, "job_bad_schedule") {
 		t.Fatalf("expected job_bad_schedule, got %+v", diags)
@@ -70,11 +70,11 @@ sources:
   in: { decoder: json, file: { path: a } }
 transforms:
   t:
-    from: [in]
+    depends_on: [in]
     script: |
       payload.x = parameters.threshold
 sinks:
-  out: { from: [t], file: { path: o } }
+  out: { depends_on: [t], file: { path: o } }
 `)
 	if !hasCode(diags, "job_parameters_in_continuous") {
 		t.Fatalf("expected job_parameters_in_continuous, got %+v", diags)
@@ -88,7 +88,7 @@ metadata: { name: cont2 }
 sources:
   in: { decoder: json, file: { path: a } }
 sinks:
-  out: { from: { in: { when: 'payload.x > parameters.threshold' } }, file: { path: o } }
+  out: { depends_on: { in: { when: 'payload.x > parameters.threshold' } }, file: { path: o } }
 `)
 	if !hasCode(diags, "job_parameters_in_continuous") {
 		t.Fatalf("expected job_parameters_in_continuous for when, got %+v", diags)
@@ -107,7 +107,7 @@ sources:
     decoder: json
     sql: { driver: sqlite, dsn: file:x.db, query: "SELECT 1 AS id", args: { a: "${parameters.nope}" }, cursor: { column: id } }
 sinks:
-  out: { from: [pull], file: { path: o } }
+  out: { depends_on: [pull], file: { path: o } }
 `)
 	if !hasCode(diags, "job_parameter_unknown") {
 		t.Fatalf("expected job_parameter_unknown, got %+v", diags)
@@ -128,7 +128,7 @@ sources:
     decoder: json
     sql: { driver: sqlite, dsn: file:x.db, query: "SELECT 1 AS id", cursor: { column: id } }
 sinks:
-  out: { from: [pull], file: { path: o } }
+  out: { depends_on: [pull], file: { path: o } }
 `)
 	if !hasCode(diags, "plugin_schema") {
 		t.Fatalf("expected plugin_schema for hook sink, got %+v", diags)
@@ -146,7 +146,7 @@ sources:
     decoder: json
     sql: { driver: sqlite, dsn: file:x.db, query: "SELECT 1 AS id", cursor: { column: id } }
 sinks:
-  out: { from: [pull], file: { path: o } }
+  out: { depends_on: [pull], file: { path: o } }
 `)
 	if !hasCode(diags, "plugin_unknown") {
 		t.Fatalf("expected plugin_unknown for hook sink, got %+v", diags)
@@ -164,7 +164,7 @@ sources:
     decoder: json
     sql: { driver: sqlite, dsn: file:x.db, query: "SELECT 1 AS id", cursor: { column: id } }
 sinks:
-  out: { from: [db], file: { path: o } }
+  out: { depends_on: [db], file: { path: o } }
 `)
 	if pip == nil {
 		t.Fatalf("continuous sql pipeline must verify: %+v", diags)
@@ -196,12 +196,12 @@ sources:
     sql: { driver: sqlite, dsn: file:x.db, query: "SELECT 1 AS id", cursor: { column: id } }
 transforms:
   t:
-    from: [pull]
+    depends_on: [pull]
     script: |
       payload.big = payload.v > parameters.threshold
 sinks:
   out:
-    from: { t: { when: 'payload.big' } }
+    depends_on: { t: { when: 'payload.big' } }
     file: { path: o }
 `)
 	pip, diags := Build(lr, testReg(t), defaultStarOpts(), nil)

@@ -17,7 +17,7 @@ telemetry:
 sources:
   in: { decoder: json, file: { path: a } }
 sinks:
-  out: { from: [in], file: { path: b } }
+  out: { depends_on: [in], file: { path: b } }
 `))
 	if res.HasErrors() {
 		t.Fatalf("unexpected errors: %+v", res.Diagnostics)
@@ -46,7 +46,7 @@ telemetry:
 sources:
   in: { decoder: json, file: { path: a } }
 sinks:
-  out: { from: [in], file: { path: b } }
+  out: { depends_on: [in], file: { path: b } }
 `))
 	codes := map[string]bool{}
 	for _, d := range res.Diagnostics {
@@ -71,7 +71,7 @@ metadata: { name: x }
 sources:
   in: { decoder: json, file: { path: a } }
 sinks:
-  out: { from: [in], file: { path: b } }
+  out: { depends_on: [in], file: { path: b } }
 `))
 	if res.HasErrors() {
 		t.Fatal(res.Diagnostics)

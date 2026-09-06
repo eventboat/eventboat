@@ -39,19 +39,19 @@ sources:
     file: { path: input.jsonl }  # "file" is the plugin name
 transforms:
   enrich:
-    from: [ingest]             # framework field
+    depends_on: [ingest]             # framework field
     script: |                  # "script" is the plugin name
       payload.x = 1
 sinks:
   out:
-    from: [enrich]
+    depends_on: [enrich]
     encoder: json
     file: { path: out.jsonl }
 ```
 
 Exactly one plugin key per node (`cfg_missing_plugin` /
 `cfg_multiple_plugins` otherwise). Names colliding with framework fields
-(`from`, `decoder`, `encoder`, `workers`, `order_key`, `batch`, `when`,
+(`depends_on`, `decoder`, `encoder`, `workers`, `order_key`, `batch`, `when`,
 `route`, `buffer`, `delivery`, `required`) are rejected at registration
 (registry review R5). A `version:` pin on the node is checked against the
 registered/manifest version at verify (`plugin_version_mismatch`).

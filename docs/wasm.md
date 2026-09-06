@@ -15,7 +15,7 @@ mapping, **WASM for heavy computation, or when you need a native dependency**
 ```yaml
 transforms:
   heavy:
-    from: [ingest]
+    depends_on: [ingest]
     wasm:
       module: transforms/heavy.wasm   # path relative to the pipeline file
       entrypoint: transform           # exported function name (default: transform)

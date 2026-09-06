@@ -41,6 +41,19 @@ hygiene findings.
 
 ### Changed
 
+- **Breaking: the node wiring field `from` is renamed to `depends_on`** —
+  transforms and sinks declare their upstream nodes with
+  `depends_on: [upstream]` or `depends_on: { upstream: { when: '...' } }`;
+  sources take no in-edges and never declare it. Hard switch, no alias:
+  configs still using `from:` fail verify with the new `cfg_from_renamed`
+  diagnostic pointing at the new spelling. Error codes rename with the key:
+  `cfg_missing_from` → `cfg_missing_depends_on`, `cfg_bad_from` →
+  `cfg_bad_depends_on`, `cfg_source_with_from` → `cfg_source_with_depends_on`.
+  The LSP completes/hovers `depends_on` and offers edge-attribute completion
+  inside its mappings; `from` stays a reserved plugin name so old configs
+  get the migration message instead of a plugin-name clash. Unaffected:
+  job-run parameter bindings named `from` (`parameters:` /
+  `trigger --parameters`) and the `eventboat replay --from` spool flag.
 - **Admin security hardening**: the `?token=` query form is accepted on
   `/admin/sse` only (EventSource cannot set headers); every other endpoint is
   header-only, so a token leaked in a URL no longer unlocks the write

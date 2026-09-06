@@ -1,5 +1,5 @@
 // Package config implements the typed pipeline configuration of Eventboat v3:
-// three sections (sources/transforms/sinks) joined by `from` edges,
+// three sections (sources/transforms/sinks) joined by `depends_on` edges,
 // plugin-name-as-key nodes, a framework-field whitelist at node level, and
 // full-field ${VAR} substitution (redesign-v3.md §5).
 package config
@@ -151,12 +151,12 @@ type Node struct {
 	Section Section
 	Line    int // line of the node's key
 
-	From     []Edge // incoming edges (empty for sources)
-	Decoder  string // sources; "" means json
-	Encoder  string // sinks; "" means json
-	Workers  int    // default 1
-	OrderKey string // sinks; CEL expression
-	Batch    *Batch // sinks
+	DependsOn []Edge // incoming edges (empty for sources)
+	Decoder   string // sources; "" means json
+	Encoder   string // sinks; "" means json
+	Workers   int    // default 1
+	OrderKey  string // sinks; CEL expression
+	Batch     *Batch // sinks
 
 	// Plugin is the node's single plugin block key (the plugin name); valid
 	// for all four sections — transforms register script/split/wasm as

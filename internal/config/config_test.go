@@ -29,14 +29,14 @@ sources:
 
 transforms:
   enrich:
-    from: [ingest]
+    depends_on: [ingest]
     workers: 2
     script: |
       payload.total = payload.price * payload.qty
 
 sinks:
   eu-out:
-    from: { enrich: { when: 'meta.region == "eu"' } }
+    depends_on: { enrich: { when: 'meta.region == "eu"' } }
     encoder: json
     kafka: { topic: orders-eu }
 `))
@@ -53,8 +53,8 @@ sinks:
 	if p.Transforms["enrich"].Workers != 2 {
 		t.Errorf("workers = %d", p.Transforms["enrich"].Workers)
 	}
-	if len(p.Sinks["eu-out"].From) != 1 || p.Sinks["eu-out"].From[0].When == "" {
-		t.Errorf("edge when not parsed: %+v", p.Sinks["eu-out"].From)
+	if len(p.Sinks["eu-out"].DependsOn) != 1 || p.Sinks["eu-out"].DependsOn[0].When == "" {
+		t.Errorf("edge when not parsed: %+v", p.Sinks["eu-out"].DependsOn)
 	}
 	if p.EdgeDefaults.Delivery == nil || p.EdgeDefaults.Delivery.Retries != 3 {
 		t.Errorf("edge_defaults not parsed: %+v", p.EdgeDefaults)
@@ -70,7 +70,7 @@ bogus_section: { mode: job }
 sources:
   in: { decoder: json, fil: { path: x } }
 sinks:
-  out: { from: [in], mystery: true, file: { path: out.txt } }
+  out: { depends_on: [in], mystery: true, file: { path: out.txt } }
 `))
 	codes := map[string]bool{}
 	for _, d := range res.Diagnostics {
@@ -100,12 +100,12 @@ sources:
   in: { decoder: json, file: { path: a } }
 transforms:
   t:
-    from: [in]
+    depends_on: [in]
     script: |
       payload.x = 1
     split: {}
 sinks:
-  out: { from: [t], file: { path: b } }
+  out: { depends_on: [t], file: { path: b } }
 `))
 	found := false
 	for _, d := range res.Diagnostics {
@@ -130,11 +130,11 @@ sources:
   in: { file: { path: a } }
 transforms:
   scripted:
-    from: [in]
+    depends_on: [in]
     script: |
       payload.x = 1
   heavy:
-    from: [in]
+    depends_on: [in]
     wasm:
       module: guests/heavy.wasm
       entrypoint: transform
@@ -142,10 +142,10 @@ transforms:
       max_memory_pages: 256
       allow: [log]
   diced:
-    from: [in]
+    depends_on: [in]
     split: {}
 sinks:
-  out: { from: [scripted, heavy, diced], file: { path: b } }
+  out: { depends_on: [scripted, heavy, diced], file: { path: b } }
 `))
 	if res.HasErrors() {
 		t.Fatalf("unexpected errors: %+v", res.Diagnostics)
@@ -190,13 +190,13 @@ sources:
   in: { file: { path: a } }
 transforms:
   unset:
-    from: [in]
+    depends_on: [in]
     wasm: { module: guests/heavy.wasm }
   fast:
-    from: [unset]
+    depends_on: [unset]
     wasm: { module: guests/heavy.wasm, timeout_ms: 0 }
 sinks:
-  out: { from: [fast], file: { path: b } }
+  out: { depends_on: [fast], file: { path: b } }
 `))
 	if res.HasErrors() {
 		t.Fatalf("unexpected errors: %+v", res.Diagnostics)
@@ -215,18 +215,18 @@ apiVersion: eventboat/v3
 kind: Pipeline
 metadata: { name: x }
 sources:
-  in: { decoder: json, from: [nope], file: { path: a } }
+  in: { decoder: json, depends_on: [nope], file: { path: a } }
 sinks:
-  out: { from: [in], file: { path: b } }
+  out: { depends_on: [in], file: { path: b } }
 `))
 	found := false
 	for _, d := range res.Diagnostics {
-		if d.Code == "cfg_source_with_from" {
+		if d.Code == "cfg_source_with_depends_on" {
 			found = true
 		}
 	}
 	if !found {
-		t.Fatalf("expected cfg_source_with_from, got %+v", res.Diagnostics)
+		t.Fatalf("expected cfg_source_with_depends_on, got %+v", res.Diagnostics)
 	}
 }
 
@@ -246,13 +246,13 @@ sources:
     file: { path: "${EB_TEST_MISSING}" }
 transforms:
   t:
-    from: [in]
+    depends_on: [in]
     workers: ${EB_TEST_WORKERS}
     script: |
       payload.x = 1
 sinks:
   out:
-    from: [t]
+    depends_on: [t]
     file:
       path: fixed.txt
       ${?EB_TEST_OPTIONAL}: omit-me
@@ -293,11 +293,11 @@ sources:
   in: { decoder: json, file: { path: a } }
 transforms:
   t:
-    from: [in]
+    depends_on: [in]
     script: |
       payload.x = constants.threshold
 sinks:
-  out: { from: [t], file: { path: "out-${constants.threshold}.txt" } }
+  out: { depends_on: [t], file: { path: "out-${constants.threshold}.txt" } }
 `))
 	if res.HasErrors() {
 		t.Fatalf("unexpected errors: %+v", res.Diagnostics)
@@ -324,7 +324,7 @@ metadata: { name: x }
 sources:
   in: { decoder: json, file: { path: a } }
 sinks:
-  out: { from: [in], file: { path: "${bogus.value}.txt" } }
+  out: { depends_on: [in], file: { path: "${bogus.value}.txt" } }
 `))
 	var diag *Diagnostic
 	for i := range res.Diagnostics {
@@ -350,7 +350,7 @@ metadata: { name: x }
 sources:
   in: { decoder: json, file: { path: a } }
 sinks:
-  out: { from: [in], file: { path: "run-${parameters.from}.txt" } }
+  out: { depends_on: [in], file: { path: "run-${parameters.from}.txt" } }
 `))
 	found := false
 	for _, d := range res.Diagnostics {
@@ -377,7 +377,7 @@ sources:
     decoder: json
     file: { path: a }
 sinks:
-  out: { from: [in], file: { path: "run-${parameters.from}.txt" } }
+  out: { depends_on: [in], file: { path: "run-${parameters.from}.txt" } }
 `))
 	if res.HasErrors() {
 		t.Fatalf("job pipeline with ${parameters.x} rejected at load: %+v", res.Diagnostics)
@@ -402,7 +402,7 @@ constants:
 sources:
   in: { decoder: json, file: { path: a } }
 sinks:
-  out: { from: [in], file: { path: "${constants.tier}-${EB_TEST_OK_VAR}.txt" } }
+  out: { depends_on: [in], file: { path: "${constants.tier}-${EB_TEST_OK_VAR}.txt" } }
 `))
 	if res.HasErrors() {
 		t.Fatalf("unexpected errors: %+v", res.Diagnostics)
@@ -433,7 +433,7 @@ constants:
 sources:
   in: { decoder: json, file: { path: a } }
 sinks:
-  out: { from: [in], file: { path: "out-`+tc.ref+`.txt" } }
+  out: { depends_on: [in], file: { path: "out-`+tc.ref+`.txt" } }
 `))
 		found := false
 		for _, d := range res.Diagnostics {
@@ -458,7 +458,7 @@ sources:
   in: { decoder: json, file: { path: a } }
 sinks:
   out:
-    from: [in]
+    depends_on: [in]
     file:
       path: fixed.txt
       ${?EB_TEST_OPTIONAL_UNSET}: omit-me
@@ -488,7 +488,7 @@ sources:
     decoder: json
     `+placement+`
 sinks:
-  out: { from: [in], file: { path: b } }
+  out: { depends_on: [in], file: { path: b } }
 `))
 		count := 0
 		for _, d := range res.Diagnostics {
@@ -515,7 +515,7 @@ limits:
 sources:
   in: { decoder: json, file: { path: a } }
 sinks:
-  out: { from: [in], file: { path: o } }
+  out: { depends_on: [in], file: { path: o } }
 `))
 	if res.HasErrors() {
 		t.Fatalf("unexpected errors: %+v", res.Diagnostics)
@@ -545,7 +545,7 @@ metadata: { name: x }
 sources:
   in: { decoder: json, file: { path: a } }
 sinks:
-  out: { from: [in], file: { path: o } }
+  out: { depends_on: [in], file: { path: o } }
 `))
 		found := false
 		for _, d := range res.Diagnostics {
@@ -588,7 +588,7 @@ func TestMetadataNameValidation(t *testing.T) {
 	pipeline := func(name string) string {
 		return "apiVersion: eventboat/v3\nkind: Pipeline\nmetadata: { name: " + name + " }\n" +
 			"sources:\n  in: { decoder: json, file: { path: a } }\n" +
-			"sinks:\n  out: { from: [in], file: { path: o } }\n"
+			"sinks:\n  out: { depends_on: [in], file: { path: o } }\n"
 	}
 	// Windows reserved device names target the device instead of a file when
 	// the name is persisted (<data-dir>/pipelines/<name>.yaml); longer names
@@ -624,7 +624,7 @@ func TestMetadataNameValidation(t *testing.T) {
 		if tc.name == "" {
 			res = LoadBytes("p.yaml", []byte("apiVersion: eventboat/v3\nkind: Pipeline\n"+
 				"sources:\n  in: { decoder: json, file: { path: a } }\n"+
-				"sinks:\n  out: { from: [in], file: { path: o } }\n"))
+				"sinks:\n  out: { depends_on: [in], file: { path: o } }\n"))
 		} else {
 			res = LoadBytes("p.yaml", []byte(pipeline(tc.name)))
 		}

@@ -13,7 +13,7 @@ sources:
 
 transforms:
   enrich:
-    from: [ingest]
+    depends_on: [ingest]
     workers: 2
     script: |
       payload.total = payload.price * payload.qty
@@ -22,7 +22,7 @@ transforms:
 
 sinks:
   out:
-    from: [enrich]
+    depends_on: [enrich]
     encoder: json
     batch: { size: 10, timeout_ms: 500 }
     file:

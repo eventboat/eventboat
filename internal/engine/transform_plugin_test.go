@@ -33,10 +33,10 @@ sources:
   in: { decoder: json, manual: { id: in } }
 transforms:
   t:
-    from: [in]
+    depends_on: [in]
     sieve: {}
 sinks:
-  out: { from: [t], mem: { id: out } }
+  out: { depends_on: [t], mem: { id: out } }
 `)
 	st := store.NewMemory()
 	eng, _ := runEngine(t, pip, st, h.reg, fastOptions())
@@ -80,10 +80,10 @@ sources:
   in: { decoder: json, manual: { id: in } }
 transforms:
   t:
-    from: [in]
+    depends_on: [in]
     triple: {}
 sinks:
-  out: { from: [t], mem: { id: out } }
+  out: { depends_on: [t], mem: { id: out } }
 `)
 	st := store.NewMemory()
 	eng, _ := runEngine(t, pip, st, h.reg, fastOptions())
@@ -123,10 +123,10 @@ sources:
   in: { decoder: json, manual: { id: in } }
 transforms:
   t:
-    from: [in]
+    depends_on: [in]
     flaky: {}
 sinks:
-  out: { from: [t], mem: { id: out } }
+  out: { depends_on: [t], mem: { id: out } }
 `)
 	st := store.NewMemory()
 	eng, _ := runEngine(t, pip, st, h.reg, fastOptions())
@@ -181,11 +181,11 @@ sources:
   in: { decoder: json, manual: { id: in } }
 transforms:
   t:
-    from: [in]
+    depends_on: [in]
     workers: 3
     cloner: {}
 sinks:
-  out: { from: [t], mem: { id: out } }
+  out: { depends_on: [t], mem: { id: out } }
 `)
 	st := store.NewMemory()
 	eng, err := New(pip, st, h.reg, fastOptions())

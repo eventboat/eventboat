@@ -225,18 +225,18 @@ sources:
       group_id: int-roundtrip
 transforms:
   stamp:
-    from: [in]
+    depends_on: [in]
     script: |
       payload.hop = "engine"
 sinks:
   out:
-    from: [stamp]
+    depends_on: [stamp]
     encoder: json
     kafka:
       brokers: [%[1]q]
       topic: int-out
   audit:
-    from: [stamp]
+    depends_on: [stamp]
     encoder: json
     file: { path: %[2]q }
 `, broker, filepath.ToSlash(outFile)))
@@ -294,7 +294,7 @@ sources:
       group_id: int-dlq
 sinks:
   out:
-    from: [in]
+    depends_on: [in]
     encoder: json
     file: { path: %[2]q }
 `, broker, filepath.ToSlash(filepath.Join(t.TempDir(), "never.jsonl"))))
@@ -335,7 +335,7 @@ sources:
       group_id: int-rebalance
 sinks:
   out:
-    from: [in]
+    depends_on: [in]
     encoder: json
     file: { path: %[3]q }
 `, broker, filepath.Base(out), filepath.ToSlash(out))

@@ -31,12 +31,12 @@ sources:
 
 transforms:
   total:
-    from: [ingest]
+    depends_on: [ingest]
     script: |
       payload.total = payload.amount * payload.quantity
 
 sinks:
   avro-out:
-    from: [total]
+    depends_on: [total]
     encoder: orders-avro
     file: {path: output/orders.avro}

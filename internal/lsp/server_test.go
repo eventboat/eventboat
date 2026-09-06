@@ -152,7 +152,7 @@ sources:
     nope: {}
 sinks:
   out:
-    from: [ingest]
+    depends_on: [ingest]
     file: {path: out.jsonl}
 `
 
@@ -165,7 +165,7 @@ sources:
     cron: {expression: "*/5 * * * *"}
 sinks:
   out:
-    from: [ingest]
+    depends_on: [ingest]
     file: {path: out.jsonl}
 `
 
@@ -283,7 +283,7 @@ transforms:
 	got := labels(items)
 	// Framework fields plus the registered transform plugins (script/split/
 	// wasm arrive through the catalog like any plugin, spec v1.19).
-	for _, want := range []string{"from", "workers", "version", "script", "split", "wasm"} {
+	for _, want := range []string{"depends_on", "workers", "version", "script", "split", "wasm"} {
 		if !got[want] {
 			t.Errorf("missing completion %q; got %v", want, got)
 		}
@@ -388,10 +388,10 @@ sources:
     cron: {expression: "* * * * *"}
 sinks:
   out:
-    from:
+    depends_on:
       ingest:
 `
-	// The cursor sits right after the upstream name inside the from mapping
+	// The cursor sits right after the upstream name inside the depends_on mapping
 	// → edge attributes.
 	items := completionAt(t, h, doc, 9, 13)
 	got := labels(items)

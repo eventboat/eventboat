@@ -19,12 +19,12 @@ sources:
   in: { manual: { id: cesql } }
 sinks:
   big:
-    from:
+    depends_on:
       in:
         when: { lang: cesql, expr: "data.region = 'EU' AND data.amount > 100" }
     mem: { id: big }
   us:
-    from:
+    depends_on:
       in:
         when: { lang: cesql, expr: "data.region = 'US'" }
     mem: { id: us }

@@ -26,27 +26,27 @@ var topLevelSections = []string{
 // transform plugins and arrive through pluginItems (the catalog).
 var frameworkFields = map[string][]string{
 	"sources":    {"decoder", "grpc", "version"},
-	"transforms": {"from", "workers", "version"},
-	"sinks":      {"from", "encoder", "workers", "order_key", "batch", "grpc", "version"},
+	"transforms": {"depends_on", "workers", "version"},
+	"sinks":      {"depends_on", "encoder", "workers", "order_key", "batch", "grpc", "version"},
 }
 
 var frameworkDocs = map[string]string{
-	"from":      "upstream edges: a name, a list, or `{name: {when: ...}}` — one edge per entry",
-	"decoder":   "codec name applied to inbound bytes at the source (default json)",
-	"encoder":   "codec name applied to the payload at the sink (default json)",
-	"workers":   "per-node concurrency for transforms (default 1)",
-	"order_key": "CEL expression evaluated into the message key (e.g. kafka partition key)",
-	"batch":     "engine-owned sink batching: {size, timeout_ms}",
-	"script":    "Starlark statement sequence; payload/meta/constants bindings (§4.3)",
-	"split":     "mark the transform as a splitter: a JSON array payload becomes one message per element",
-	"wasm":      "WASM transform tier: {module, entrypoint, timeout_ms, max_memory_pages, allow} (docs/wasm.md)",
-	"grpc":      "external gRPC plugin block: {command, env, schema} (docs/plugins.md)",
-	"version":   "pin the plugin ABI version; mismatch with the registry is a verify error",
-	"when":      "CEL predicate on the edge (§4.2); errors = not passed + counter",
-	"route":     "named route sugar: compiles to `meta.route == \"<name>\"` (§5.4)",
-	"delivery":  "per-edge delivery policy: {retries, backoff, timeout_ms}",
-	"required":  "required edge (default true); false = failures drop instead of dead-lettering",
-	"buffer":    "in-memory per-edge surge buffer: {type: memory, max_events}",
+	"depends_on": "upstream nodes this node depends on: a name, a list, or `{name: {when: ...}}` — one entry per upstream",
+	"decoder":    "codec name applied to inbound bytes at the source (default json)",
+	"encoder":    "codec name applied to the payload at the sink (default json)",
+	"workers":    "per-node concurrency for transforms (default 1)",
+	"order_key":  "CEL expression evaluated into the message key (e.g. kafka partition key)",
+	"batch":      "engine-owned sink batching: {size, timeout_ms}",
+	"script":     "Starlark statement sequence; payload/meta/constants bindings (§4.3)",
+	"split":      "mark the transform as a splitter: a JSON array payload becomes one message per element",
+	"wasm":       "WASM transform tier: {module, entrypoint, timeout_ms, max_memory_pages, allow} (docs/wasm.md)",
+	"grpc":       "external gRPC plugin block: {command, env, schema} (docs/plugins.md)",
+	"version":    "pin the plugin ABI version; mismatch with the registry is a verify error",
+	"when":       "CEL predicate on the edge (§4.2); errors = not passed + counter",
+	"route":      "named route sugar: compiles to `meta.route == \"<name>\"` (§5.4)",
+	"delivery":   "per-edge delivery policy: {retries, backoff, timeout_ms}",
+	"required":   "required edge (default true); false = failures drop instead of dead-lettering",
+	"buffer":     "in-memory per-edge surge buffer: {type: memory, max_events}",
 }
 
 // stackEntry is one `key:` line above the cursor.
@@ -251,10 +251,10 @@ func (s *Server) completionsFor(text string, line, character int) []completionIt
 		return nil
 	}
 
-	// Inside a from: block → edge attributes. Both shapes:
-	//   from:\n  <upstream>:   ← cursor under the upstream name
-	//   from: {<upstream>: ...} on one line (stack still ends at from)
-	if encl.key == "from" || parentOnStack(stack, encl) == "from" {
+	// Inside a depends_on: block → edge attributes. Both shapes:
+	//   depends_on:\n  <upstream>:   ← cursor under the upstream name
+	//   depends_on: {<upstream>: ...} on one line (stack still ends at depends_on)
+	if encl.key == "depends_on" || parentOnStack(stack, encl) == "depends_on" {
 		return filter([]completionItem{
 			{Label: "when", Kind: kindProperty, Detail: frameworkDocs["when"], InsertText: "when:"},
 			{Label: "route", Kind: kindProperty, Detail: frameworkDocs["route"], InsertText: "route:"},

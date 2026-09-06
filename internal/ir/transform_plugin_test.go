@@ -16,9 +16,9 @@ metadata: { name: x }
 sources:
   in: { file: { path: a } }
 transforms:
-  t: { from: [in], mystery: {} }
+  t: { depends_on: [in], mystery: {} }
 sinks:
-  out: { from: [t], file: { path: b } }
+  out: { depends_on: [t], file: { path: b } }
 `)
 	if !hasCode(diags, "plugin_unknown") {
 		t.Fatalf("want plugin_unknown, got %+v", diags)
@@ -38,10 +38,10 @@ sources:
   in: { file: { path: a } }
 transforms:
   t:
-    from: [in]
+    depends_on: [in]
     grpc: { command: ["./t"], schema: "t/manifest.json" }
 sinks:
-  out: { from: [t], file: { path: b } }
+  out: { depends_on: [t], file: { path: b } }
 `)
 	for _, d := range diags {
 		if d.Code == "plugin_unknown" && strings.Contains(d.Message, `"grpc"`) {
@@ -63,12 +63,12 @@ sources:
   in: { file: { path: a } }
 transforms:
   t:
-    from: [in]
+    depends_on: [in]
     version: 2
     script: |
       payload.x = 1
 sinks:
-  out: { from: [t], file: { path: b } }
+  out: { depends_on: [t], file: { path: b } }
 `)
 	if !hasCode(diags, "plugin_version_mismatch") {
 		t.Fatalf("want plugin_version_mismatch, got %+v", diags)
@@ -84,11 +84,11 @@ sources:
   in: { file: { path: a } }
 transforms:
   t:
-    from: [in]
+    depends_on: [in]
     script: |
       payload.x = undefined_thing
 sinks:
-  out: { from: [t], file: { path: b } }
+  out: { depends_on: [t], file: { path: b } }
 `)
 	if !hasCode(diags, "expr_starlark_compile") {
 		t.Fatalf("want expr_starlark_compile, got %+v", diags)
@@ -113,16 +113,16 @@ sources:
   in: { file: { path: a } }
 transforms:
   negative:
-    from: [in]
+    depends_on: [in]
     wasm: { module: guests/heavy.wasm, timeout_ms: -1 }
   huge:
-    from: [negative]
+    depends_on: [negative]
     wasm: { module: guests/heavy.wasm, max_memory_pages: 99999 }
   netcat:
-    from: [huge]
+    depends_on: [huge]
     wasm: { module: guests/heavy.wasm, allow: [net] }
 sinks:
-  out: { from: [netcat], file: { path: b } }
+  out: { depends_on: [netcat], file: { path: b } }
 `)
 	schemaDiags := 0
 	for _, d := range diags {
@@ -143,9 +143,9 @@ metadata: { name: x }
 sources:
   in: { file: { path: a } }
 transforms:
-  t: { from: [in], wasm: { module: does/not/exist.wasm } }
+  t: { depends_on: [in], wasm: { module: does/not/exist.wasm } }
 sinks:
-  out: { from: [t], file: { path: b } }
+  out: { depends_on: [t], file: { path: b } }
 `)
 	if !hasCode(diags, "expr_wasm_compile") {
 		t.Fatalf("want expr_wasm_compile, got %+v", diags)

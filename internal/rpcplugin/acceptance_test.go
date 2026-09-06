@@ -59,7 +59,7 @@ sources:
       interval_ms: 10
 sinks:
   out:
-    from: [prices]
+    depends_on: [prices]
     file: { path: %q }
 `, filepath.ToSlash(bin), filepath.ToSlash(manifest), filepath.ToSlash(outFile))
 }

@@ -25,7 +25,7 @@ sources:
     manual: { id: in1 }
 sinks:
   out:
-    from: [in1]
+    depends_on: [in1]
     mem: { id: shared }
 `
 	const pipelineYAMLB = `
@@ -40,7 +40,7 @@ sources:
     manual: { id: in2 }
 sinks:
   out:
-    from: [in2]
+    depends_on: [in2]
     mem: { id: shared }
 `
 	gate := make(chan struct{})

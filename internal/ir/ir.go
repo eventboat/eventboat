@@ -183,7 +183,7 @@ func Build(cfg *config.Pipeline, reg *registry.Registry, starOpts starhost.Optio
 	edgeDefaults := cfg.EdgeDefaults
 	for _, name := range p.Order {
 		to := p.Nodes[name]
-		for _, ce := range to.Config.From {
+		for _, ce := range to.Config.DependsOn {
 			e := Edge{
 				From:      ce.From,
 				To:        name,
@@ -287,13 +287,13 @@ func Build(cfg *config.Pipeline, reg *registry.Registry, starOpts starhost.Optio
 			up, ok := p.Nodes[e.From]
 			if !ok {
 				add(config.Diagnostic{Severity: "error", Code: "topo_missing_ref", File: file, Line: e.Line,
-					Message: fmt.Sprintf("from references unknown node %q", e.From),
+					Message: fmt.Sprintf("depends_on references unknown node %q", e.From),
 					Hint:    "node names must exist in sources, transforms or sinks"})
 				continue
 			}
 			if up.Section == config.SectionSink {
 				add(config.Diagnostic{Severity: "error", Code: "topo_sink_as_upstream", File: file, Line: e.Line,
-					Message: fmt.Sprintf("from references sink %q; sinks have no out-edges", e.From)})
+					Message: fmt.Sprintf("depends_on references sink %q; sinks have no out-edges", e.From)})
 				continue
 			}
 			up.Out = append(up.Out, e)
@@ -824,7 +824,7 @@ func checkTopology(p *Pipeline, file string, add func(config.Diagnostic)) {
 	}
 	if !sinkReachable {
 		add(config.Diagnostic{Severity: "error", Code: "topo_no_path", File: file, Line: 0,
-			Message: "no source-to-sink path exists", Hint: "connect at least one source to one sink via from"})
+			Message: "no source-to-sink path exists", Hint: "connect at least one source to one sink via depends_on"})
 	}
 
 	// Orphans: sources nothing consumes, and non-sources with no in-edges.
@@ -835,13 +835,13 @@ func checkTopology(p *Pipeline, file string, add func(config.Diagnostic)) {
 			if len(n.Out) == 0 {
 				add(config.Diagnostic{Severity: "error", Code: "topo_orphan", File: file, Line: n.Config.Line,
 					Message: fmt.Sprintf("source %q has no downstream (nothing reads from it)", name),
-					Hint:    "remove it or add a from: reference to it"})
+					Hint:    "remove it or add a depends_on: reference to it"})
 			}
 		default:
 			if len(n.In) == 0 {
 				add(config.Diagnostic{Severity: "error", Code: "topo_orphan", File: file, Line: n.Config.Line,
 					Message: fmt.Sprintf("node %q has no in-edges", name),
-					Hint:    "wire it into the DAG via from:"})
+					Hint:    "wire it into the DAG via depends_on:"})
 			}
 		}
 	}

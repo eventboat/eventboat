@@ -12,8 +12,8 @@ import (
 // framework fields, so the whitelist carries only the shared node fields.
 var nodeWhitelist = map[Section]map[string]bool{
 	SectionSource:    {"decoder": true, "grpc": true, "version": true},
-	SectionTransform: {"from": true, "workers": true, "version": true},
-	SectionSink:      {"from": true, "encoder": true, "workers": true, "order_key": true, "batch": true, "grpc": true, "version": true},
+	SectionTransform: {"depends_on": true, "workers": true, "version": true},
+	SectionSink:      {"depends_on": true, "encoder": true, "workers": true, "order_key": true, "batch": true, "grpc": true, "version": true},
 }
 
 func parseSection(file string, raw map[string]any, sectionKey string, section Section, p *Pipeline, lines *lineIndex, res *Result) {
@@ -89,10 +89,18 @@ func parseNode(file, name string, section Section, nodeRaw any, line, pluginLine
 		if whitelist[key] {
 			continue
 		}
-		if key == "from" && section == SectionSource {
+		if key == "depends_on" && section == SectionSource {
 			res.Diagnostics = append(res.Diagnostics, Diagnostic{
-				Severity: "error", Code: "cfg_source_with_from", File: file, Line: line,
-				Message: fmt.Sprintf("source %q must not declare from (sources have no in-edges)", name), Hint: "",
+				Severity: "error", Code: "cfg_source_with_depends_on", File: file, Line: line,
+				Message: fmt.Sprintf("source %q must not declare depends_on (sources have no in-edges)", name), Hint: "",
+			})
+			continue
+		}
+		if key == "from" {
+			res.Diagnostics = append(res.Diagnostics, Diagnostic{
+				Severity: "error", Code: "cfg_from_renamed", File: file, Line: line,
+				Message: fmt.Sprintf("node %q declares \"from\"; it was renamed to \"depends_on\"", name),
+				Hint:    `declare upstream nodes with depends_on: [upstream] or depends_on: { upstream: { when: '...' } }`,
 			})
 			continue
 		}
@@ -321,23 +329,23 @@ func parseNode(file, name string, section Section, nodeRaw any, line, pluginLine
 		}
 	}
 
-	// from (not allowed on sources — already diagnosed above; required on
-	// transforms and sinks).
-	if rawFrom, present := m["from"]; present && section != SectionSource {
-		n.From = parseFrom(file, name, rawFrom, line, res)
+	// depends_on (not allowed on sources — already diagnosed above; required
+	// on transforms and sinks).
+	if rawDeps, present := m["depends_on"]; present && section != SectionSource {
+		n.DependsOn = parseDependsOn(file, name, rawDeps, line, res)
 	} else if !present && section != SectionSource {
 		res.Diagnostics = append(res.Diagnostics, Diagnostic{
-			Severity: "error", Code: "cfg_missing_from", File: file, Line: line,
-			Message: fmt.Sprintf("%s node %q must declare from", section, name),
-			Hint:    `from: [upstream] or from: { upstream: { when: '...' } }`,
+			Severity: "error", Code: "cfg_missing_depends_on", File: file, Line: line,
+			Message: fmt.Sprintf("%s node %q must declare depends_on", section, name),
+			Hint:    `depends_on: [upstream] or depends_on: { upstream: { when: '...' } }`,
 		})
 	}
 	return n
 }
 
-// parseFrom accepts a string, a list of elements, or a single object element.
-// Each element is "name" or {name: {attrs}} (redesign-v3.md §5.3).
-func parseFrom(file, node string, raw any, line int, res *Result) []Edge {
+// parseDependsOn accepts a string, a list of elements, or a single object
+// element. Each element is "name" or {name: {attrs}} (redesign-v3.md §5.3).
+func parseDependsOn(file, node string, raw any, line int, res *Result) []Edge {
 	var elements []any
 	switch t := raw.(type) {
 	case string:
@@ -348,9 +356,9 @@ func parseFrom(file, node string, raw any, line int, res *Result) []Edge {
 		elements = []any{t}
 	default:
 		res.Diagnostics = append(res.Diagnostics, Diagnostic{
-			Severity: "error", Code: "cfg_bad_from", File: file, Line: line,
-			Message: fmt.Sprintf("from of node %q must be a name, a list, or a single-key mapping", node),
-			Hint:    `from: [ingest] or from: { enrich: { when: '...' } }`,
+			Severity: "error", Code: "cfg_bad_depends_on", File: file, Line: line,
+			Message: fmt.Sprintf("depends_on of node %q must be a name, a list, or a single-key mapping", node),
+			Hint:    `depends_on: [ingest] or depends_on: { enrich: { when: '...' } }`,
 		})
 		return nil
 	}
@@ -360,8 +368,8 @@ func parseFrom(file, node string, raw any, line int, res *Result) []Edge {
 		case string:
 			if strings.TrimSpace(t) == "" {
 				res.Diagnostics = append(res.Diagnostics, Diagnostic{
-					Severity: "error", Code: "cfg_bad_from", File: file, Line: line,
-					Message: fmt.Sprintf("from of node %q contains an empty name", node), Hint: "",
+					Severity: "error", Code: "cfg_bad_depends_on", File: file, Line: line,
+					Message: fmt.Sprintf("depends_on of node %q contains an empty name", node), Hint: "",
 				})
 				continue
 			}
@@ -369,9 +377,9 @@ func parseFrom(file, node string, raw any, line int, res *Result) []Edge {
 		case map[string]any:
 			if len(t) != 1 {
 				res.Diagnostics = append(res.Diagnostics, Diagnostic{
-					Severity: "error", Code: "cfg_bad_from", File: file, Line: line,
-					Message: fmt.Sprintf("from object elements of node %q must have exactly one key (the upstream name)", node),
-					Hint:    `from: { enrich: { when: '...' } }`,
+					Severity: "error", Code: "cfg_bad_depends_on", File: file, Line: line,
+					Message: fmt.Sprintf("depends_on object elements of node %q must have exactly one key (the upstream name)", node),
+					Hint:    `depends_on: { enrich: { when: '...' } }`,
 				})
 				continue
 			}
@@ -379,18 +387,18 @@ func parseFrom(file, node string, raw any, line int, res *Result) []Edge {
 				attrs, ok := attrsRaw.(map[string]any)
 				if !ok {
 					res.Diagnostics = append(res.Diagnostics, Diagnostic{
-						Severity: "error", Code: "cfg_bad_from", File: file, Line: line,
+						Severity: "error", Code: "cfg_bad_depends_on", File: file, Line: line,
 						Message: fmt.Sprintf("edge attributes for %q -> %q must be a mapping", upstream, node),
-						Hint:    `from: { enrich: { when: '...' } } — attrs are optional`,
+						Hint:    `depends_on: { enrich: { when: '...' } } — attrs are optional`,
 					})
 					continue
 				}
-				edges = append(edges, parseEdgeAttrs(file, "from", &upstream, attrs, line, res))
+				edges = append(edges, parseEdgeAttrs(file, "depends_on", &upstream, attrs, line, res))
 			}
 		default:
 			res.Diagnostics = append(res.Diagnostics, Diagnostic{
-				Severity: "error", Code: "cfg_bad_from", File: file, Line: line,
-				Message: fmt.Sprintf("from element of node %q must be a string or a single-key mapping", node), Hint: "",
+				Severity: "error", Code: "cfg_bad_depends_on", File: file, Line: line,
+				Message: fmt.Sprintf("depends_on element of node %q must be a string or a single-key mapping", node), Hint: "",
 			})
 		}
 	}

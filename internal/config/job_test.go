@@ -26,7 +26,7 @@ hooks:
 sources:
   pull: { decoder: json, file: { path: in.jsonl } }
 sinks:
-  out: { from: [pull], file: { path: out.jsonl } }
+  out: { depends_on: [pull], file: { path: out.jsonl } }
 `
 
 func TestJobSectionsParse(t *testing.T) {
@@ -75,7 +75,7 @@ metadata: { name: nightly }
 sources:
   pull: { decoder: json, file: { path: in.jsonl } }
 sinks:
-  out: { from: [pull], file: { path: out.jsonl } }
+  out: { depends_on: [pull], file: { path: out.jsonl } }
 `))
 	}
 	cases := []struct {

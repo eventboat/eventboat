@@ -56,13 +56,13 @@ sources:
       pagination: { key: [updated_at, id], page_size: 2 }
 transforms:
   enrich:
-    from: [pull]
+    depends_on: [pull]
     script: |
       payload.stamp = "synced"
 %s
 sinks:
   out:
-    from: [enrich]
+    depends_on: [enrich]
     encoder: json
     file: { path: %s }
 `, filepath.ToSlash(seedDB), scriptLine, filepath.ToSlash(outFile))

@@ -980,9 +980,9 @@ func SubstituteParameters(p *Pipeline, global map[string]any, valuesFor func(sou
 			}
 			node.Grpc.Schema, _ = sub(node.Grpc.Schema, values).(string)
 		}
-		for i := range node.From {
-			node.From[i].When, _ = sub(node.From[i].When, values).(string)
-			node.From[i].Route, _ = sub(node.From[i].Route, values).(string)
+		for i := range node.DependsOn {
+			node.DependsOn[i].When, _ = sub(node.DependsOn[i].When, values).(string)
+			node.DependsOn[i].Route, _ = sub(node.DependsOn[i].Route, values).(string)
 		}
 	}
 	if p.Hooks != nil {

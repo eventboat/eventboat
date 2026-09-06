@@ -15,12 +15,12 @@ covers compute-heavy transforms that outgrow Starlark.
 
 ## Edge predicates
 
-An edge condition is declared on `from`:
+An edge condition is declared on `depends_on`:
 
 ```yaml
 sinks:
   eu-out:
-    from:
+    depends_on:
       - enrich: { when: 'payload.region == "eu"' }        # string form = CEL
       - warm:
           when: { lang: cesql, expr: "severity >= 5" }    # object form

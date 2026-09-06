@@ -28,10 +28,10 @@ sources:
     decoder: json
     manual: { id: in }
 sinks:
-  out1: { from: [in], mem: { id: b1 } }
-  out2: { from: [in], mem: { id: b2 } }
-  out3: { from: [in], mem: { id: b3 } }
-  out4: { from: [in], mem: { id: b4 } }
+  out1: { depends_on: [in], mem: { id: b1 } }
+  out2: { depends_on: [in], mem: { id: b2 } }
+  out3: { depends_on: [in], mem: { id: b3 } }
+  out4: { depends_on: [in], mem: { id: b4 } }
 `
 	for _, tc := range []struct {
 		name string

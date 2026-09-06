@@ -46,12 +46,12 @@ sources:
   in: { decoder: json, file: { path: a.jsonl } }
 transforms:
   enrich:
-    from: [in]
+    depends_on: [in]
     script: |
       payload.total = payload.price * payload.qty
 sinks:
   out:
-    from: { enrich: { when: 'meta.region == "eu"' } }
+    depends_on: { enrich: { when: 'meta.region == "eu"' } }
     file: { path: out.jsonl }
 `)
 	if pip == nil {
@@ -77,10 +77,10 @@ metadata: { name: x }
 sources:
   in: { decoder: json, file: { path: a } }
 transforms:
-  a: { from: [in, b], script: "payload.x = 1" }
-  b: { from: [a], script: "payload.x = 2" }
+  a: { depends_on: [in, b], script: "payload.x = 1" }
+  b: { depends_on: [a], script: "payload.x = 2" }
 sinks:
-  out: { from: [b], file: { path: o } }
+  out: { depends_on: [b], file: { path: o } }
 `)
 	if !hasCode(diags, "topo_cycle") {
 		t.Fatalf("expected topo_cycle, got %+v", diags)
@@ -95,9 +95,9 @@ metadata: { name: x }
 sources:
   in: { decoder: json, file: { path: a } }
 transforms:
-  t: { from: [nosuch], script: "payload.x = 1" }
+  t: { depends_on: [nosuch], script: "payload.x = 1" }
 sinks:
-  out: { from: [t], file: { path: o } }
+  out: { depends_on: [t], file: { path: o } }
 `)
 	if !hasCode(diags, "topo_missing_ref") {
 		t.Fatalf("expected topo_missing_ref, got %+v", diags)
@@ -113,7 +113,7 @@ sources:
   in: { decoder: json, file: { path: a } }
   unused: { decoder: json, file: { path: b } }
 sinks:
-  out: { from: [in], file: { path: o } }
+  out: { depends_on: [in], file: { path: o } }
 `)
 	if !hasCode(diags, "topo_orphan") {
 		t.Fatalf("expected topo_orphan for unreachable source, got %+v", diags)
@@ -128,9 +128,9 @@ metadata: { name: x }
 sources:
   node: { decoder: json, file: { path: a } }
 transforms:
-  node: { from: [node], script: "payload.x = 1" }
+  node: { depends_on: [node], script: "payload.x = 1" }
 sinks:
-  out: { from: [node], file: { path: o } }
+  out: { depends_on: [node], file: { path: o } }
 `)
 	if !hasCode(diags, "topo_dup_name") {
 		t.Fatalf("expected topo_dup_name, got %+v", diags)
@@ -145,8 +145,8 @@ metadata: { name: x }
 sources:
   in: { decoder: json, file: { path: a } }
 sinks:
-  out: { from: [in], file: { path: o } }
-  out2: { from: [out], file: { path: o2 } }
+  out: { depends_on: [in], file: { path: o } }
+  out2: { depends_on: [out], file: { path: o2 } }
 `)
 	if !hasCode(diags, "topo_sink_as_upstream") {
 		t.Fatalf("expected topo_sink_as_upstream, got %+v", diags)
@@ -163,12 +163,12 @@ sources:
   in: { decoder: json, file: { path: a } }
 transforms:
   classify:
-    from: [in]
+    depends_on: [in]
     script: |
       payload.x = 1
 sinks:
-  vip: { from: { classify: { route: high-value } }, file: { path: o } }
-  rest: { from: [classify], file: { path: o2 } }
+  vip: { depends_on: { classify: { route: high-value } }, file: { path: o } }
+  rest: { depends_on: [classify], file: { path: o2 } }
 `)
 	if !hasCode(diags, "expr_route_dangling") {
 		t.Fatalf("expected expr_route_dangling, got %+v", diags)
@@ -183,15 +183,15 @@ sources:
   in: { decoder: json, file: { path: a } }
 transforms:
   classify:
-    from: [in]
+    depends_on: [in]
     script: |
       if payload.total > 100:
           meta.route = "high-value"
       else:
           meta.route = "standard"
 sinks:
-  vip: { from: { classify: { route: high-value } }, file: { path: o } }
-  rest: { from: [classify], file: { path: o2 } }
+  vip: { depends_on: { classify: { route: high-value } }, file: { path: o } }
+  rest: { depends_on: [classify], file: { path: o2 } }
 `)
 	if pip == nil {
 		t.Fatalf("build failed: %+v", diags)
@@ -213,7 +213,7 @@ metadata: { name: x }
 sources:
   in: { decoder: json, file: { path: a } }
 sinks:
-  out: { from: { in: { when: 'meta.region == "eu" &&' } }, file: { path: o } }
+  out: { depends_on: { in: { when: 'meta.region == "eu" &&' } }, file: { path: o } }
 `)
 	if !hasCode(diags, "expr_cel_compile") {
 		t.Fatalf("expected expr_cel_compile, got %+v", diags)
@@ -228,9 +228,9 @@ metadata: { name: x }
 sources:
   in: { decoder: json, file: { path: a } }
 transforms:
-  t: { from: [in], script: "payload.x = nosuch" }
+  t: { depends_on: [in], script: "payload.x = nosuch" }
 sinks:
-  out: { from: [t], file: { path: o } }
+  out: { depends_on: [t], file: { path: o } }
 `)
 	if !hasCode(diags, "expr_starlark_compile") {
 		t.Fatalf("expected expr_starlark_compile, got %+v", diags)
@@ -247,7 +247,7 @@ sources:
     decoder: json
     file: { path: a, bogus_field: 1 }
 sinks:
-  out: { from: [in], file: { path: o } }
+  out: { depends_on: [in], file: { path: o } }
 `)
 	if !hasCode(diags, "plugin_schema") {
 		t.Fatalf("expected plugin_schema, got %+v", diags)
@@ -270,7 +270,7 @@ constants:
 sources:
   in: { decoder: json, file: { path: a } }
 sinks:
-  out: { from: { in: { when: 'true' } }, file: { path: o } }
+  out: { depends_on: { in: { when: 'true' } }, file: { path: o } }
 `)
 	if !hasCode(diags, "lint_when_literal") || !hasCode(diags, "lint_constant_unused") {
 		t.Fatalf("expected lint warnings, got %+v", diags)
@@ -296,7 +296,7 @@ constants:
 sources:
   in: { decoder: json, file: { path: a } }
 sinks:
-  out: { from: [in], file: { path: "${constants.out_dir}/events.jsonl" } }
+  out: { depends_on: [in], file: { path: "${constants.out_dir}/events.jsonl" } }
 `)
 	// out_dir must NOT be flagged (referenced via substitution); truly_unused
 	// must be (it is genuinely unreferenced).
@@ -325,7 +325,7 @@ constants:
 sources:
   in: { decoder: json, file: { path: a } }
 sinks:
-  out: { from: { in: { when: 'payload.total > ${constants.min_total}' } }, file: { path: o } }
+  out: { depends_on: { in: { when: 'payload.total > ${constants.min_total}' } }, file: { path: o } }
 `)
 	if hasCode(diags, "lint_constant_unused") {
 		t.Fatalf("constant referenced via ${...} in when flagged unused: %+v", diags)

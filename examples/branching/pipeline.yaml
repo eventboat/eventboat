@@ -13,7 +13,7 @@ sources:
 
 transforms:
   enrich:
-    from: [ingest]
+    depends_on: [ingest]
     script: |
       payload.total = payload.price * payload.qty
       if payload.total > constants.vip_threshold:
@@ -23,12 +23,12 @@ transforms:
 
 sinks:
   eu-out:
-    from: { enrich: { when: 'payload.region == "eu"' } }
+    depends_on: { enrich: { when: 'payload.region == "eu"' } }
     encoder: json
     file:
       path: output/eu.jsonl
   us-out:
-    from: { enrich: { when: 'payload.region == "us"' } }
+    depends_on: { enrich: { when: 'payload.region == "us"' } }
     encoder: json
     file:
       path: output/us.jsonl

@@ -32,9 +32,9 @@ sources:
     decoder: json
     manual: { id: in }
 sinks:
-  out1: { from: [in], mem: { id: p1 } }
-  out2: { from: [in], mem: { id: p2 } }
-  out3: { from: [in], mem: { id: p3 } }
+  out1: { depends_on: [in], mem: { id: p1 } }
+  out2: { depends_on: [in], mem: { id: p2 } }
+  out3: { depends_on: [in], mem: { id: p3 } }
 `
 
 // TestCommitFlushOutOfLockUnderConcurrency drives concurrent commits through

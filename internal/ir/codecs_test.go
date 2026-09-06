@@ -49,12 +49,12 @@ sources:
     cron: {expression: "* * * * *", payload: "1,2.5"}
 transforms:
   double:
-    from: [ingest]
+    depends_on: [ingest]
     script: |
       payload.amount = payload.amount * 2
 sinks:
   out:
-    from: [double]
+    depends_on: [double]
     encoder: events-csv
     file: {path: out/out.csvl}
 `

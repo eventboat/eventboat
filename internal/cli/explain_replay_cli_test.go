@@ -64,12 +64,12 @@ sources:
     file: { path: nonexistent-input.jsonl }
 transforms:
   t:
-    from: [in]
+    depends_on: [in]
     script: |
       payload.replayed = True
 sinks:
   out:
-    from: [t]
+    depends_on: [t]
     file: { path: `+filepath.ToSlash(filepath.Join(dir, "out.jsonl"))+` }
 `), 0o644); err != nil {
 		t.Fatal(err)

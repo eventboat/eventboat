@@ -128,12 +128,12 @@ sources:
     manual: { id: soak-fan }
 transforms:
   enrich:
-    from: [in]
+    depends_on: [in]
     script: |
       payload.seen = True
 sinks:
   out:
-    from: [enrich]
+    depends_on: [enrich]
     encoder: json
     memsink: { id: soak-out }
 `))
@@ -166,13 +166,13 @@ sources:
     manual: { id: soak-dlq }
 transforms:
   bomb:
-    from: [in]
+    depends_on: [in]
     script: |
       if payload.i % 10 == 9:
           fail("boom %d" % payload.i)
 sinks:
   out:
-    from: [bomb]
+    depends_on: [bomb]
     encoder: json
     memsink: { id: soak-dlq-out }
 `))

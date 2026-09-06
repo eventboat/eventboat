@@ -14,7 +14,7 @@ telemetry:
 sources:
   in: { decoder: json, file: { path: a } }
 sinks:
-  out: { from: [in], file: { path: b } }
+  out: { depends_on: [in], file: { path: b } }
 `)
 	if !hasCode(diags, "telemetry_redact_pattern") {
 		t.Fatalf("expected telemetry_redact_pattern, got %+v", diags)
@@ -28,7 +28,7 @@ telemetry:
 sources:
   in: { decoder: json, file: { path: a } }
 sinks:
-  out: { from: [in], file: { path: b } }
+  out: { depends_on: [in], file: { path: b } }
 `); pip == nil {
 		t.Fatal("valid redact patterns must verify clean")
 	}

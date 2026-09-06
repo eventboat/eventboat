@@ -43,12 +43,12 @@ sources:
   in: { manual: { id: wasm } }
 transforms:
   stats:
-    from: [in]
+    depends_on: [in]
     wasm:
       module: "` + mod + `"
 sinks:
   out:
-    from: [stats]
+    depends_on: [stats]
     mem: { id: out }
 `)
 	eng, _ := runEngine(t, pip, store.NewMemory(), h.reg, fastOptions())
@@ -78,14 +78,14 @@ sources:
   in: { manual: { id: wasmf } }
 transforms:
   stats:
-    from:
+    depends_on:
       in:
         delivery: { retries: 1, backoff: constant }
     wasm:
       module: "` + mod + `"
 sinks:
   out:
-    from: [stats]
+    depends_on: [stats]
     mem: { id: outf }
 `)
 	eng, _ := runEngine(t, pip, store.NewMemory(), h.reg, fastOptions())
@@ -131,13 +131,13 @@ sources:
   in: { manual: { id: wl } }
 transforms:
   heavy:
-    from: [in]
+    depends_on: [in]
     wasm:
       module: "`+mod+`"
       `+wasmExtra+`
 sinks:
   out:
-    from: [heavy]
+    depends_on: [heavy]
     mem: { id: wout }
 `))
 		if lr.HasErrors() {

@@ -91,12 +91,12 @@ sources:
     fakepull: { id: feed }
 transforms:
   enrich:
-    from: [pull]
+    depends_on: [pull]
     script: |
       payload.seen = True
 sinks:
   out:
-    from: [enrich]
+    depends_on: [enrich]
     encoder: json
     memsink: { id: out }
 `
@@ -482,13 +482,13 @@ sources:
     fakepull: { id: feed }
 transforms:
   t:
-    from: [pull]
+    depends_on: [pull]
     script: |
       payload.region = parameters.region
       payload.above = payload.i >= parameters.floor
 sinks:
   out:
-    from: [t]
+    depends_on: [t]
     memsink: { id: "out-${parameters.region}" }
 `
 	path := filepath.Join(dir, "p.yaml")
@@ -695,12 +695,12 @@ sources:
     fakepull: { id: feed }
 transforms:
   t:
-    from: [pull]
+    depends_on: [pull]
     script: |
       if payload.i == 1:
           fail("boom")
 sinks:
-  out: { from: [t], memsink: { id: out } }
+  out: { depends_on: [t], memsink: { id: out } }
 `
 	path := filepath.Join(dir, "p.yaml")
 	_ = writeFile(path, []byte(yamlText))

@@ -20,13 +20,13 @@ sources:
     manual: { id: in }
 transforms:
   enrich:
-    from: [in]
+    depends_on: [in]
     script: |
       payload.total = payload.price * payload.qty
       meta.label = "order-%s" % payload.id
 sinks:
   out:
-    from: [enrich]
+    depends_on: [enrich]
     encoder: json
     mem: { id: out }
 `
@@ -74,12 +74,12 @@ sources:
     manual: { id: refunds }
 transforms:
   stamp:
-    from: [orders, refunds]
+    depends_on: [orders, refunds]
     script: |
       meta.stream = meta.source
 sinks:
   audit:
-    from: [stamp]
+    depends_on: [stamp]
     mem: { id: audit }
 `)
 	eng, _ := runEngine(t, pip, store.NewMemory(), h.reg, fastOptions())
@@ -113,11 +113,11 @@ sources:
     manual: { id: in }
 transforms:
   explode:
-    from: [in]
+    depends_on: [in]
     split: {}
 sinks:
   out:
-    from: [explode]
+    depends_on: [explode]
     mem: { id: out }
 `)
 	eng, _ := runEngine(t, pip, store.NewMemory(), h.reg, fastOptions())
@@ -146,15 +146,15 @@ sources:
     manual: { id: in }
 transforms:
   enrich:
-    from: [in]
+    depends_on: [in]
     script: |
       payload.total = payload.price * payload.qty
 sinks:
   eu:
-    from: { enrich: { when: 'payload.region == "eu"' } }
+    depends_on: { enrich: { when: 'payload.region == "eu"' } }
     mem: { id: eu }
   us:
-    from: { enrich: { when: 'payload.region == "us"' } }
+    depends_on: { enrich: { when: 'payload.region == "us"' } }
     mem: { id: us }
 `)
 	eng, _ := runEngine(t, pip, store.NewMemory(), h.reg, fastOptions())
@@ -186,7 +186,7 @@ sources:
     manual: { id: in }
 sinks:
   out:
-    from: [in]
+    depends_on: [in]
     mem: { id: out }
 `)
 	st := store.NewMemory()
@@ -221,12 +221,12 @@ sources:
     manual: { id: in }
 transforms:
   t:
-    from: [in]
+    depends_on: [in]
     script: |
       fail("kaboom")
 sinks:
   out:
-    from: [t]
+    depends_on: [t]
     mem: { id: out }
 `)
 	st := store.NewMemory()
@@ -267,7 +267,7 @@ sources:
     manual: { id: in }
 sinks:
   out:
-    from: [in]
+    depends_on: [in]
     mem: { id: out }
 `)
 	eng, _ := runEngine(t, pip, store.NewMemory(), h.reg, fastOptions())
@@ -299,7 +299,7 @@ sources:
     manual: { id: in }
 sinks:
   out:
-    from: [in]
+    depends_on: [in]
     mem: { id: out }
 `)
 	gate := make(chan struct{})
@@ -353,10 +353,10 @@ sources:
     manual: { id: in }
 sinks:
   a:
-    from: { in: { when: 'payload.total > 10' } }
+    depends_on: { in: { when: 'payload.total > 10' } }
     mem: { id: a }
   b:
-    from: { in: { when: 'payload.label == "x"' } }
+    depends_on: { in: { when: 'payload.label == "x"' } }
     mem: { id: b }
 `)
 	eng, _ := runEngine(t, pip, store.NewMemory(), h.reg, fastOptions())
@@ -393,12 +393,12 @@ sources:
     manual: { id: in }
 transforms:
   t:
-    from: [in]
+    depends_on: [in]
     script: |
       payload.rerun = True
 sinks:
   out:
-    from: [t]
+    depends_on: [t]
     mem: { id: out }
 `)
 	eng, _ := runEngine(t, pip, store.NewMemory(), h.reg, fastOptions())
@@ -483,7 +483,7 @@ sources:
     manual: { id: in }
 sinks:
   out:
-    from: [in]
+    depends_on: [in]
     mem: { id: out }
 `)
 	// The write sleeps 150ms and ignores ctx, longer than the 50ms drain

@@ -28,7 +28,7 @@ sources:
     manual: { id: in }
 sinks:
   out:
-    from: [in]
+    depends_on: [in]
     mem: { id: out }
 `
 

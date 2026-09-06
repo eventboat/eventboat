@@ -18,12 +18,12 @@ sources:
     file: { path: input/x.jsonl }
 transforms:
   t:
-    from: [ingest]
+    depends_on: [ingest]
     script: |
       payload.seen = True
 sinks:
   out:
-    from: [t]
+    depends_on: [t]
     drop: {}
 `
 

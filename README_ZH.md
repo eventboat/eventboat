@@ -4,7 +4,7 @@
 operated by agents.
 
 Eventboat 是一个 Go 单二进制的事件路由引擎。用 YAML 声明一条管道——
-sources、transforms、sinks 通过 `from` 连成显式 DAG——Eventboat 负责持久地
+sources、transforms、sinks 通过 `depends_on` 连成显式 DAG——Eventboat 负责持久地
 执行它：事件进来（Kafka / HTTP / cron / 文件 / SQL），流过滤、映射、路由，
 落到目的地——全程 at-least-once、可验证、可回放。谓词就是
 [CEL](https://github.com/google/cel-go)（Kubernetes 的表达式语言），映射就
@@ -48,7 +48,7 @@ sources、transforms、sinks 通过 `from` 连成显式 DAG——Eventboat 负�
 
 ## 功能
 
-**管道模型**——管道即三段式，`from` 连边，插件名即键：
+**管道模型**——管道即三段式，`depends_on` 连边，插件名即键：
 
 ```yaml
 apiVersion: eventboat/v3
@@ -65,7 +65,7 @@ sources:
 
 transforms:
   enrich:
-    from: [ingest]
+    depends_on: [ingest]
     script: |
       payload.total = payload.price * payload.qty
       if payload.total > constants.vip_threshold:
@@ -75,7 +75,7 @@ transforms:
 
 sinks:
   eu-out:
-    from: { enrich: { when: 'payload.region == "eu"' } }   # CEL 谓词
+    depends_on: { enrich: { when: 'payload.region == "eu"' } }   # CEL 谓词
     encoder: json
     file: { path: output/eu.jsonl }
 ```
@@ -151,7 +151,7 @@ token 拒绝启动；回环绑定强制 Host 白名单，防 DNS rebinding。
 ## 架构设计
 
 ```
-                YAML（sources/transforms/sinks + from）
+                YAML（sources/transforms/sinks + depends_on）
                                   │
                           loader ─┴─ ${VAR}/${?VAR}/${constants.*}/${parameters.*}
                                   │                           严格白名单

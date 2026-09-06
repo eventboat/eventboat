@@ -4,7 +4,7 @@
 machines, operated by agents.
 
 Eventboat is a single Go binary that routes events between systems. You
-declare a pipeline in YAML — sources, transforms and sinks joined by `from`
+declare a pipeline in YAML — sources, transforms and sinks joined by `depends_on`
 into an explicit DAG — and Eventboat executes it durably: events come in
 (Kafka / HTTP / cron / files / SQL), flow through filters, maps and routes,
 and land at their destinations at-least-once, verifiably, replayably.
@@ -57,7 +57,7 @@ agents that write your pipelines.
 
 ## Features
 
-**Pipeline model** — a pipeline is three sections joined by `from`; the
+**Pipeline model** — a pipeline is three sections joined by `depends_on`; the
 plugin name is the key:
 
 ```yaml
@@ -75,7 +75,7 @@ sources:
 
 transforms:
   enrich:
-    from: [ingest]
+    depends_on: [ingest]
     script: |
       payload.total = payload.price * payload.qty
       if payload.total > constants.vip_threshold:
@@ -85,7 +85,7 @@ transforms:
 
 sinks:
   eu-out:
-    from: { enrich: { when: 'payload.region == "eu"' } }   # CEL predicate
+    depends_on: { enrich: { when: 'payload.region == "eu"' } }   # CEL predicate
     encoder: json
     file: { path: output/eu.jsonl }
 ```
@@ -168,7 +168,7 @@ allowlist against DNS rebinding.
 ## Architecture
 
 ```
-                YAML (sources/transforms/sinks + from)
+                YAML (sources/transforms/sinks + depends_on)
                                   │
                           loader ─┴─ ${VAR}/${?VAR}/${constants.*}/${parameters.*}
                                   │                           strict whitelists

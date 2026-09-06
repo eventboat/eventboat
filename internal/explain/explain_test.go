@@ -44,7 +44,7 @@ sources:
     file: { path: in.jsonl }
 transforms:
   enrich:
-    from: [ingest]
+    depends_on: [ingest]
     script: |
       payload.total = payload.price * payload.qty
       if payload.total > constants.vip_threshold:
@@ -53,10 +53,10 @@ transforms:
           meta.tier = "basic"
 sinks:
   eu-out:
-    from: { enrich: { when: 'meta.tier == "vip"' } }
+    depends_on: { enrich: { when: 'meta.tier == "vip"' } }
     file: { path: eu.jsonl }
   us-out:
-    from: [enrich]
+    depends_on: [enrich]
     file: { path: us.jsonl }
 `
 
@@ -102,12 +102,12 @@ sources:
     file: { path: a }
 transforms:
   t:
-    from: [in]
+    depends_on: [in]
     script: |
       payload.x = 1
       fail("kaboom")
 sinks:
-  out: { from: [t], file: { path: o } }
+  out: { depends_on: [t], file: { path: o } }
 `)
 	out, _ := Trace(pip, Options{Message: []byte(`{}`)})
 	if !strings.Contains(out, "✗ fail: kaboom") || !strings.Contains(out, "kaboom") {
@@ -133,13 +133,13 @@ sources:
     file: { path: in.jsonl }
 transforms:
   heavy:
-    from: [in]
+    depends_on: [in]
     wasm:
       module: ../wasmhost/testdata/aggregate.wasm
       timeout_ms: 1000
 sinks:
   out:
-    from: { heavy: { when: 'payload.amount > 10' } }
+    depends_on: { heavy: { when: 'payload.amount > 10' } }
     file: { path: out.jsonl }
 `)
 	out, err := Trace(pip, Options{Message: []byte(`{"amount": 42}`)})

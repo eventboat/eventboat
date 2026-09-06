@@ -49,7 +49,7 @@ sources:
       path: %s
 sinks:
   echoed:
-    from: [ingest]
+    depends_on: [ingest]
     encoder: json
     myecho:
       path: %s

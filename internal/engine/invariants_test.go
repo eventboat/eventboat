@@ -28,7 +28,7 @@ sources:
     manual: { id: in }
 sinks:
   out:
-    from: [in]
+    depends_on: [in]
     mem: { id: out }
 `
 
@@ -232,10 +232,10 @@ sources:
     manual: { id: in }
 sinks:
   primary:
-    from: [in]
+    depends_on: [in]
     mem: { id: primary }
   telemetry:
-    from: { in: { required: false } }
+    depends_on: { in: { required: false } }
     mem: { id: telemetry }
 `)
 	st := store.NewMemory()
@@ -369,7 +369,7 @@ sources:
     manual: { id: in }
 sinks:
   out:
-    from: [in]
+    depends_on: [in]
     mem: { id: out }
 `)
 	dbPath := t.TempDir() + "/inv7.db"
@@ -445,12 +445,12 @@ sources:
     manual: { id: in }
 transforms:
   scrub:
-    from: [in]
+    depends_on: [in]
     script: |
       remove(payload, "k0")
 sinks:
   out:
-    from: [in]
+    depends_on: [in]
     encoder: json
     mem: { id: out }
 `)

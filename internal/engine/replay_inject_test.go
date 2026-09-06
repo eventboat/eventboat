@@ -22,12 +22,12 @@ sources:
     manual: { id: in }
 transforms:
   bump:
-    from: [in]
+    depends_on: [in]
     script: |
       payload.n = payload.n + 1
 sinks:
   out:
-    from: [bump]
+    depends_on: [bump]
     encoder: json
     mem: { id: out }
 `

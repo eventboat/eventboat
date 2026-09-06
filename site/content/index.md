@@ -15,7 +15,7 @@ agents that write your pipelines.
   <li><a href="01-architecture.html"><strong>Architecture &amp; package map</strong><span>The data plane end to end: packages, boundaries, data flow.</span></a></li>
   <li><a href="02-engine.html"><strong>Engine internals</strong><span>Spool, commit tracking, checkpoints, crash recovery.</span></a></li>
   <li><a href="03-plugins.html"><strong>Plugin system &amp; registry</strong><span>Schemas, ABI versions, out-of-process gRPC plugins.</span></a></li>
-  <li><a href="04-config-pipeline.html"><strong>Configuration &amp; diagnostics</strong><span>YAML sections, <code>from</code> edges, substitution, verify.</span></a></li>
+  <li><a href="04-config-pipeline.html"><strong>Configuration &amp; diagnostics</strong><span>YAML sections, <code>depends_on</code> edges, substitution, verify.</span></a></li>
   <li><a href="05-scripting.html"><strong>Expressions &amp; scripting sandbox</strong><span>CEL predicates, Starlark transforms, budgets.</span></a></li>
   <li><a href="06-observability.html"><strong>Observability &amp; operations</strong><span>Metrics, admin API, MCP, explain and replay.</span></a></li>
   <li><a href="07-testing.html"><strong>Testing guide</strong><span>Contract tests: fixtures, injection, capture, dead letters.</span></a></li>
@@ -59,7 +59,7 @@ eventboat test examples
 eventboat run --config examples/linear/pipeline.yaml
 ```
 
-A minimal pipeline — three sections joined by `from` (`examples/linear`):
+A minimal pipeline — three sections joined by `depends_on` (`examples/linear`):
 
 ```yaml
 apiVersion: eventboat/v3
@@ -77,7 +77,7 @@ sources:
 
 transforms:
   enrich:
-    from: [ingest]
+    depends_on: [ingest]
     workers: 2
     script: |
       payload.total = payload.price * payload.qty
@@ -86,7 +86,7 @@ transforms:
 
 sinks:
   out:
-    from: [enrich]
+    depends_on: [enrich]
     encoder: json
     batch: { size: 10, timeout_ms: 500 }
     file:

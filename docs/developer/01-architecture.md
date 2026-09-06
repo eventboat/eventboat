@@ -17,7 +17,7 @@ WASM), so there is no custom language to learn.
 ## The processing model
 
 A pipeline is a three-section YAML document — `sources`, `transforms`,
-`sinks` — joined by `from` edges into a DAG. The runtime model is:
+`sinks` — joined by `depends_on` edges into a DAG. The runtime model is:
 
 1. **Admission**: every inbound message is durably spooled (SQLite, or
    in-memory with `--ephemeral`) *before* it becomes visible to the DAG

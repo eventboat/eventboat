@@ -22,7 +22,7 @@ sources:
       restart: `+restart+`
     ticker: { symbol: X }
 sinks:
-  out: { from: [in], file: { path: b } }
+  out: { depends_on: [in], file: { path: b } }
 `))
 	}
 

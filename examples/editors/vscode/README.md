@@ -24,9 +24,9 @@ Open any pipeline YAML (e.g. `examples/branching/pipeline.yaml`):
   schemas, topology, CEL + Starlark compilation); errors appear inline with
   the engine's codes and hints.
 - **Completion** — `Ctrl+Space` offers top-level sections, node framework
-  fields per section (`decoder`, `from`, `script`, ...), registered plugin
+  fields per section (`decoder`, `depends_on`, `script`, ...), registered plugin
   names, plugin fields from their JSON Schemas, edge attributes under
-  `from:` mappings, and codec names after `decoder:`/`encoder:`.
+  `depends_on:` mappings, and codec names after `decoder:`/`encoder:`.
 - **Hover** — plugin names show their full field summary (types, defaults,
   descriptions); framework fields show their semantics.
 
@@ -42,5 +42,5 @@ Open any pipeline YAML (e.g. `examples/branching/pipeline.yaml`):
 - The server treats every YAML document independently (one pipeline per
   file; overlay composition is a verify-CLI concern, not an editor one).
 - Completion context is line/indent-based; flow-style mappings
-  (`from: {a: {when: ...}}` on one line) validate but complete less richly
+  (`depends_on: {a: {when: ...}}` on one line) validate but complete less richly
   than block style.

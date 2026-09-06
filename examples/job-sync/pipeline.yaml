@@ -42,7 +42,7 @@ sources:
 
 transforms:
   enrich:
-    from: [pull]
+    depends_on: [pull]
     script: |
       load("math", "floor")
       payload.source_system = constants.source_system
@@ -55,6 +55,6 @@ transforms:
 
 sinks:
   out:
-    from: [enrich]
+    depends_on: [enrich]
     encoder: json
     file: { path: ./examples/job-sync/out/orders-sync.jsonl }
