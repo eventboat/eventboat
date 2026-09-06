@@ -31,7 +31,7 @@ sources、transforms、sinks 通过 `depends_on` 连成显式 DAG——Eventboat
 - **可靠性是构造出来的。** 每条入口消息先持久落入 spool（SQLite，纯 Go，
   无 CGO），*然后*才对 DAG 可见；commit 跟踪器只在消息到达终态后推进
   checkpoint；崩溃恢复从 checkpoint 重放 spool。契约是 at-least-once：
-  可能重复，绝不丢失。七条可靠性不变量各有专属测试（`TestInvariant_*`，
+  可能重复，绝不丢失。八条可靠性不变量各有专属测试（`TestInvariant_*`，
   见 [internal/engine](internal/engine/invariants_test.go)）。
 - **可解释、可回放。** `explain` 符号化走查管道，或对样本消息实际执行
   （含脚本）；`replay` 把死信、spool 窗口、失败的作业运行重新注入——
@@ -317,7 +317,7 @@ examples/             linear、branching、fanin、job-sync、codecs、custom-bu
 
 ```bash
 go build ./...
-go test ./...          # 含七条 TestInvariant_* 可靠性测试
+go test ./...          # 含八条 TestInvariant_* 可靠性测试
 go test -race ./...
 
 # 集成套件（环境变量门控；本地自动跳过）

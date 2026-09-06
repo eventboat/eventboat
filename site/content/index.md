@@ -3,8 +3,8 @@ title: Home
 layout: index
 ---
 
-Eventboat is a single Go binary: events come in (Kafka / HTTP / cron / file),
-flow through an explicit DAG (filter, map, route), and land at their
+Eventboat is a single Go binary: events come in (Kafka / HTTP / cron / file /
+SQL), flow through an explicit DAG (filter, map, route), and land at their
 destinations — at-least-once, verifiable, replayable. Predicates are plain
 [CEL](https://github.com/google/cel-go) (the Kubernetes expression language),
 transforms are [Starlark](https://github.com/google/starlark-go) (a Python
@@ -95,8 +95,9 @@ sinks:
 
 ## Status
 
-**v0.1.0-beta** (spec v1.19): milestones M1–M4 plus the beta hardening round
-are done; see the
+**v0.3.0** (spec v1.19): milestones M1–M4, the beta hardening round and the
+v0.3.0 release (transforms as registry plugins, compile-time plugin
+extension, the developer documentation site) are done; see the
 [CHANGELOG](https://github.com/eventboat/eventboat/blob/main/CHANGELOG.md)
 for exactly what shipped and what moved. The full design lives in
 [redesign-v3.md](https://github.com/eventboat/eventboat/blob/main/redesign-v3.md);

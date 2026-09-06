@@ -181,8 +181,16 @@ type Transform interface {
   - one or more outputs fan out downstream; the engine expands the commit
     accounting for the extra branches (the split contract);
   - a non-nil error retries per the incoming edge's delivery policy, then
-    dead letters — it never fails the node. Mutate `msg` in place (or return
-    copies); the engine fans your outputs out with predicates.
+    dead letters — it never fails the node.
+- **Message ownership (invariant 8).** Fan-out sibling branches share the
+  underlying `msg.Decoded` / `msg.Meta` maps (the engine shallow-copies the
+  struct per edge), so `Apply` must **never mutate those maps in place** —
+  replace the fields wholesale: assign a fresh map/value to `msg.Decoded` /
+  `msg.Meta` (the script plugin's copy-on-write binding does exactly this)
+  or return fresh messages. An in-place write races a sibling branch's
+  encode and can crash the process with an unrecoverable concurrent-map
+  fault (`TestInvariant_BranchIsolation`). The same contract is documented
+  on `registry.Message` and `pkg/plugin`.
 - **`TransformCloner`** — implement it when your execution state is **not
   goroutine-safe** (wasm module instances die on traps). The engine clones
   once per worker goroutine and clones must be independent. If `Clone`

@@ -10,7 +10,7 @@ sources (Kafka, HTTP, cron, file, SQL), flow through an explicit DAG of
 transforms and filtered edges, and land at sinks — at-least-once, verifiable
 before anything runs, and replayable after a crash. Pipelines are declared in
 YAML, statically verified against plugin JSON Schemas and topology rules, and
-then executed by an engine whose entire reliability model is pinned by seven
+then executed by an engine whose entire reliability model is pinned by eight
 dedicated invariant tests. Predicates are CEL, transforms are Starlark (or
 WASM), so there is no custom language to learn.
 
@@ -122,7 +122,7 @@ is enforced by Go imports — each "must not" below is checkable with
 
 ## Design invariants
 
-These are the properties the architecture is built around. Items 1–7 each
+These are the properties the architecture is built around. Items 1–8 each
 have a dedicated test (`TestInvariant_*` in `internal/engine/invariants_test.go`);
 breaking any of them is a review blocker.
 
@@ -147,6 +147,13 @@ breaking any of them is a review blocker.
 7. **Cursor watermark follows commit.** Pull sources' watermarks advance only
    to the max cursor column of *committed* messages — job-pipeline resume
    correctness.
+8. **Fan-out branches are isolated.** Sibling branches share the underlying
+   `msg.Decoded` / `msg.Meta` maps (delivery shallow-copies the struct), so
+   transforms must replace those values wholesale and never mutate them in
+   place — an in-place write races a sibling branch's encode and can crash
+   the process with an unrecoverable concurrent-map fault. This is also the
+   message-ownership contract documented on `registry.Message` and
+   `pkg/plugin`.
 
 Project-level invariants that live outside the engine:
 

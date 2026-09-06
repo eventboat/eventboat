@@ -11,7 +11,7 @@ commit tracking, per-edge delivery retries, dead lettering, checkpointing and
 backpressure. The package is three files plus tests: `engine.go` (admission,
 persistence, lifecycle), `nodes.go` (transform/sink workers, dead letters),
 `commit.go` (the commit frontier). Every reliability property is phrased as
-one of the seven invariants (see [Architecture](01-architecture.md)), each
+one of the eight invariants (see [Architecture](01-architecture.md)), each
 with a dedicated test in `internal/engine/invariants_test.go`.
 
 ## Startup sequence
@@ -161,7 +161,7 @@ regressing:
 
 Crash recovery is the `Run` prologue: read the checkpoint, replay every
 spool row beyond it (`Store.ReplayFrom`), re-dispatch each into the DAG. Rows
-whose source node no longer exists in the IR are settled immediately rather
+whose source node no longer exists in the IR are committed immediately rather
 than wedging the contiguous prefix forever. Pull sources resume from their
 persisted watermark, so the uncommitted tail may arrive twice: once via
 spool replay, once via re-emission — duplicate delivery, never loss

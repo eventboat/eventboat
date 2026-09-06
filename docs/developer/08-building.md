@@ -99,7 +99,7 @@ There is deliberately **no moving `0.x` tag** while pre-1.0: a floating
 `.github/workflows/ci.yml` runs on every push to `main` and every PR:
 
 - **test** — build, vet, rebuild the WASM guest from source, then
-  `go test -race ./...` (includes the seven invariants, the examples
+  `go test -race ./...` (includes the eight invariants, the examples
   verify/test gate, the gRPC plugin acceptance, the CESQL TCK, the wasm
   tests; the env-gated integration packages skip without their env).
 - **lint** — golangci-lint v2 (v2.13.2) with the repo config

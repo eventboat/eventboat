@@ -16,7 +16,7 @@ in CI. The full suite is `go test ./...`; CI runs it with `-race`.
 | Layer | Where | What it proves |
 |---|---|---|
 | Unit tests | beside the code (`*_test.go` per package) | package-level behavior: loader rules, schema generation, host evaluation, store semantics |
-| Engine invariants | `internal/engine/invariants_test.go` | the seven §6.2 reliability invariants, one test each |
+| Engine invariants | `internal/engine/invariants_test.go` | the eight §6.2 reliability invariants, one test each |
 | Engine behavior | `internal/engine/*_test.go` | delivery, fan-out, split, transform plugins, wasm, CESQL, admission pooling |
 | Persistence/recovery | `internal/engine/commit_persist_test.go`, `retention_test.go`, `internal/store` | flush ordering, retention bounds, crash replay |
 | Golden tests | `internal/cli/testdata/help/`, `internal/registry/builtin/testdata/schemas/` | CLI help screens; generated plugin JSON Schemas |
@@ -25,7 +25,7 @@ in CI. The full suite is `go test ./...`; CI runs it with `-race`.
 | Benchmarks | `internal/engine`, `internal/lang/*`, `internal/wasmhost` | performance gates and the Starlark-vs-WASM comparison |
 | Acceptance | `internal/cli/examples_test.go`, `acceptance_test.go` (root), `internal/rpcplugin/acceptance_test.go`, `internal/cli/agent_loop_test.go` | every example verifies and passes its suites; the custom-build binary links `pkg/plugin` plugins and runs them; the third-party gRPC plugin builds and runs; the full agent loop over MCP stdio |
 
-## The seven engine invariants
+## The eight engine invariants
 
 `internal/engine/invariants_test.go` pins redesign-v3.md §6.2 — these names
 are load-bearing; do not rename them:
@@ -44,6 +44,11 @@ are load-bearing; do not rename them:
   `meta.message_id`, so idempotent sinks can dedup.
 - `TestInvariant_CursorWatermarkNeverExceedsCommitted` — pull-source
   watermarks only advance over committed messages.
+- `TestInvariant_BranchIsolation` — fan-out siblings share the underlying
+  `msg.Decoded`/`msg.Meta` maps, so a transform mutating them in place (the
+  script binding's lazy `remove()`, pre-fix) must never be able to race a
+  sibling branch's encode: the copy-on-write binding isolates the branches,
+  and the process must survive a wide-map fan-out under `-race`.
 
 **The `-race` policy**: the engine and store packages must stay race-clean —
 CI runs `go test -race ./...` on every push. If you add concurrency to either
@@ -188,7 +193,7 @@ pipeline YAML (see `invYAML` in `invariants_test.go` for the minimal
 shape), drive it with `testkit.ManualSource` + `CaptureSink` +
 `StoreWrapper` fault hooks, assert on `Recorder.Captured()` or the store's
 dead letters. If it touches commit/checkpoint ordering, check whether one of
-the seven invariants already covers the class — extend that test's scenario
+the eight invariants already covers the class — extend that test's scenario
 instead of asserting something weaker.
 
 **Add a contract test for a user-visible pipeline behavior**: write the

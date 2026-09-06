@@ -38,7 +38,7 @@ agents that write your pipelines.
   tracker advances the checkpoint only over messages that reached a terminal
   state; crash recovery replays the spool beyond the checkpoint. The
   contract is at-least-once: duplicate delivery is possible, loss is not.
-  Each of the seven reliability invariants has a dedicated test
+  Each of the eight reliability invariants has a dedicated test
   (`TestInvariant_*` in [internal/engine](internal/engine/invariants_test.go)).
 - **Explainable and replayable.** `explain` walks a pipeline symbolically or
   executes it against a sample message (scripts included); `replay`
@@ -340,7 +340,7 @@ examples/             linear, branching, fanin, job-sync, codecs, custom-build, 
 
 ```bash
 go build ./...
-go test ./...          # includes the seven TestInvariant_* reliability tests
+go test ./...          # includes the eight TestInvariant_* reliability tests
 go test -race ./...
 
 # integration suites (gated by env; skipped locally)

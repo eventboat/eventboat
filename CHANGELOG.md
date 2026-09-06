@@ -38,6 +38,16 @@ hygiene findings.
   (`* text=auto eol=lf`, binary marks for .descr/.wasm/.db); golden-file
   tests (`TestSchemaGoldens`, `TestHelpSnapshots`) previously failed on any
   autocrlf checkout.
+- **Documentation drift from the review-2026-09 pass**: the spec body
+  (`redesign-v3.md`) still taught the `from` wiring after the `depends_on`
+  rename — the normative sections and examples are now synced (a v1.20
+  revision note records the rename and the kept-by-design `from` uses: job
+  parameter bindings, `replay --from`); invariant 8 (branch isolation) is
+  added to §6.2 and the invariant counts are corrected from seven to eight
+  across both READMEs and the developer guides; the transform plugin guide's
+  "mutate `msg` in place" guidance is replaced by the message-ownership
+  contract it contradicted; the site landing page's status line is updated
+  from v0.1.0-beta to v0.3.0.
 
 ### Changed
 

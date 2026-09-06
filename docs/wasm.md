@@ -49,7 +49,7 @@ transforms:
   exist is performance cannot default to slower than Starlark (M3-audit J2).
   The trade is an availability risk, not a correctness one: a runaway guest
   wedges exactly one worker — backpressure stalls, no data is lost, the
-  seven invariants hold, a restart clears it. Mitigations around the
+  eight invariants hold, a restart clears it. Mitigations around the
   default: **verify warns** on an unset `timeout_ms`
   (`wasm_no_kill_switch`, upgraded to an error by `--strict`), and the
   **slow-call watchdog** logs once per invoke still running after

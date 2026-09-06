@@ -149,7 +149,7 @@ Resource model — wazero has no instruction metering, so budgets are:
   pipeline restarts. This is a documented tradeoff (M3-audit J2 ruling): a
   tier whose reason to exist is performance cannot default to slower than
   Starlark; the risk is availability, not correctness — no data is lost and
-  the seven invariants hold. Guardrails: the `wasm_no_kill_switch` verify
+  the eight invariants hold. Guardrails: the `wasm_no_kill_switch` verify
   warning (escalated by `--strict`), and the zero-interference slow-call
   watchdog (engine `WasmSlowCallWarnMs`, default 5000ms) logs a wedged
   invoke once.

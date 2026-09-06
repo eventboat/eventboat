@@ -1,7 +1,7 @@
 # v3 从零重设计提案 — Agent 原生事件路由器（零自研语言版）
 
 > **状态：POC 阶段**（提案定稿：定名 Eventboat、License Apache-2.0；v3 全新实现，**不向后兼容 v2**——无迁移义务）
-> **日期：2026-09-03**（修订 v1.1：零自研语言 CEL + Starlark + 性能评估；v1.2：吸收 dagu 作业模型（pipeline 级 `run`/`params`）；v1.3：拓扑结构改为**三段式 `sources`/`transforms`/`sinks` + `from` 连边 + 插件名即键**，命名体系定稿——含 DAG 描述模式调研结论，见 §5.1；v1.4：钩子段 `on`→`hooks`（GH Actions 撞形不同义），新增 consts/params 语义小节 §5.9；v1.5：**全称原则**——自造缩写全部展开：`params`→`parameters`、`consts`→`constants`、`dlq`→`dead_letter_queue`、`catchup`→`catchup_window`、`args`→`arguments`、`max_inflight`→`max_in_flight`，见 §5.1；v1.6：全称原则细化——**约定俗成的行业缩写保留**：`dlq`、`args`、`dsn` 维持缩写，回退 v1.5 对前两项的展开；v1.7：**定名 Eventboat**（§8，六轮核查 + 三选一裁决），全文占位符替换；v1.8：**License 定为 Apache-2.0**（仓库 LICENSE 落地，开放问题 #11 关闭）；v1.9：**明确 POC 阶段、不向后兼容 v2**——`convert` 降为按需工具，开放问题 #12 关闭；v1.10：按实现前审查（redesign-v3-review.md R1–R3）修正 §4.3 沙箱表：`while`/递归/顶层控制流的机制归属统一为 `syntax.FileOptions`，删除不存在的 `strings` 模块；v1.11：M2 落地对账——sql 源补 sqlite 方言（§3.5）、重注入=进入节点执行（§3.3）、§5.8 示例 `%.2f` 修正（go-starlark 的 `%` 不支持浮点格式动词，改 `math.floor`）、§6.6 span 措辞改批粒度近似、开放问题 #10 关闭（`kind: Runtime` + CLI 覆盖，见 redesign-v3-review-m2.md R13）；v1.12：M3 落地对账——`when` 增对象形态 `{lang, expr}`（§4.7），CESQL 标识符为纯字母数字（CloudEvents 属性形状）：带下划线的 meta 键在本方言不可达、`data.*` 扩展经字面量感知重写为合成驼峰标识符（`data.amount`→`dataAmount`，`data` 前缀标识符保留给扩展）；§6.5 补 WASM 资源模型（wazero 无指令计量：每次调用 wall-clock + 内存页双上限；`timeout_ms: 0` = 快速模式无击杀开关——ctx 击杀机制实测约 5× 开销）、guest 形态 = wasip1 **reactor**（标准 Go 工具链 `go build -buildmode=c-shared` 即可构建，无需 TinyGo/Rust）；gRPC 插件协议定稿：stdout 单行 JSON 握手 + 静态 manifest 文件（verify 不 spawn 进程）+ 运行时握手交叉核对 + 节点级 `version:` 版本钉（不符 = verify 错误）；TCK 验收口径 = vendored 自 sdk-go v2.16.2 tag 的官方套件（275 例 100%，spec 仓库 main 已有两处后发漂移），见 redesign-v3-review-m3.md；v1.13：M3 审核裁决 J2——§6.5 WASM 资源模型改为**缺省快速模式**（`timeout_ms` 缺省 0 无击杀，保护显式开启；未设置时 verify 告警 + 慢调用看门狗日志），理由：ctx 击杀约 5× 开销与该档"性能唯一存在理由"（§4.5）冲突，失控 guest 属可用性而非正确性风险）；v1.14：M4 落地对账——`codecs:` 命名声明段落地（§5.10：`name: {type: <codec>, ...配置}`，`decoder`/`encoder` 按名引用，声明名与注册 codec 名两名字空间禁遮蔽）；csv/avro/protobuf codec 落地（选型与 CEL 类型映射见 docs/codecs.md 与 redesign-v3-review-m4.md）；LSP 落地（`eventboat lsp`，手写最小 JSON-RPC——go.lsp.dev/protocol 需 Go 1.26 超本仓 1.25；诊断/补全/hover 数据源全部复用 verify 管线与 registry schema）；`convert` 落地（§4.8 表逐条 + 配置映射，eql1 经 CEL-AST 渲染为 Starlark 并以真实编译器机检，"自动"定义=生成且编译通过；route/filter 折叠为有序边守卫，v2 无匹配静默丢弃 → v3 settle-as-filtered + 计数——结局相同、可观测性变好，记档）；`plugin schema` 独立分发、`repl`（§3.6 自 M1 裁剪后回归）；裁剪记档：Pebble profile（非锚点、查询面需重写）、Operator 降为示例 Deployment 清单 + docs/k8s.md（§6.7 本就 P2）；v1.15：`convert` 移除——确认无生产 v2 配置，迁移工具按 v1.9"按需"定位退役（§7.3 墓碑，§4.8/§7.2 留历史对照，§3.6/§6.8 同步）；v1.16：CLI 分发层迁移 lynx-go/commands v0.2.0（自有零依赖动词分发库，dogfood 落地）——§3.6 总览按实现对齐（test 位置参数、trigger --config、plugin catalog/schema、补 lsp/help 行），帮助三级与 usage 错误（退出码 2 + `usage:` 提示行）入档；v1.17：**内置插件配置的类型安全注册**——schema 与解析收敛到插件自己的 config 结构体（§5.6）：`registry.RegisterSourceT/RegisterSinkT/RegisterCodecT` 从结构体 + `schema` 标签生成 JSON Schema、同标签驱动解码后默认值注入（嵌套结构体递归适用），工厂收强类型 config；手写 schema 字符串与 `map[string]any` 手工断言退役（string 版注册 API 保留为逃生口），默认值"schema 文档与工厂各写一份"的漂移面消除；生成 schema 由 golden 钉住（`testdata/schemas/`，`-update-schemas`）；transforms（script/split/wasm）维持 sections.go 手工解析（精确到字段行号的诊断，价值高于统一性）；v1.18：**术语统一：Settled → Commit**（插件 ABI 与引擎内部全量更名，消除与行业词汇的错位）——源插件契约 `registry.Source.Settled` → `Commit`（gRPC 同步：`rpc Settled` → `rpc Commit`，`SettledRequest/SettledResponse` → `CommitRequest/CommitResponse`，外部插件需重新编译）；引擎内部 `settleTracker` → `commitTracker`、`WaitSettled` → `WaitCommit`、`SettledCount` → `CommittedCount`、span 终态 `settled` → `committed`；指标更名 `eventboat_messages_settled_total` → `eventboat_messages_committed_total`、`eventboat_settle_latency_seconds` → `eventboat_commit_latency_seconds`；作业状态 `settling` → `committing`（旧 SQLite 库中遗留的 settling 状态 run 升级后不再视为活跃，需重新触发）；基准 `BenchmarkSettleThroughput` → `BenchmarkCommitThroughput`；本文正文措辞同步，历史修订记录保留原词；v1.19：**transform 升格为注册插件**（与 source/sink 同级，§5.6）——`registry.KindTransform` 与 `Transform` 接口（`Init(env)`/`Apply(msg) ([]msg, error)`/`Close`，可选 `Clone`（每 worker 一份，wasm 实例非并发安全）与 `Flavor`（script/wasm 指标分型）扩展）落地；`RegisterTransform`（字符串 schema 逃生口）与 `RegisterTransformT`（类型安全，**支持标量根配置**——script 插件的配置就是 Starlark 源文本，非 mapping）就位；内置 script/split/wasm 迁移为注册插件，YAML 形状不变（`script: |`、`split: {}`、`wasm: {...}`），"插件名即键"对 transforms 生效，第三方可编译内注册自定义 transform；插件 transform 单次调用返回 0 条输出 = settle-as-filtered + NoMatch 计数（与边谓词零匹配同语义）；**supersede v1.17 的"transforms 维持手工解析"裁决**（用户裁决：同构优先于字段行号诊断）——字段级错误改以 plugin_schema JSON-pointer 呈现，诊断码集合变化：`cfg_script_type`/`cfg_wasm_*`/`cfg_split_type`/`cfg_transform_main_field` 退役，`expr_starlark_compile`/`expr_wasm_compile`/`wasm_no_kill_switch` 经错误分类保码保留；script 死信 backtrace 的位置前缀由 `transforms.<node>.script` 变为 `script`（插件工厂不知节点名，DLQ 记录自带节点字段）；split 计入 `TransformRuns`；gRPC 进程外 transform 协议仍为后续工作
+> **日期：2026-09-03**（修订 v1.1：零自研语言 CEL + Starlark + 性能评估；v1.2：吸收 dagu 作业模型（pipeline 级 `run`/`params`）；v1.3：拓扑结构改为**三段式 `sources`/`transforms`/`sinks` + `from` 连边 + 插件名即键**，命名体系定稿——含 DAG 描述模式调研结论，见 §5.1；v1.4：钩子段 `on`→`hooks`（GH Actions 撞形不同义），新增 consts/params 语义小节 §5.9；v1.5：**全称原则**——自造缩写全部展开：`params`→`parameters`、`consts`→`constants`、`dlq`→`dead_letter_queue`、`catchup`→`catchup_window`、`args`→`arguments`、`max_inflight`→`max_in_flight`，见 §5.1；v1.6：全称原则细化——**约定俗成的行业缩写保留**：`dlq`、`args`、`dsn` 维持缩写，回退 v1.5 对前两项的展开；v1.7：**定名 Eventboat**（§8，六轮核查 + 三选一裁决），全文占位符替换；v1.8：**License 定为 Apache-2.0**（仓库 LICENSE 落地，开放问题 #11 关闭）；v1.9：**明确 POC 阶段、不向后兼容 v2**——`convert` 降为按需工具，开放问题 #12 关闭；v1.10：按实现前审查（redesign-v3-review.md R1–R3）修正 §4.3 沙箱表：`while`/递归/顶层控制流的机制归属统一为 `syntax.FileOptions`，删除不存在的 `strings` 模块；v1.11：M2 落地对账——sql 源补 sqlite 方言（§3.5）、重注入=进入节点执行（§3.3）、§5.8 示例 `%.2f` 修正（go-starlark 的 `%` 不支持浮点格式动词，改 `math.floor`）、§6.6 span 措辞改批粒度近似、开放问题 #10 关闭（`kind: Runtime` + CLI 覆盖，见 redesign-v3-review-m2.md R13）；v1.12：M3 落地对账——`when` 增对象形态 `{lang, expr}`（§4.7），CESQL 标识符为纯字母数字（CloudEvents 属性形状）：带下划线的 meta 键在本方言不可达、`data.*` 扩展经字面量感知重写为合成驼峰标识符（`data.amount`→`dataAmount`，`data` 前缀标识符保留给扩展）；§6.5 补 WASM 资源模型（wazero 无指令计量：每次调用 wall-clock + 内存页双上限；`timeout_ms: 0` = 快速模式无击杀开关——ctx 击杀机制实测约 5× 开销）、guest 形态 = wasip1 **reactor**（标准 Go 工具链 `go build -buildmode=c-shared` 即可构建，无需 TinyGo/Rust）；gRPC 插件协议定稿：stdout 单行 JSON 握手 + 静态 manifest 文件（verify 不 spawn 进程）+ 运行时握手交叉核对 + 节点级 `version:` 版本钉（不符 = verify 错误）；TCK 验收口径 = vendored 自 sdk-go v2.16.2 tag 的官方套件（275 例 100%，spec 仓库 main 已有两处后发漂移），见 redesign-v3-review-m3.md；v1.13：M3 审核裁决 J2——§6.5 WASM 资源模型改为**缺省快速模式**（`timeout_ms` 缺省 0 无击杀，保护显式开启；未设置时 verify 告警 + 慢调用看门狗日志），理由：ctx 击杀约 5× 开销与该档"性能唯一存在理由"（§4.5）冲突，失控 guest 属可用性而非正确性风险）；v1.14：M4 落地对账——`codecs:` 命名声明段落地（§5.10：`name: {type: <codec>, ...配置}`，`decoder`/`encoder` 按名引用，声明名与注册 codec 名两名字空间禁遮蔽）；csv/avro/protobuf codec 落地（选型与 CEL 类型映射见 docs/codecs.md 与 redesign-v3-review-m4.md）；LSP 落地（`eventboat lsp`，手写最小 JSON-RPC——go.lsp.dev/protocol 需 Go 1.26 超本仓 1.25；诊断/补全/hover 数据源全部复用 verify 管线与 registry schema）；`convert` 落地（§4.8 表逐条 + 配置映射，eql1 经 CEL-AST 渲染为 Starlark 并以真实编译器机检，"自动"定义=生成且编译通过；route/filter 折叠为有序边守卫，v2 无匹配静默丢弃 → v3 settle-as-filtered + 计数——结局相同、可观测性变好，记档）；`plugin schema` 独立分发、`repl`（§3.6 自 M1 裁剪后回归）；裁剪记档：Pebble profile（非锚点、查询面需重写）、Operator 降为示例 Deployment 清单 + docs/k8s.md（§6.7 本就 P2）；v1.15：`convert` 移除——确认无生产 v2 配置，迁移工具按 v1.9"按需"定位退役（§7.3 墓碑，§4.8/§7.2 留历史对照，§3.6/§6.8 同步）；v1.16：CLI 分发层迁移 lynx-go/commands v0.2.0（自有零依赖动词分发库，dogfood 落地）——§3.6 总览按实现对齐（test 位置参数、trigger --config、plugin catalog/schema、补 lsp/help 行），帮助三级与 usage 错误（退出码 2 + `usage:` 提示行）入档；v1.17：**内置插件配置的类型安全注册**——schema 与解析收敛到插件自己的 config 结构体（§5.6）：`registry.RegisterSourceT/RegisterSinkT/RegisterCodecT` 从结构体 + `schema` 标签生成 JSON Schema、同标签驱动解码后默认值注入（嵌套结构体递归适用），工厂收强类型 config；手写 schema 字符串与 `map[string]any` 手工断言退役（string 版注册 API 保留为逃生口），默认值"schema 文档与工厂各写一份"的漂移面消除；生成 schema 由 golden 钉住（`testdata/schemas/`，`-update-schemas`）；transforms（script/split/wasm）维持 sections.go 手工解析（精确到字段行号的诊断，价值高于统一性）；v1.18：**术语统一：Settled → Commit**（插件 ABI 与引擎内部全量更名，消除与行业词汇的错位）——源插件契约 `registry.Source.Settled` → `Commit`（gRPC 同步：`rpc Settled` → `rpc Commit`，`SettledRequest/SettledResponse` → `CommitRequest/CommitResponse`，外部插件需重新编译）；引擎内部 `settleTracker` → `commitTracker`、`WaitSettled` → `WaitCommit`、`SettledCount` → `CommittedCount`、span 终态 `settled` → `committed`；指标更名 `eventboat_messages_settled_total` → `eventboat_messages_committed_total`、`eventboat_settle_latency_seconds` → `eventboat_commit_latency_seconds`；作业状态 `settling` → `committing`（旧 SQLite 库中遗留的 settling 状态 run 升级后不再视为活跃，需重新触发）；基准 `BenchmarkSettleThroughput` → `BenchmarkCommitThroughput`；本文正文措辞同步，历史修订记录保留原词；v1.19：**transform 升格为注册插件**（与 source/sink 同级，§5.6）——`registry.KindTransform` 与 `Transform` 接口（`Init(env)`/`Apply(msg) ([]msg, error)`/`Close`，可选 `Clone`（每 worker 一份，wasm 实例非并发安全）与 `Flavor`（script/wasm 指标分型）扩展）落地；`RegisterTransform`（字符串 schema 逃生口）与 `RegisterTransformT`（类型安全，**支持标量根配置**——script 插件的配置就是 Starlark 源文本，非 mapping）就位；内置 script/split/wasm 迁移为注册插件，YAML 形状不变（`script: |`、`split: {}`、`wasm: {...}`），"插件名即键"对 transforms 生效，第三方可编译内注册自定义 transform；插件 transform 单次调用返回 0 条输出 = settle-as-filtered + NoMatch 计数（与边谓词零匹配同语义）；**supersede v1.17 的"transforms 维持手工解析"裁决**（用户裁决：同构优先于字段行号诊断）——字段级错误改以 plugin_schema JSON-pointer 呈现，诊断码集合变化：`cfg_script_type`/`cfg_wasm_*`/`cfg_split_type`/`cfg_transform_main_field` 退役，`expr_starlark_compile`/`expr_wasm_compile`/`wasm_no_kill_switch` 经错误分类保码保留；script 死信 backtrace 的位置前缀由 `transforms.<node>.script` 变为 `script`（插件工厂不知节点名，DLQ 记录自带节点字段）；split 计入 `TransformRuns`；gRPC 进程外 transform 协议仍为后续工作；v1.20：**连线字段 `from` 更名回 `depends_on`**（§5.3，v1.3 命名裁决回退）——`from` 的介词暗示存在配对的 `to` 字段，而模型是"消费方声明上游、下游隐式"（图模型端点命名 ir.Edge{From,To} 不变）；硬切换无兼容别名：旧配置 verify 报 `cfg_from_renamed` 指向新拼写（`from` 保留为保留插件名，迁移消息不可被同名插件遮蔽），诊断码随键更名：`cfg_missing_from`→`cfg_missing_depends_on`、`cfg_bad_from`→`cfg_bad_depends_on`、`cfg_source_with_from`→`cfg_source_with_depends_on`，LSP 补全/hover 跟随；不受影响：作业参数绑定名 `from`（`parameters:` / `trigger --parameters`）、`eventboat replay --from` 标志；另新增**不变量 8（分支隔离，§6.2）**——fan-out 兄弟分支共享底层 Decoded/Meta map，transform 原地修改会与兄弟分支的编码竞争（Starlark `remove()` 懒删除路径曾致不可恢复的 concurrent map 崩溃），COW 绑定在删除前物化副本；消息所有权契约（transform 必须整体替换、绝不原地修改）记档于 registry.Message 与 pkg/plugin；本文正文措辞同步
 >
 > 本文回答一个问题：**如果抛开 v2 现有实现，从零重新设计这个产品的方案、功能、配置方式和架构，应该长成什么样。**
 >
@@ -155,7 +155,7 @@ review-2026-08 的核心发现（同日已修复大部分，但暴露的是**机
 `eventboat verify --config p.yaml [--json]`，CI 与 Agent 共用同一入口。全部检查**静态、确定性、零副作用**：
 
 1. **Schema 校验**：管道配置与每个插件配置块都按注册的 JSON Schema 严格校验（未知字段 = 错误，不是警告）；node 层框架字段按白名单枚举（§5.3）。
-2. **拓扑不变量**：node 名跨三段全局唯一；`from` 引用存在；source 无入边、sink 无出边；无环；至少一条 source→sink 通路；无孤立节点。
+2. **拓扑不变量**：node 名跨三段全局唯一；`depends_on` 引用存在；source 无入边、sink 无出边；无环；至少一条 source→sink 通路；无孤立节点。
 3. **表达式与脚本编译**：
    - 全部 `when` / filter 谓词按 **CEL 编译**（cel-go，含类型检查；有 payload schema 时未知字段 warning）；
    - 全部 `transforms.*.script` 按 **Starlark 编译 + resolve**（go-starlark 的 resolver 在编译期抓未定义名、函数 arity 错误），外加宿主 lint（禁用模块/函数引用白名单检查，见 §4.4）。
@@ -299,7 +299,7 @@ eventboat help       [<verb>]                         帮助三级：无参 / -h
 
 ```yaml
 # 边条件（CEL）
-from: { enrich: { when: 'meta.region == "eu" && payload.total > 100' } }
+depends_on: { enrich: { when: 'meta.region == "eu" && payload.total > 100' } }
 ```
 
 ### 4.3 Starlark 集成规范（映射层）
@@ -311,7 +311,7 @@ from: { enrich: { when: 'meta.region == "eu" && payload.total > 100' } }
 ```yaml
 transforms:
   enrich:
-    from: [ingest]
+    depends_on: [ingest]
     script: |
       payload.total = payload.price * payload.qty
       payload.label = "order-%s-%s" % (payload.id, meta.region)
@@ -402,7 +402,7 @@ WASM / gRPC  重计算/任意语言/外部依赖（近原生，进程隔离）
 `when` 支持 opt-in 的 CESQL 方言（CloudEvents 生态互操作）。两种形态：字符串（CEL，默认）或对象：
 
 ```yaml
-- from: { enrich: { when: { lang: cesql, expr: "type = 'com.example.order' AND region = 'EU'" } } }
+- depends_on: { enrich: { when: { lang: cesql, expr: "type = 'com.example.order' AND region = 'EU'" } } }
 ```
 
 语义映射（v1.12 对账）：CESQL 上下文属性 → `meta`；`data.*` 扩展路径触达 `payload`（文档明示为规范扩展）；主语法保持 CEL；CESQL 是互操作出口，不是主方言。方言约束（诚实声明）：CESQL 标识符为纯字母数字（CloudEvents 属性形状），带下划线的 meta 键（`kafka_offset` 等）在本方言不可达（用 CEL）；`data.*` 经预解析重写为合成驼峰标识符（`data.amount`→`dataAmount`），`data` 前缀标识符保留给扩展；扩展模式 = "CESQL 子集 + 文档化扩展"，不宣称兼容（开放问题 #5）。纯模式跑官方 [CESQL TCK](https://github.com/cloudevents/spec/blob/main/cesql/README.md) 进 CI（口径：vendored 自 sdk-go v2.16.2 的官方套件，275 例 100%）。
@@ -453,7 +453,7 @@ M4 落地注记（v1.14）：`convert` 已实现——"自动迁移"的机器定
 |------|------|----------|
 | 资源层 | `apiVersion` / `kind` / `metadata` | K8s 词汇（CRD 血统） |
 | 执行策略层 | `run` / `parameters` / `constants` / `hooks` / `limits` | 作业面词汇（dagu 同位；limits 是 K8s 习惯词） |
-| 拓扑层 | `sources` / `transforms` / `sinks` + `from` | 数据流词汇（Vector/Flume 谱系）+ 图词汇（边 = from→to） |
+| 拓扑层 | `sources` / `transforms` / `sinks` + `depends_on` | 数据流词汇（Vector/Flume 谱系）+ 图词汇（显式连边，消费方声明上游） |
 | 算子层 | `decoder` / `encoder` / `workers` / `order_key` / `batch` / `version`；transform 插件名（`script`·`split`·`wasm` 及注册插件） | 数据流词汇 |
 | 边属性层 | `when` / `route` / `buffer` / `delivery` / `required` | 投递词汇（DeliverySpec 谱系） |
 | 观测定制层 | `telemetry` | OTel 词汇（OTel 自身内部配置同名） |
@@ -465,7 +465,7 @@ M4 落地注记（v1.14）：`convert` 已实现——"自动迁移"的机器定
 | **P1 邻接表·单容器**（下游声明依赖） | GitHub Actions `needs`、Argo `dependencies`、Tekton `runAfter`+`when`、dagu `depends` | **作业面系统的通用语法**（任务是同质执行单元） |
 | **P2 按角色分段**（引用连边）✅ | Vector `sources/transforms/sinks`+`inputs`、OTel `receivers/processors/exporters/connectors`、Flume | **数据面系统的主流语法**（组件是异质角色） |
 
-我们是数据面、且作业语义不进拓扑（pipeline 级 `run`）→ **P2**。2026 年的行业分裂进一步佐证：作业面正全面 code-first 化（Temporal/Inngest/Restate/durable execution 浪潮），留守 config-driven 的恰是数据面工具。P2 的演进路径有实证：OTel 通过增加 `connectors` 段支持双角色组件——未来若做跨管道连接器，加段即可（纯加法，见开放问题 #8）。Tekton 的 `when` 挂在任务（入边守卫）上是与我们 `from: {x: {when}}` 最接近的先例。
+我们是数据面、且作业语义不进拓扑（pipeline 级 `run`）→ **P2**。2026 年的行业分裂进一步佐证：作业面正全面 code-first 化（Temporal/Inngest/Restate/durable execution 浪潮），留守 config-driven 的恰是数据面工具。P2 的演进路径有实证：OTel 通过增加 `connectors` 段支持双角色组件——未来若做跨管道连接器，加段即可（纯加法，见开放问题 #8）。Tekton 的 `when` 挂在任务（入边守卫）上是与我们 `depends_on: {x: {when}}` 最接近的先例。
 
 **三段式同时完成的减负**（相对"单容器 + nodes/步骤名"方案）：
 
@@ -473,21 +473,21 @@ M4 落地注记（v1.14）：`convert` 已实现——"自动迁移"的机器定
 |------|------|
 | 容器消灭 | 拓扑不再需要统一容器名（`steps`/`nodes` 的命名问题消失）；`node` 降级为概念词（explain/status/IR），不是配置键 |
 | `type` + `config` 双包装消灭 | **插件名即键**：`kafka: {...}`、`sql: {...}`——少一层嵌套少一个冗余 token |
-| 字段分层规则 | **node 层只有框架字段白名单**（`from`/`decoder`/`encoder`/`workers`/`order_key`/`batch`，transforms 段另有 `version`），**插件块内只有插件字段、零保留字**——v2 式"保留字与插件字段撞名"结构性消失 |
+| 字段分层规则 | **node 层只有框架字段白名单**（`depends_on`/`decoder`/`encoder`/`workers`/`order_key`/`batch`，transforms 段另有 `version`），**插件块内只有插件字段、零保留字**——v2 式"保留字与插件字段撞名"结构性消失 |
 | kind 结构化 | 所在段即类型；v2 的合体 step（transform+sink）**物理上无法表达**（病根切除）；代价：换类型要跨段移动（低频可接受） |
 | transform 插件键 | v1.19：`script`（Starlark）/ `split` / `wasm` 与第三方 transform 同为注册插件，插件名即键、四段一致 |
 
-其余命名决定：`depends_on`→`from`（字段指"边"而非"组件"，与 explain 同语）；`transform.map`→`script`；`defaults`→`edge_defaults`；`run.mode: continuous | job` 二值；`observability`→`telemetry`；`on`→`hooks`（GH Actions 的 `on:` 是"何时触发"语义，撞形不同义）。**全称原则（v1.5，v1.6 细化）**：自造缩写一律展开——`params`→`parameters`、`consts`→`constants`（前身 `vars`）、`catchup`→`catchup_window`、`max_inflight`→`max_in_flight`、cron 源时间字段用 `expression`；MCP 工具与 CLI 标志跟随概念名（`--parameters`、`replay --dlq`、`dlq_query`）。**约定俗成的行业缩写保留**：`dlq`（Kafka Connect/RabbitMQ/SQS 生态通用）、`args`（命令行传统）、`dsn`。**保留的专有名词**（是名字不是缩写）：CEL、cron、MCP、OTLP、JSON、URL、codec、REPL。否决记录：`receivers/processors/exporters`（绑遥测语境）、`input/filter/output`（filter 名不副实、input 与 source 撞车）、`inputs` 边字段（指组件不指边，带属性时语义拧）、`junctions`/`stations`（单容器方案随 P1 一起落选）、`stages`/`tasks`（v2 术语掘墓/作业面撞车）。
+其余命名决定：`depends_on`→`from`（v1.3 裁决：字段指"边"而非"组件"，与 explain 同语；**v1.20 回退为 `depends_on`**——`from` 的介词暗示配对 `to`，而模型是消费方声明上游，见修订记录）；`transform.map`→`script`；`defaults`→`edge_defaults`；`run.mode: continuous | job` 二值；`observability`→`telemetry`；`on`→`hooks`（GH Actions 的 `on:` 是"何时触发"语义，撞形不同义）。**全称原则（v1.5，v1.6 细化）**：自造缩写一律展开——`params`→`parameters`、`consts`→`constants`（前身 `vars`）、`catchup`→`catchup_window`、`max_inflight`→`max_in_flight`、cron 源时间字段用 `expression`；MCP 工具与 CLI 标志跟随概念名（`--parameters`、`replay --dlq`、`dlq_query`）。**约定俗成的行业缩写保留**：`dlq`（Kafka Connect/RabbitMQ/SQS 生态通用）、`args`（命令行传统）、`dsn`。**保留的专有名词**（是名字不是缩写）：CEL、cron、MCP、OTLP、JSON、URL、codec、REPL。否决记录：`receivers/processors/exporters`（绑遥测语境）、`input/filter/output`（filter 名不副实、input 与 source 撞车）、`inputs` 边字段（指组件不指边，带属性时语义拧）、`junctions`/`stations`（单容器方案随 P1 一起落选）、`stages`/`tasks`（v2 术语掘墓/作业面撞车）。
 
 ### 5.2 决策总表
 
 | 决策 | v2 | v3 | 理由 |
 |------|----|----|------|
 | 格式 | YAML + HOCON"对等" | **仅 YAML**（YAML 1.2，天然接受 JSON） | 双格式双维护且已分叉；CRD/CI/Agent 全都要 YAML |
-| 拓扑结构 | steps 单容器 + 三套写法 | **三段式 `sources`/`transforms`/`sinks` + `from`**（§5.1 模式学） | 数据面主流语法；kind 结构化；容器命名问题消失 |
+| 拓扑结构 | steps 单容器 + 三套写法 | **三段式 `sources`/`transforms`/`sinks` + `depends_on`**（§5.1 模式学） | 数据面主流语法；kind 结构化；容器命名问题消失 |
 | 插件引用 | `type:` + `config:` 双层 | **插件名即键** | 少一层嵌套；字段分层规则消灭保留字冲突 |
 | 合体 step | transform+sink 自动展开 | **无法表达**（结构杜绝） | 消灭隐藏 id；配置拓扑=运行时拓扑 |
-| from 形态 | 序列/映射两种顶层 × 元素字符串/对象 | **两种元素形态**：`"name"` 或 `{name: {attrs}}` | 收敛 |
+| depends_on 形态 | 序列/映射两种顶层 × 元素字符串/对象 | 顶层 = 名字/列表/单键映射；**元素两种形态**：`"name"` 或 `{name: {attrs}}` | 收敛（v1.20 回归 depends_on 命名，形态不变） |
 | route | transform 写 `er-route` + 边引用 | **边 `when` + 命名 route（糖）** | 静态可见、explain 可推演 |
 | 谓词语言 | eql（CEL 魔改） | **CEL 原样**（§4.2） | K8s 标准、语料最大、编译期检查 |
 | 映射语言 | eql（CEL+赋值缝合） | **Starlark**（§4.3） | Python 方言、语料最大、沙箱内建 |
@@ -499,7 +499,7 @@ M4 落地注记（v1.14）：`convert` 已实现——"自动迁移"的机器定
 | 默认值继承 | edgeDefaults→边→engine→transform 四层 | **两层**：`edge_defaults` → 边级 | 可追溯 |
 | 资源 vs 运行时 | 混在管道配置里（engine/observability 段） | **分离**：Pipeline 资源只放"管道是什么"（`limits`/`telemetry` 仅本管道定制）；全局端点/存储路径/admin 端口在部署级配置文件 | CRD 血统的必然要求 |
 
-### 5.3 唯一写法：三段式 + from
+### 5.3 唯一写法：三段式 + depends_on
 
 ```yaml
 apiVersion: eventboat/v3
@@ -518,34 +518,34 @@ sources:
 
 transforms:
   enrich:
-    from: [ingest]                         # 边：字符串元素（无条件）
+    depends_on: [ingest]                   # 边：字符串元素（无条件）
     script: |                              # 插件键（v1.19）：script | split | wasm 或任一注册 transform 插件
       payload.total = payload.price * payload.qty
       payload.label = "order-%s-%s" % (payload.id, meta.region)
 
 sinks:
   eu-out:
-    from: { enrich: { when: 'meta.region == "eu"' } }    # 边：对象元素（CEL 条件）
+    depends_on: { enrich: { when: 'meta.region == "eu"' } }    # 边：对象元素（CEL 条件）
     encoder: json
     kafka: { topic: orders-eu }
   us-out:
-    from: { enrich: { when: 'meta.region == "us"' } }
+    depends_on: { enrich: { when: 'meta.region == "us"' } }
     http: { url: https://us-api.example.com/orders }
 ```
 
 要点：
 
-- 节点名跨三段全局唯一；`from` 可跨段引用任意上游（fan-in 混合引用合法：`from: [sourceA, transformB]`）。
-- `from` 只接受两种元素形态：字符串（无条件边）或**单键对象**（键=上游名，值=边属性：`when`/`route`/`buffer`/`delivery`/`required` 全部可选）。
-- 一条边 = `{from, to} + attrs`，`explain --topology` 输出的边与配置一一对应。
-- 最小线性管道的地板（约 10 行）：三段各一个条目 + 两个 `from`——**DAG 的全部仪式感只剩 `from` 一行一条**，这是显式边的必要重量，不再减（隐式链式 = dagu chain 模式 = "两种写法"，已否决）。
+- 节点名跨三段全局唯一；`depends_on` 可跨段引用任意上游（fan-in 混合引用合法：`depends_on: [sourceA, transformB]`）。
+- `depends_on` 顶层接受单个名字、列表或单键映射；元素只有两种形态：字符串（无条件边）或**单键对象**（键=上游名，值=边属性：`when`/`route`/`buffer`/`delivery`/`required` 全部可选）。
+- 一条边 = `{from, to} + attrs`（图模型端点，配置字段为 `depends_on`），`explain --topology` 输出的边与配置一一对应。
+- 最小线性管道的地板（约 10 行）：三段各一个条目 + 两个 `depends_on`——**DAG 的全部仪式感只剩 `depends_on` 一行一条**，这是显式边的必要重量，不再减（隐式链式 = dagu chain 模式 = "两种写法"，已否决）。
 
 ### 5.4 route 显式化
 
 ```yaml
 sinks:
   vip-out:
-    from: { classify: { route: high-value } }    # 命名 route
+    depends_on: { classify: { route: high-value } }    # 命名 route
 ```
 
 `route: high-value` 是**编译期糖**：等价于 `when: 'meta.route == "high-value"'`，其中 `meta.route` 由上游 `classify` 节点的脚本写入——但不同于 v2，这个展开结果**在 verify 输出与 explain 里可见**（`route 'high-value' → compiled to when meta.route == "high-value"`），不再是隐式协议。上游必须存在对 `meta.route` 的赋值，否则 verify 报"悬空 route"。
@@ -616,16 +616,16 @@ sources:
     kafka: { brokers: ["${KAFKA_BROKERS}"], topics: [orders] }
 transforms:
   enrich:
-    from: [ingest]
+    depends_on: [ingest]
     script: |
       payload.total = payload.price * payload.qty
 sinks:
   eu-out:
-    from: { enrich: { when: 'meta.region == "eu"' } }
+    depends_on: { enrich: { when: 'meta.region == "eu"' } }
     encoder: json
     kafka: { topic: orders-eu }
   us-out:
-    from: { enrich: { when: 'meta.region == "us"' } }
+    depends_on: { enrich: { when: 'meta.region == "us"' } }
     http: { url: https://us-api.example.com/orders }
 ```
 
@@ -681,7 +681,7 @@ sources:
 
 transforms:
   enrich:
-    from: [pull]
+    depends_on: [pull]
     script: |
       payload.source_system = constants.source_system
       if not payload.region:
@@ -690,7 +690,7 @@ transforms:
 
 sinks:
   out:
-    from: [enrich]
+    depends_on: [enrich]
     encoder: json
     order_key: 'payload.order_no'
     kafka:
@@ -800,7 +800,8 @@ source ──▶ [spool: 每管道一条 append-only 持久队列] ──▶ 内
 4. 死信写入失败时消息不得 commit（死信本身带重试，死信不可用 = 管道降速而非丢消息）；
 5. `required:false` 边的失败只影响自身分支，不阻塞其他分支 commit；
 6. 同一消息重复投递到幂等 sink 的结果是安全的（文档化的用户责任 + `meta.message_id` 供幂等键使用）；
-7. 拉取源水位只推进到已 commit 消息的 max(cursor_column)（作业管道续传正确性）。
+7. 拉取源水位只推进到已 commit 消息的 max(cursor_column)（作业管道续传正确性）；
+8. fan-out 兄弟分支相互隔离：分支共享底层 Decoded/Meta map（deliver 浅拷贝 struct），transform 必须整体替换字段值、绝不原地修改——原地写会与兄弟分支的编码竞争（曾由 Starlark `remove()` 懒删除路径触发的不可恢复 concurrent map 崩溃实证；消息所有权契约记档于 registry.Message 与 pkg/plugin）。
 
 **被删除的机制**（复杂度减法）：per-edge 磁盘缓冲、跨边 per-message refCount、磁盘 buffer 的三态（memory/disk/overflow）与 when_full 矩阵——全部由"入口持久化 + commit"覆盖，且语义只强不弱。
 
@@ -892,7 +893,7 @@ internal/
 | 领域 | v2 | v3 |
 |------|----|----|
 | 定位 | DAG 事件路由器（Agent 优先是路线图项） | Agent 原生事件路由器（四道关卡即产品） |
-| 配置 | YAML+HOCON、三套拓扑写法、合体展开、四层默认值 | 仅 YAML、**三段式 sources/transforms/sinks + from、插件名即键**、overlay、两层默认值 |
+| 配置 | YAML+HOCON、三套拓扑写法、合体展开、四层默认值 | 仅 YAML、**三段式 sources/transforms/sinks + depends_on、插件名即键**、overlay、两层默认值 |
 | 谓词语言 | eql（CEL 魔改） | **CEL 原样**（K8s 标准，零扩展） |
 | 映射语言 | eql（CEL+赋值缝合） | **Starlark**（Python 方言，go-starlark 沙箱宿主） |
 | 语言维护成本 | 自研方言（漂移中） | **零**（两个现成实现 + 胶水） |
@@ -921,7 +922,7 @@ internal/
 
 | 阶段 | 内容 | 验收标准 |
 |------|------|----------|
-| **M1 内核与语言** | engine（spool/commit/checkpoint/背压）+ **CEL 谓词宿主 + Starlark 映射宿主**（预编译、惰性绑定+COW、沙箱白名单、步数预算、safe_ 糖函数、lint）+ verify/test + 内置 P0 插件（kafka/http_server/cron/file 源；kafka/http/file/drop 汇；json/raw codec）+ CLI（run/verify/test/repl/plugin） | §6.2 七条不变量各有一条专属测试且通过；**§4.6 基准套件（三类脚本 × 速率）进 CI 回归门，数字写进文档**；conformance 语料（CEL/Starlark 行为 + lint 规则）进 CI；`_examples` 全部 verify+test 通过 |
+| **M1 内核与语言** | engine（spool/commit/checkpoint/背压）+ **CEL 谓词宿主 + Starlark 映射宿主**（预编译、惰性绑定+COW、沙箱白名单、步数预算、safe_ 糖函数、lint）+ verify/test + 内置 P0 插件（kafka/http_server/cron/file 源；kafka/http/file/drop 汇；json/raw codec）+ CLI（run/verify/test/repl/plugin） | §6.2 八条不变量各有一条专属测试且通过；**§4.6 基准套件（三类脚本 × 速率）进 CI 回归门，数字写进文档**；conformance 语料（CEL/Starlark 行为 + lint 规则）进 CI；`_examples` 全部 verify+test 通过 |
 | **M2 作业管道与操作面** | **作业面（`run`/`parameters`/`hooks`/`catchup_window`/`overlap` + 作业历史 + `sql` 源 + `trigger`/`jobs` 命令）** + explain/replay + MCP server + Admin REST + SSE + 内嵌只读 UI + OTel 全量 | 一个 Agent 仅凭 MCP tools 完成"生成配置→verify→test→explain→deploy→观察→手动触发回补→修错→再部署"闭环（真实 Agent 会话录制验收）；作业中断续传（kill -9 后从水位续跑）有专项测试 |
 | **M3 扩展阶梯** | WASM transform（wazero，标准 Go 工具链构建 wasip1 reactor guest）+ gRPC source/sink 协议 + 插件 SDK 文档 + CESQL 方言（TCK 进 CI） | 第三方按文档实现一个 gRPC source 插件并跑通全链路；TCK 纯模式 100% 通过；基准证明 WASM 档对重度脚本的收益（快速模式 ~2.3× + 分配数 ~30000×，默认击杀模式如实记录 ~5× 开销） |
 | **M4 生态** ✅ | Schema 发布（`plugin schema` 独立分发）、LSP、csv/avro/protobuf codec、性能 profile（Pebble 后端）、Operator（薄封装）、convert 工具完善 | IDE 内写管道有补全与诊断（v2 示例 convert 仅作为 convert 工具自身的按需验收）——M4 落地（v1.14 对账）：两个锚点达成（LSP 协议集成测试 + vscode 最小扩展；v2 全部 12 个示例/testdata convert 后 verify 全绿 + 快照入 CI + 三例语义等价抽查转正为永久测试）；Pebble profile 裁剪记档（查询面需重写，非锚点）；Operator 降为示例 Deployment 清单 + docs/k8s.md（§6.7 本就 P2）；repl 回归 |

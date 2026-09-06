@@ -87,7 +87,7 @@ Rules of thumb distilled from the log:
 | a CLI flag or usage string | regenerate help goldens (`go test ./internal/cli -update`) |
 | a metric | add the instrument in `internal/obs/obs.go`; record it where the event happens; this developer guide's metrics table |
 | a diagnostic code | add it to the diagnostics table in [Configuration & diagnostics](04-config-pipeline.md); codes are API — do not rename, retire with a mapping in the CHANGELOG |
-| the engine's delivery/commit paths | keep the seven invariants green and run `-race`; extend the relevant `TestInvariant_*` scenario if you changed a guarantee |
+| the engine's delivery/commit paths | keep the eight invariants green and run `-race`; extend the relevant `TestInvariant_*` scenario if you changed a guarantee |
 | the spool/checkpoint format or retention | the retention tests (`internal/engine/retention_test.go`) and the kill-9 replay invariant |
 | a user-visible behavior | a CHANGELOG Unreleased entry in the same commit |
 
