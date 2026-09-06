@@ -12,6 +12,40 @@ hygiene findings.
 
 ### Added
 
+- **`run.mode: batch` — pipelines that run to completion** (spec v1.24):
+  a continuous-shaped pipeline whose sources terminate (a `file` source with
+  the new `on_eof: stop`) makes `eventboat run` exit BY ITSELF once the
+  engine is quiesced — every source exhausted, nothing uncommitted, every
+  commit advance flushed. Exit codes align with `trigger`'s job statuses:
+  success=0, completed-with-dead-letters or failed source=1, interrupted=1.
+  The completion policy lives in one shared engine primitive
+  (`Engine.WaitQuiesced`, quiesce-poll + fatal fold-in) consumed by both the
+  batch runner and the jobs runner (the jobs wait loop is refactored onto it,
+  which also fixes a latent drop: a worker-fatal racing the quiesce poll is
+  now folded into the run's terminal state instead of being discarded).
+  Verify warns `batch_no_finite_source` (strict-escalated) when nothing
+  declares finite exhaustion — the run would hang. In the config-dir daemon
+  a batch pipeline transitions to a new `completed` status (distinct from
+  the admin-initiated `drained`), with source failures now surfaced on the
+  pipeline's error field via `OnSourceError`; the admin UI renders the new
+  state. `run.mode: batch` pipelines take no `parameters:` (job-only) and no
+  `schedule`.
+- **Finite file sources (`on_eof: stop`) and file-source job eligibility**:
+  the file source gains `on_eof: tail|stop` (default `tail` = today's
+  tailing semantics, zero change). `stop` is for COMPLETE batch files: once
+  the file is read to its end the source returns exhausted — which makes it
+  job-eligible (`capabilities: [pull, finite]`; the engine drives `Run` for
+  job sources without a `Pull` method and the nil return IS the exhaustion
+  signal), so `eventboat trigger` performs one complete read-and-commit pass
+  in-process and exits. Under `stop` a missing file is a loud source error
+  (mechanically ending the silent-zero-output failure mode); under `tail` a
+  missing file now waits inside the poll loop via the existing reopen path
+  (previously the source goroutine exited permanently at startup and the
+  reopen code was unreachable — the comment promised a behavior the code
+  didn't have). The byte offset stays the persisted watermark: re-triggering
+  a file job re-reads nothing until the file grows. Verify warns
+  `job_file_source_no_eof` (strict-escalated) for job pipelines whose file
+  source doesn't stop.
 - **Built-in `debug` sink**: prints each message as one line on stderr —
   the "just show me the data" edge for pipeline debugging. An optional
   `prefix` labels the output so fan-out branches can be told apart; stderr
@@ -85,9 +119,34 @@ hygiene findings.
   "mutate `msg` in place" guidance is replaced by the message-ownership
   contract it contradicted; the site landing page's status line is updated
   from v0.1.0-beta to v0.3.0.
+- **The fanin example ships its input data**: `pipeline.yaml` tails
+  `input/orders.jsonl` + `input/refunds.jsonl`, but neither file was ever
+  committed — and `file` paths resolve against the process working
+  directory, so running from anywhere but the example directory found
+  nothing and the source silently produced zero messages (no error: a
+  missing file is "nothing to tail yet"). Sample data now ships and a
+  README states the run-from-this-directory requirement; end-to-end
+  verified (5 messages fan through `stamp` onto `output/audit.jsonl`).
+  linear, branching and codecs have the same gap and are still
+  contract-test-only.
 
 ### Changed
 
+- **BREAKING: `registry.Source.Run` returns `error`** (pkg/plugin aliases
+  follow; compiled-in plugins must be rebuilt, v1.18 precedent). The return
+  value is the source's completion signal: nil = exhausted or voluntary
+  stop, non-nil = failed source — routed to `OnSourceError`/`SourceErrors`
+  exactly like a pull failure (previously the engine hardwired push-source
+  completion to "done, no error" and a failed source was indistinguishable
+  from a stopped one; the gRPC adapter's comment said so in as many words).
+  ctx cancellation is defined as a VOLUNTARY stop — sources return nil, never
+  ctx.Err() — and all builtins now honor it (the sql source previously
+  surfaced wrapped cancellation errors as failures). The out-of-process gRPC
+  protocol is UNCHANGED: a clean Run-stream end already mapped to
+  exhaustion on the wire; the host adapter now propagates it instead of
+  swallowing it. `http_server` sources now fail loudly on bind errors (port
+  occupied) instead of returning silently. `Options.OnSourceError` fires for
+  every source kind, not just pull sources.
 - **Breaking: the config `apiVersion` is renamed from `eventboat/v3` to
   `eventboat/v1`** — the version stamps the config format's own generation,
   not the redesign document that produced it; `v3` leaked the internal spec

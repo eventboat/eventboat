@@ -17,6 +17,12 @@
       "type": "string",
       "enum": ["beginning", "end"],
       "default": "beginning"
+    },
+    "on_eof": {
+      "type": "string",
+      "enum": ["tail", "stop"],
+      "default": "tail",
+      "description": "tail keeps polling for appended lines; stop finishes the source once the file is read to its end (complete batch files)"
     }
   },
   "additionalProperties": false

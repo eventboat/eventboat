@@ -25,12 +25,16 @@ var topLevelSections = []string{
 // script/split/wasm are not listed for transforms: they are registered
 // transform plugins and arrive through pluginItems (the catalog).
 var frameworkFields = map[string][]string{
+	"run":        {"mode", "schedule", "overlap", "catchup_window", "skip_if_successful", "retention"},
 	"sources":    {"decoder", "grpc", "version"},
 	"transforms": {"depends_on", "workers", "version"},
 	"sinks":      {"depends_on", "encoder", "workers", "order_key", "batch", "grpc", "version"},
 }
 
 var frameworkDocs = map[string]string{
+	"mode":       "run mode: continuous (default) | job (§5.8 schedules/parameters) | batch (run to completion, then exit)",
+	"schedule":   "5-field cron for job pipelines; requires run.mode: job",
+	"overlap":    "job overlap policy: skip (default) | all | latest",
 	"depends_on": "upstream nodes this node depends on: a name, a list, or `{name: {when: ...}}` — one entry per upstream",
 	"decoder":    "codec name applied to inbound bytes at the source (default json)",
 	"encoder":    "codec name applied to the payload at the sink (default json)",
@@ -230,6 +234,18 @@ func (s *Server) completionsFor(text string, line, character int) []completionIt
 			return filter([]completionItem{
 				{Label: "cel", Kind: kindEnum, InsertText: "cel"},
 				{Label: "cesql", Kind: kindEnum, InsertText: "cesql"},
+			})
+		case "mode":
+			return filter([]completionItem{
+				{Label: "continuous", Kind: kindEnum, InsertText: "continuous"},
+				{Label: "job", Kind: kindEnum, InsertText: "job"},
+				{Label: "batch", Kind: kindEnum, InsertText: "batch"},
+			})
+		case "overlap":
+			return filter([]completionItem{
+				{Label: "skip", Kind: kindEnum, InsertText: "skip"},
+				{Label: "all", Kind: kindEnum, InsertText: "all"},
+				{Label: "latest", Kind: kindEnum, InsertText: "latest"},
 			})
 		}
 	}

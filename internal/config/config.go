@@ -108,7 +108,7 @@ type Limits struct {
 // with a run block in mode job executes as a job: scheduled or triggered
 // runs with catchup, overlap control and run history.
 type RunSpec struct {
-	Mode             string        // "continuous" (default) | "job"
+	Mode             string        // "continuous" (default) | "job" | "batch"
 	Schedule         string        // 5-field cron; empty = manual/trigger only
 	Overlap          string        // skip (default) | all | latest
 	CatchupWindow    time.Duration // missed-tick compensation window; 0 = no catchup
@@ -126,6 +126,14 @@ type DLQSpec struct {
 
 // IsJob reports whether the pipeline runs in job mode.
 func (p *Pipeline) IsJob() bool { return p.Run != nil && p.Run.Mode == "job" }
+
+// IsBatch reports whether the pipeline runs to completion (run.mode: batch,
+// v1.24): the run finishes — and a plain `eventboat run` exits — once every
+// source has exhausted and all work is committed. Batch pipelines are
+// continuous-shaped (any source/transform/sink DAG), but their sources must
+// terminate (a file source with on_eof:stop); job machinery (schedules,
+// parameters, run history) is job-mode-only.
+func (p *Pipeline) IsBatch() bool { return p.Run != nil && p.Run.Mode == "batch" }
 
 // ParameterSpec is one typed job parameter declaration (§5.8/§5.9).
 type ParameterSpec struct {

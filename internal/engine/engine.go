@@ -82,8 +82,10 @@ type Options struct {
 	// Obs receives OpenTelemetry events (nil-safe: nil disables telemetry).
 	Obs *obs.Obs
 
-	// OnSourceError reports a pull-source failure (job pipelines route this
-	// to a failed run; continuous sources have no error channel).
+	// OnSourceError reports a failed source (Run/Pull returned a non-nil
+	// error, v1.24 contract): job pipelines route this to a failed run, the
+	// batch run mode to a non-zero exit, the daemon to the pipeline's error
+	// field. ctx cancellation is a voluntary stop and never fires this.
 	OnSourceError func(node string, err error)
 
 	// MetaStamps are stamped into every accepted message's metadata (e.g.
@@ -645,19 +647,22 @@ func (e *Engine) Run(ctx context.Context) error {
 			e.srcWG.Add(1)
 			go func(name string, src registry.Source) {
 				defer e.srcWG.Done()
+				// Both source kinds report completion identically (v1.24):
+				// a nil return is exhaustion/voluntary stop, an error is a
+				// failed source — routed to SourceErrors and OnSourceError.
+				var err error
 				if ps, ok := src.(registry.PullSource); ok {
-					err := ps.Pull(e.ctx, func(msg registry.Message) {
+					err = ps.Pull(e.ctx, func(msg registry.Message) {
 						_ = e.accept(msg, name)
 					})
-					e.markSourceDone(name, err)
-					if err != nil && e.Opts.OnSourceError != nil {
-						e.Opts.OnSourceError(name, err)
-					}
 				} else {
-					src.Run(e.ctx, func(msg registry.Message) {
+					err = src.Run(e.ctx, func(msg registry.Message) {
 						_ = e.accept(msg, name)
 					})
-					e.markSourceDone(name, nil)
+				}
+				e.markSourceDone(name, err)
+				if err != nil && e.Opts.OnSourceError != nil {
+					e.Opts.OnSourceError(name, err)
 				}
 				_ = src.Close()
 			}(name, src)
@@ -765,6 +770,32 @@ func (e *Engine) Quiesced() bool {
 	}
 	outstanding, committedThrough, _ := e.commit.snapshot()
 	return outstanding == 0 && e.durableThrough() >= committedThrough
+}
+
+// WaitQuiesced blocks until the pipeline is quiesced — the completion point
+// of a job or batch run, shared by every runner so the completion policy
+// exists exactly once (v1.24). runDone is eng.Run's result channel: an
+// engine stop before quiescence (worker-fatal) is surfaced as the returned
+// error, a nil result as "engine stopped before quiescence". ctx
+// cancellation returns ctx.Err(); when ctx and runDone fire together the
+// CONSUMER must re-check ctx.Err() first so a canceled run is never
+// reported as a failure.
+func (e *Engine) WaitQuiesced(ctx context.Context, runDone <-chan error) error {
+	for {
+		if e.Quiesced() {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case err := <-runDone:
+			if err == nil {
+				err = errors.New("engine stopped before quiescence")
+			}
+			return err
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
 }
 
 // Abandon force-commits every outstanding message by dead-lettering it

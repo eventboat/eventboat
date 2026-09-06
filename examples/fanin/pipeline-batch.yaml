@@ -1,6 +1,13 @@
 apiVersion: eventboat/v1
 kind: Pipeline
-metadata: { name: audit-fan-in }
+metadata: { name: audit-fan-in-batch }
+
+# The batch variant of pipeline.yaml: `run.mode: batch` makes
+# `eventboat run --config pipeline-batch.yaml` exit by itself once both
+# sources are read to EOF and every line is committed (exit 0; 1 on dead
+# letters or a failed source). Stop here, not tail: batch files are complete.
+
+run: { mode: batch }
 
 constants:
   system: audit-fan-in

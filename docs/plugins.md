@@ -164,9 +164,14 @@ write error / a failed pull, per the delivery policy).
   you last returned from Commit (empty on first run). Report failures in
   `InitResponse.error`, not as a gRPC status.
 - `Run(RunRequest) returns (stream Event)` — continuous mode. Emit frames
-  until the host cancels the stream. **Honor send blocking**: when the host
-  stops reading (backpressure), your `Send` blocks — that is the admission
-  gate; do not buffer unboundedly.
+  until the host cancels the stream (cancellation is a voluntary stop, never
+  a failure). **A clean end-of-stream is "exhausted"**: a finite source (a
+  file reader, a bounded export) ends the stream with OK status when done and
+  the engine treats the source as complete — batch runs exit, job runs commit
+  (v1.24: this completion signal now reaches the engine for Run, matching
+  Pull). An errored stream is a failed source. **Honor send blocking**: when
+  the host stops reading (backpressure), your `Send` blocks — that is the
+  admission gate; do not buffer unboundedly.
 - `Pull(RunRequest) returns (stream Event)` — job/pull mode, served when your
   manifest declares `capabilities: ["pull"]`. Emit one page of rows, then
   **end the stream with OK status** — that signals "exhausted" and the job

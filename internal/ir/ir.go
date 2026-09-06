@@ -526,6 +526,7 @@ func checkDeclaredVersion(p *Pipeline, n *Node, registered int, file string, add
 func checkJobSemantics(p *Pipeline, reg *registry.Registry, parameters map[string]any, file string, add func(config.Diagnostic)) {
 	cfg := p.Config
 	job := cfg.IsJob()
+	batch := cfg.IsBatch()
 
 	// Cron syntax.
 	if job && cfg.Run.Schedule != "" {
@@ -545,6 +546,7 @@ func checkJobSemantics(p *Pipeline, reg *registry.Registry, parameters map[strin
 			Hint:    "reference per-source cursors explicitly or split into one pipeline per source"})
 	}
 	pullCount := 0
+	finiteCount := 0
 	for _, name := range p.Order {
 		n := p.Nodes[name]
 		if n.Section != config.SectionSource {
@@ -564,11 +566,14 @@ func checkJobSemantics(p *Pipeline, reg *registry.Registry, parameters map[strin
 				}
 				continue
 			}
+			if hasCap(n.Config.Manifest.Capabilities, "finite") {
+				finiteCount++
+			}
 			pullCount++
 			if job && pullCount > 1 {
 				warnMultiPull(n.Config.Line)
 			}
-			if !job {
+			if !job && !batch {
 				add(config.Diagnostic{Severity: "warning", Code: "lint_sql_continuous", File: file,
 					Line:    n.Config.Line,
 					Message: fmt.Sprintf("source %q is a pull source in a continuous pipeline: it pulls once at startup, then idles", name),
@@ -584,6 +589,24 @@ func checkJobSemantics(p *Pipeline, reg *registry.Registry, parameters map[strin
 		if pull {
 			pullCount++
 		}
+		if hasCap(meta.Capabilities, "finite") {
+			finiteCount++
+		}
+		// A file source serving a job run must actually finish: without
+		// on_eof:stop the run would sit forever on its tail loop.
+		if job && n.Config.Plugin == "file" {
+			stop := false
+			if pc, ok := n.Config.PluginConfig.(map[string]any); ok {
+				v, _ := pc["on_eof"].(string)
+				stop = v == "stop"
+			}
+			if !stop {
+				add(config.Diagnostic{Severity: "warning", Code: "job_file_source_no_eof", File: file,
+					Line:    n.Config.Line,
+					Message: fmt.Sprintf("job pipeline source %q is a file source without on_eof: stop — the run will never complete (the source tails forever)", name),
+					Hint:    "set on_eof: stop on the file block, or use run.mode: continuous for tailing"})
+			}
+		}
 		if job && !pull {
 			add(config.Diagnostic{Severity: "error", Code: "job_source_not_pull", File: file,
 				Line:    n.Config.Line,
@@ -593,11 +616,28 @@ func checkJobSemantics(p *Pipeline, reg *registry.Registry, parameters map[strin
 		if job && pull && pullCount > 1 {
 			warnMultiPull(n.Config.Line)
 		}
-		if !job && n.Config.Plugin == "sql" {
+		if !job && !batch && n.Config.Plugin == "sql" {
 			add(config.Diagnostic{Severity: "warning", Code: "lint_sql_continuous", File: file,
 				Line:    n.Config.Line,
 				Message: fmt.Sprintf("source %q uses the sql (pull) source in a continuous pipeline: it pulls once from the last watermark at startup, then idles", name),
 				Hint:    "job pipelines (run.mode: job) are the intended home for sql sources"})
+		}
+	}
+
+	// A batch run finishes only when its sources do: warn when nothing
+	// declares finiteness (the run would hang until Ctrl-C).
+	if batch {
+		sourceCount := 0
+		for _, name := range p.Order {
+			if p.Nodes[name].Section == config.SectionSource {
+				sourceCount++
+			}
+		}
+		if sourceCount > 0 && finiteCount == 0 {
+			add(config.Diagnostic{Severity: "warning", Code: "batch_no_finite_source", File: file,
+				Line:    0,
+				Message: "run.mode: batch but no source declares finite exhaustion — the run will hang until cancelled",
+				Hint:    "use a finite source (e.g. a file source with on_eof: stop) or keep run.mode: continuous"})
 		}
 	}
 
@@ -609,7 +649,7 @@ func checkJobSemantics(p *Pipeline, reg *registry.Registry, parameters map[strin
 				if text != "" && parametersBindingPattern.MatchString(text) {
 					add(config.Diagnostic{Severity: "error", Code: "job_parameters_in_continuous", File: file,
 						Line:    n.Config.Line,
-						Message: fmt.Sprintf("node %q references parameters in a continuous pipeline; parameters exist only in job pipelines (run.mode: job)", name),
+						Message: fmt.Sprintf("node %q references parameters in a non-job pipeline; parameters exist only in job pipelines (run.mode: job)", name),
 						Hint:    "use constants (load-time) or add a run block"})
 				}
 			}

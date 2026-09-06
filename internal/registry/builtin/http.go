@@ -40,7 +40,7 @@ type httpServerSource struct {
 
 func (s *httpServerSource) Init(state []byte) error { return nil }
 
-func (s *httpServerSource) Run(ctx context.Context, emit func(registry.Message)) {
+func (s *httpServerSource) Run(ctx context.Context, emit func(registry.Message)) error {
 	mux := http.NewServeMux()
 	mux.HandleFunc(s.path, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -71,8 +71,11 @@ func (s *httpServerSource) Run(ctx context.Context, emit func(registry.Message))
 		_ = s.server.Shutdown(shutCtx)
 	}()
 	if err := s.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		return
+		// A bind failure (port occupied, bad address) is a real source
+		// failure — it must reach OnSourceError, not vanish.
+		return fmt.Errorf("http_server source: listen %s: %w", s.listen, err)
 	}
+	return nil // shut down via ctx cancellation: a voluntary stop
 }
 
 func (s *httpServerSource) Commit(ctx context.Context, throughSrcSeq int64) ([]byte, error) {

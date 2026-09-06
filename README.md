@@ -223,7 +223,19 @@ eventboat test examples/linear          # contract tests
 eventboat run --config examples/linear/pipeline.yaml
 eventboat run --config my.yaml --ephemeral        # in-memory, for local dev
 eventboat run --config-dir pipelines/             # multi-pipeline daemon + admin API
+eventboat run --config examples/fanin/pipeline-batch.yaml   # batch: exits by itself
+                                                            # once every source is read
+                                                            # and committed (exit 0/1)
 ```
+
+`run.mode: batch` (v1.24) runs a continuous-shaped pipeline to completion:
+every source must terminate (a `file` source with `on_eof: stop`), and the
+process exits once the engine is quiesced — nothing uncommitted, every
+commit flushed. The same finite-source shape is what makes file sources
+job-eligible: `run.mode: job` + `eventboat trigger` performs one complete
+read-and-commit pass in process, with run history and per-run dead-letter
+replay. Sources report completion through `Run`'s return value (nil =
+exhausted, error = failed source; cancellation is a voluntary stop).
 
 ### Verify-first workflow (for humans and agents)
 

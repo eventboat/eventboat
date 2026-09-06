@@ -112,7 +112,7 @@ func TestFileSourceSchemaAndTail(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	got := make(chan registry.Message, 8)
-	go src.Run(ctx, func(m registry.Message) { got <- m })
+	go func() { _ = src.Run(ctx, func(m registry.Message) { got <- m }) }()
 	deadline := time.After(2 * time.Second)
 	n := 0
 loop:

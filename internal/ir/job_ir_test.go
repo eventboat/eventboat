@@ -19,6 +19,8 @@ func loadBytes(t *testing.T, yamlText string) *config.Pipeline {
 func defaultStarOpts() starhost.Options { return starhost.DefaultOptions() }
 
 // A job pipeline whose source lacks pull capability is a verify error.
+// (file is pull-capable since v1.24 — on_eof:stop gives it exhaustion — so
+// the canonical non-pull source here is kafka.)
 func TestJobSourceMustBePull(t *testing.T) {
 	_, diags := build(t, `
 apiVersion: eventboat/v1
@@ -28,7 +30,7 @@ run: { mode: job, schedule: "0 1 * * *" }
 sources:
   pull:
     decoder: json
-    file: { path: in.jsonl }
+    kafka: { brokers: [ "b:9092" ], topics: [ t ] }
 sinks:
   out: { depends_on: [pull], file: { path: out.jsonl } }
 `)
@@ -37,9 +39,9 @@ sinks:
 	}
 }
 
-// Bad cron is caught at verify (§3.1 item 4). The pull capability check
-// cannot use file, so only the schedule error is exercised here — the
-// capability path is covered by TestJobSourceMustBePull and the sql tests.
+// Bad cron is caught at verify (§3.1 item 4); only the schedule error is
+// exercised here — the capability path is covered by TestJobSourceMustBePull
+// and the sql tests.
 func TestJobBadScheduleRejected(t *testing.T) {
 	_, diags := build(t, `
 apiVersion: eventboat/v1

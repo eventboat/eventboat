@@ -115,14 +115,15 @@ func (s *source) proc(ctx context.Context) (*process, error) {
 	return s.plug, nil
 }
 
-func (s *source) Run(ctx context.Context, emit func(registry.Message)) {
+func (s *source) Run(ctx context.Context, emit func(registry.Message)) error {
 	if err := s.init(nil); err != nil {
-		if s.logf != nil {
-			s.logf("%v", err)
-		}
-		return
+		return err
 	}
-	_ = s.stream(ctx, emit, false)
+	// Clean end-of-stream maps to exhaustion (nil), an errored stream to a
+	// failed source — the same contract Run now exposes natively (v1.24);
+	// previously the return value was dropped here and the engine could not
+	// tell a finished source from a failed one.
+	return s.stream(ctx, emit, false)
 }
 
 func (s *source) Pull(ctx context.Context, emit func(registry.Message)) error {
@@ -135,12 +136,13 @@ func (s *source) Pull(ctx context.Context, emit func(registry.Message)) error {
 	return s.stream(ctx, emit, true)
 }
 
-// stream drives the Run/Pull server stream. Continuous mode (pull=false)
-// returns on end-of-stream or error without propagating (registry.Source.Run
-// has no error channel; the engine treats an ended source as stopped and the
-// error is logged). Pull mode distinguishes exhaustion from failure. Under
-// the restart policy a FAILED stream respawns (the supervisor's backoff) and
-// retries; clean end-of-stream is exhaustion and does not restart.
+// stream drives the Run/Pull server stream. Clean end-of-stream is
+// exhaustion (nil), an errored stream is a failed source — identical for
+// both entry points; Run used to drop this distinction at the caller.
+// Under the restart policy a FAILED stream respawns (the supervisor's
+// backoff) and retries; clean end-of-stream is exhaustion and does not
+// restart — which now also serves external stop-shaped sources, whose
+// exhaustion signal reaches the engine instead of being swallowed here.
 func (s *source) stream(ctx context.Context, emit func(registry.Message), pull bool) error {
 	for {
 		p, err := s.proc(ctx)
@@ -148,11 +150,11 @@ func (s *source) stream(ctx context.Context, emit func(registry.Message), pull b
 			return err
 		}
 		err = s.streamOnce(p, ctx, emit, pull)
-		if err == nil || ctx.Err() != nil {
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
+		if err == nil {
 			return nil
+		}
+		if ctx.Err() != nil {
+			return nil // cancelled: a voluntary stop, not a failure
 		}
 		if s.sup == nil {
 			return err
@@ -175,6 +177,9 @@ func (s *source) streamOnce(p *process, ctx context.Context, emit func(registry.
 		stream, err = p.source.Run(ctx, &pluginproto.RunRequest{})
 	}
 	if err != nil {
+		if ctx.Err() != nil {
+			return nil // cancelled: a voluntary stop, not a failure
+		}
 		if s.logf != nil {
 			s.logf("plugin %q: open stream: %v", p.hs.Name, err)
 		}
@@ -187,7 +192,7 @@ func (s *source) streamOnce(p *process, ctx context.Context, emit func(registry.
 		}
 		if err != nil {
 			if ctx.Err() != nil {
-				return ctx.Err()
+				return nil // cancelled: a voluntary stop, not a failure
 			}
 			if s.logf != nil {
 				s.logf("plugin %q: stream error: %v", p.hs.Name, err)

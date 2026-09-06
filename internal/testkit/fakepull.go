@@ -94,7 +94,7 @@ func (s *FakePullSource) Pull(ctx context.Context, emit func(registry.Message)) 
 
 	for _, r := range rows {
 		if err := ctx.Err(); err != nil {
-			return err
+			return nil // cancelled: a voluntary stop, not a failure
 		}
 		if r.cursor <= s.readWatermark() {
 			continue // already committed in a previous run
@@ -143,9 +143,12 @@ func (s *FakePullSource) Commit(ctx context.Context, throughSrcSeq int64) ([]byt
 	return st, nil
 }
 
-func (s *FakePullSource) Run(ctx context.Context, emit func(registry.Message)) {
-	_ = s.Pull(ctx, emit)
+func (s *FakePullSource) Run(ctx context.Context, emit func(registry.Message)) error {
+	if err := s.Pull(ctx, emit); err != nil {
+		return err
+	}
 	<-ctx.Done()
+	return nil
 }
 
 func (s *FakePullSource) Close() error { return nil }

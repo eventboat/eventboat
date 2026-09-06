@@ -128,7 +128,7 @@ Every diagnostic code that exists in the code, by emitting layer. Severity
 | `cfg_limits_type` | error | `limits` not a mapping; `drain_timeout` not a duration string |
 | `cfg_limits_range` | error | `max_in_flight < 1`; `drain_timeout` not positive |
 | `cfg_run_type` | error | `run` not a mapping |
-| `cfg_run_mode` | error | `run.mode` not `continuous`/`job` |
+| `cfg_run_mode` | error | `run.mode` not `continuous`/`job`/`batch` |
 | `cfg_run_schedule` | error | empty schedule, or schedule without `mode: job` |
 | `cfg_run_overlap` | error | `run.overlap` not `skip|all|latest` |
 | `cfg_run_catchup` | error | `catchup_window` not a valid duration |
@@ -218,6 +218,8 @@ Every diagnostic code that exists in the code, by emitting layer. Severity
 | `expr_wasm_compile` | error | wasm plugin: module unreadable, not a reactor, or missing ABI exports (via `TransformError.DiagCode`) |
 | `wasm_no_kill_switch` | warning | wasm transform without `timeout_ms`: no kill switch (escalated by `--strict`) |
 | `run_retention_unset` | warning | job pipeline without `run.retention.history`: run history keeps forever (escalated by `--strict`) |
+| `batch_no_finite_source` | warning | `run.mode: batch` but no source declares finite exhaustion: the run hangs until cancelled (escalated by `--strict`) |
+| `job_file_source_no_eof` | warning | job pipeline file source without `on_eof: stop`: the run never completes (escalated by `--strict`) |
 | `job_bad_schedule` | error | `run.schedule` is not a valid 5-field cron |
 | `job_source_not_pull` | error | job pipeline source lacks the `pull` capability |
 | `job_multiple_pull_sources` | warning | job pipeline with >1 pull source (`cursor` binds the first) |

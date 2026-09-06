@@ -59,9 +59,19 @@ type Message struct {
 // persisted state before Run, and Commit whenever the contiguous frontier of
 // committed (spooled, fully processed) messages advances; sources commit their
 // own offsets there (Kafka offsets, file offsets, SQL watermarks).
+//
+// Run returns when the source is done, and the return value is the source's
+// completion signal (v1.24): nil means exhausted (a finite source read to its
+// end — the engine records the source done and job/batch runners treat the
+// pipeline as complete once everything is committed) or a voluntary stop; a
+// non-nil error means the source itself failed and the pipeline cannot make
+// progress (routed to OnSourceError / SourceErrors, a failed job or batch run).
+// An infinite source (a tailer, a broker consumer) simply never returns until
+// ctx is cancelled — and ctx cancellation is a VOLUNTARY stop, so it returns
+// nil, never ctx.Err(): a cancelled engine is not a failed source.
 type Source interface {
 	Init(state []byte) error
-	Run(ctx context.Context, emit func(Message))
+	Run(ctx context.Context, emit func(Message)) error
 	Commit(ctx context.Context, throughSrcSeq int64) (state []byte, err error)
 	Close() error
 }

@@ -57,7 +57,7 @@ func NewManualSource() *ManualSource {
 
 func (s *ManualSource) Init(state []byte) error { s.state = state; return nil }
 
-func (s *ManualSource) Run(ctx context.Context, emit func(registry.Message)) {
+func (s *ManualSource) Run(ctx context.Context, emit func(registry.Message)) error {
 	s.mu.Lock()
 	s.runCtx = ctx
 	s.mu.Unlock()
@@ -65,7 +65,7 @@ func (s *ManualSource) Run(ctx context.Context, emit func(registry.Message)) {
 	for {
 		select {
 		case <-ctx.Done():
-			return
+			return nil
 		case e := <-s.emitted:
 			emit(e.msg)
 			close(e.done)

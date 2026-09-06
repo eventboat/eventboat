@@ -485,19 +485,10 @@ func (m *Manager) runOnce(ctx context.Context, jr *store.JobRun, triggerParams, 
 	go func() { runDone <- eng.Run(engineCtx) }()
 
 	// Wait for quiescence: all sources stopped (exhausted or failed) and
-	// nothing outstanding (committing phase).
-	for !m.quiesced(eng) {
-		select {
-		case runErr := <-runDone:
-			// Run returned before quiescence: the engine stopped itself on a
-			// worker-fatal error (e.g. a transform clone failure). Outstanding
-			// messages stay uncommitted for the next run's replay.
-			if runErr == nil {
-				runErr = fmt.Errorf("engine stopped before quiescence")
-			}
-			fail(store.JobFailed, "run: "+runErr.Error())
-			return
-		case <-ctx.Done():
+	// nothing outstanding (committing phase). The completion policy lives in
+	// engine.WaitQuiesced, shared with the batch run mode (v1.24).
+	if err := eng.WaitQuiesced(ctx, runDone); err != nil {
+		if ctx.Err() != nil {
 			// Canceled (overlap: latest, manager stop, or trigger ctx):
 			// terminal-dead-letter the outstanding set (R2), then stop the
 			// engine with a bounded wait — a wedged writer goroutine may
@@ -521,22 +512,35 @@ func (m *Manager) runOnce(ctx context.Context, jr *store.JobRun, triggerParams, 
 			}
 			fail(store.JobCanceled, "run canceled")
 			return
-		case <-time.After(5 * time.Millisecond):
 		}
+		// Run returned before quiescence: the engine stopped itself on a
+		// worker-fatal error (e.g. a transform clone failure). Outstanding
+		// messages stay uncommitted for the next run's replay.
+		fail(store.JobFailed, "run: "+err.Error())
+		return
 	}
 
-	// Sources done and committed: stop the engine gracefully.
+	// Sources done and committed: stop the engine gracefully, then surface
+	// any worker-fatal that raced the quiesce — failNode cancels and drains
+	// asynchronously, so the fatal may land in runDone just after the last
+	// Quiesced() poll saw all-clear (dropping it would report a failed run
+	// as success).
 	engineCancel()
+	var runErr error
 	select {
-	case <-runDone:
+	case runErr = <-runDone:
 	case <-time.After(opts.DrainTimeout + 5*time.Second):
 		eng.Close()
-		<-runDone
+		runErr = <-runDone
 	}
 
 	jr.RowsRead = eng.Metrics.MessagesIn.Load()
 	jr.Delivered = eng.Metrics.CommittedCount.Load() - eng.Metrics.DeadLettered.Load()
 	jr.DeadLettered = eng.Metrics.DeadLettered.Load()
+	if runErr != nil {
+		fail(store.JobFailed, "run: "+runErr.Error())
+		return
+	}
 	if sourceErr != nil {
 		fail(store.JobFailed, "source: "+sourceErr.Error())
 		return
@@ -546,10 +550,6 @@ func (m *Manager) runOnce(ctx context.Context, jr *store.JobRun, triggerParams, 
 		return
 	}
 	fail(store.JobSuccess, "")
-}
-
-func (m *Manager) quiesced(eng *engine.Engine) bool {
-	return eng.Quiesced()
 }
 
 // admissionPool returns the shared spool admission pool, creating it on first

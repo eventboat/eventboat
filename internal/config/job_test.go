@@ -84,7 +84,7 @@ sinks:
 		code string
 		part string
 	}{
-		{"bad mode", `run: { mode: batch }`, "cfg_run_mode", ""},
+		{"bad mode", `run: { mode: stream }`, "cfg_run_mode", ""},
 		{"schedule needs job mode", `run: { mode: continuous, schedule: "0 1 * * *" }`, "cfg_run_schedule", "only meaningful"},
 		{"bad overlap", `run: { mode: job, overlap: cancel }`, "cfg_run_overlap", ""},
 		{"bad catchup", `run: { mode: job, catchup_window: forever }`, "cfg_run_catchup", ""},
@@ -110,6 +110,30 @@ sinks:
 		}
 		if !found {
 			t.Errorf("%s: want %s mentioning %q, got %+v", tc.name, tc.code, tc.part, res.Diagnostics)
+		}
+	}
+}
+
+// run.mode: batch is a valid mode (v1.24): a pipeline that runs to
+// completion. It accepts no schedule (job-only) and no parameters
+// (job-only) — both are loader-level rejections.
+func TestBatchModeAccepted(t *testing.T) {
+	res := LoadBytes("batch.yaml", []byte(`
+apiVersion: eventboat/v1
+kind: Pipeline
+metadata: { name: drain }
+run: { mode: batch }
+sources:
+  in: { decoder: json, file: { path: in.jsonl, on_eof: stop } }
+sinks:
+  out: { depends_on: [in], file: { path: out.jsonl } }
+`))
+	if res.HasErrors() {
+		t.Fatalf("batch pipeline rejected: %+v", res.Diagnostics)
+	}
+	for _, d := range res.Diagnostics {
+		if d.Severity == "error" {
+			t.Fatalf("unexpected error: %+v", d)
 		}
 	}
 }

@@ -19,14 +19,16 @@ type fileSourceConfig struct {
 	Path      string `json:"path" schema:"minLen=1,desc=file to tail, one message per line"`
 	PollEvery int    `json:"poll_every_ms" schema:"min=10,default=250"`
 	StartAt   string `json:"start_at" schema:"enum=beginning|end,default=beginning"`
+	OnEOF     string `json:"on_eof" schema:"enum=tail|stop,default=tail,desc=tail keeps polling for appended lines; stop finishes the source once the file is read to its end (complete batch files)"`
 }
 
 func registerFileSource(reg *registry.Registry) error {
-	return registry.RegisterSourceT(reg, "file", 1, nil, func(c fileSourceConfig) (registry.Source, error) {
+	return registry.RegisterSourceT(reg, "file", 1, []string{"pull", "finite"}, func(c fileSourceConfig) (registry.Source, error) {
 		return &fileSource{
 			path:      c.Path,
 			pollEvery: time.Duration(c.PollEvery) * time.Millisecond,
 			startAt:   c.StartAt,
+			onEOF:     c.OnEOF,
 		}, nil
 	})
 }
@@ -34,10 +36,18 @@ func registerFileSource(reg *registry.Registry) error {
 // fileSource tails a file line by line. Commit state is the committed byte
 // offset; the engine restores it via Init and advances it via Commit, which
 // makes the file source genuinely at-least-once across restarts.
+//
+// Completion (v1.24 contract): with on_eof:stop the source returns nil once
+// the file has been read to its end — the shape that makes a batch run or a
+// job run finish. stop is for COMPLETE files (written before the run starts);
+// the default on_eof:tail never returns on its own. A missing file is an
+// error under stop (a batch run must not sit silent) and a wait-under-poll
+// under tail.
 type fileSource struct {
 	path      string
 	pollEvery time.Duration
 	startAt   string
+	onEOF     string
 
 	mu            sync.Mutex
 	f             *os.File
@@ -63,26 +73,30 @@ func (s *fileSource) Init(state []byte) error {
 	return nil
 }
 
-func (s *fileSource) Run(ctx context.Context, emit func(registry.Message)) {
-	f, err := os.Open(s.path)
-	if err != nil {
-		return // missing file: nothing to tail yet; a future poll could reopen
-	}
-	s.f = f
-	switch {
-	case s.startAt == "end" && s.committedOff == 0:
-		if end, err := f.Seek(0, io.SeekEnd); err == nil {
-			s.nextOffset = end
+func (s *fileSource) Run(ctx context.Context, emit func(registry.Message)) error {
+	if f, err := os.Open(s.path); err != nil {
+		if s.onEOF == "stop" {
+			// A batch/job run must not sit silent on a missing file.
+			return fmt.Errorf("file source: open %s: %w", s.path, err)
 		}
-	case s.committedOff > 0:
-		if _, err := f.Seek(s.committedOff, io.SeekStart); err == nil {
-			s.nextOffset = s.committedOff
-		}
-	}
-	if _, err := f.Seek(s.nextOffset, io.SeekStart); err == nil {
-		s.reader = bufio.NewReader(f)
+		// tail mode: nothing to tail yet — keep polling, pump reopens.
 	} else {
-		s.reader = bufio.NewReader(f)
+		s.f = f
+		switch {
+		case s.startAt == "end" && s.committedOff == 0:
+			if end, err := f.Seek(0, io.SeekEnd); err == nil {
+				s.nextOffset = end
+			}
+		case s.committedOff > 0:
+			if _, err := f.Seek(s.committedOff, io.SeekStart); err == nil {
+				s.nextOffset = s.committedOff
+			}
+		}
+		if _, err := f.Seek(s.nextOffset, io.SeekStart); err == nil {
+			s.reader = bufio.NewReader(f)
+		} else {
+			s.reader = bufio.NewReader(f)
+		}
 	}
 	s.pending = map[int64]int64{}
 
@@ -91,24 +105,38 @@ func (s *fileSource) Run(ctx context.Context, emit func(registry.Message)) {
 	for {
 		select {
 		case <-ctx.Done():
-			return
+			return nil // cancelled: a voluntary stop, not a failure
 		case <-tick.C:
-			s.pump(ctx, emit)
+			emitted := s.pump(ctx, emit)
+			if s.onEOF == "stop" && !emitted && s.atEOF() {
+				return nil // whole file read: exhausted
+			}
 		}
 	}
 }
 
-func (s *fileSource) pump(ctx context.Context, emit func(registry.Message)) {
+// atEOF reports whether the file has been read to its end. A stat failure
+// (the file transiently locked or replaced) skips the check this tick —
+// stop mode assumes the file stays readable, not that it vanishes.
+func (s *fileSource) atEOF() bool {
+	fi, err := os.Stat(s.path)
+	if err != nil {
+		return false
+	}
+	return fi.Size() <= s.nextOffset
+}
+
+func (s *fileSource) pump(ctx context.Context, emit func(registry.Message)) (emitted bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.reader == nil {
 		f, err := os.Open(s.path)
 		if err != nil {
-			return
+			return false
 		}
 		if _, err := f.Seek(s.nextOffset, io.SeekStart); err != nil {
 			_ = f.Close()
-			return
+			return false
 		}
 		s.f = f
 		s.reader = bufio.NewReader(f)
@@ -122,6 +150,7 @@ func (s *fileSource) pump(ctx context.Context, emit func(registry.Message)) {
 				end := s.nextOffset + int64(len(line))
 				s.pending[s.nextSeq] = end
 				emit(registry.Message{Raw: trimmed, SrcName: "file", SrcSeq: s.nextSeq})
+				emitted = true
 			}
 			s.nextOffset += int64(len(line))
 		}
@@ -132,7 +161,7 @@ func (s *fileSource) pump(ctx context.Context, emit func(registry.Message)) {
 				s.f = nil
 				s.reader = nil
 			}
-			return
+			return emitted
 		}
 	}
 }

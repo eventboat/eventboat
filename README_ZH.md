@@ -201,7 +201,16 @@ eventboat test examples/linear          # 合约测试
 eventboat run --config examples/linear/pipeline.yaml
 eventboat run --config my.yaml --ephemeral        # 内存态，本地开发
 eventboat run --config-dir pipelines/             # 多管道守护进程 + 管理 API
+eventboat run --config examples/fanin/pipeline-batch.yaml   # batch：全部源读完
+                                                            # 且 commit 落盘后自动
+                                                            # 退出（退出码 0/1）
 ```
+
+`run.mode: batch`（v1.24）把连续形状的管道跑到完成：所有源必须可终止（`file` 源设
+`on_eof: stop`），引擎静默（零未提交、commit 全落盘）后进程自动退出。同一有限源形态
+也是 file 源作业资格的来源：`run.mode: job` + `eventboat trigger` 在进程内完成一次
+完整"读取 + commit"后退出，带作业历史与按次死信回放。源经 `Run` 返回值上报完成
+（nil = 取尽，error = 源失败；ctx 取消属自愿停止）。
 
 ### Verify 优先的工作流（人或 Agent 通用）
 

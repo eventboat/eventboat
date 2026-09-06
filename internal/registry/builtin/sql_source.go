@@ -160,7 +160,7 @@ func (s *sqlSource) Pull(ctx context.Context, emit func(registry.Message)) error
 	pageKeys := resumeKey // nil = from the beginning of the range
 	for {
 		if err := ctx.Err(); err != nil {
-			return err
+			return nil // cancelled: a voluntary stop, not a failure
 		}
 		var rows *sql.Rows
 		if pageKeys == nil {
@@ -177,6 +177,9 @@ func (s *sqlSource) Pull(ctx context.Context, emit func(registry.Message)) error
 			rows, err = db.QueryContext(ctx, nextSQL, vals...)
 		}
 		if err != nil {
+			if ctx.Err() != nil {
+				return nil // query aborted by cancellation
+			}
 			return fmt.Errorf("sql source: query page: %w", err)
 		}
 		count := 0
@@ -202,6 +205,9 @@ func (s *sqlSource) Pull(ctx context.Context, emit func(registry.Message)) error
 		}
 		if err := rows.Err(); err != nil {
 			_ = rows.Close()
+			if ctx.Err() != nil {
+				return nil // iteration aborted by cancellation
+			}
 			return fmt.Errorf("sql source: rows: %w", err)
 		}
 		_ = rows.Close()
@@ -271,10 +277,14 @@ func (s *sqlSource) Commit(ctx context.Context, throughSrcSeq int64) ([]byte, er
 }
 
 // Run is the continuous-mode fallback (lint-warned): one pull at startup,
-// then idle until the engine stops.
-func (s *sqlSource) Run(ctx context.Context, emit func(registry.Message)) {
-	_ = s.Pull(ctx, emit)
+// then idle until the engine stops. A failed pull surfaces immediately
+// (v1.24 contract); only a successful pull idles.
+func (s *sqlSource) Run(ctx context.Context, emit func(registry.Message)) error {
+	if err := s.Pull(ctx, emit); err != nil {
+		return err
+	}
 	<-ctx.Done()
+	return nil // cancelled: a voluntary stop, not a failure
 }
 
 func (s *sqlSource) Close() error { return nil }

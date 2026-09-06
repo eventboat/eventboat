@@ -155,7 +155,7 @@ type runVerb struct {
 
 func (v *runVerb) Name() string { return "run" }
 func (v *runVerb) Synopsis() string {
-	return "execute a pipeline (spool+commit+checkpoint, SQLite store); --config-dir runs every pipeline in a directory"
+	return "execute a pipeline (spool+commit+checkpoint, SQLite store); --config-dir runs every pipeline in a directory; run.mode: batch exits when every source is exhausted and all work is committed"
 }
 func (v *runVerb) Usage() string {
 	return "eventboat run --config <pipeline.yaml> [--data-dir DIR] [--ephemeral] | eventboat run --config-dir <dir> [--runtime runtime.yaml]"

@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"syscall"
+	"time"
 
 	"github.com/eventboat/eventboat/internal/config"
 	"github.com/eventboat/eventboat/internal/engine"
@@ -153,6 +154,15 @@ func cmdRun(args []string, jsonOut bool) int {
 			m.CelEvalErrors.Load(), m.NoMatch.Load(), m.Retries.Load())
 	}
 
+	if pip.Config.IsBatch() {
+		code := finishBatchRun(eng, engOpts, ctx, cancel, runErr, sigStatus)
+		_ = st.Close()
+		if !jsonOut {
+			fmt.Println("eventboat: stopped")
+		}
+		return code
+	}
+
 	select {
 	case err := <-runErr:
 		if err != nil {
@@ -167,6 +177,46 @@ func cmdRun(args []string, jsonOut bool) int {
 	_ = st.Close()
 	if !jsonOut {
 		fmt.Println("eventboat: stopped")
+	}
+	return 0
+}
+
+// finishBatchRun drives a run.mode: batch pipeline to completion: wait for
+// quiescence (every source exhausted, all work committed and flushed), stop
+// the engine, and map the terminal state onto an exit code exactly like
+// `trigger` maps job statuses (success=0, partial/failed=1). A worker-fatal
+// that raced the quiesce is folded in from runDone after the cancel — the
+// engine drains asynchronously, so the all-clear poll may have preceded it.
+func finishBatchRun(eng *engine.Engine, opts engine.Options, ctx context.Context, cancel context.CancelFunc, runErr <-chan error, sigStatus func()) int {
+	// ctx cancellation lands here too (interrupted batch): interrupted is
+	// captured BEFORE our own cancel() below, so an interrupted run never
+	// maps to success while a completed one is not mistaken for one.
+	_ = eng.WaitQuiesced(ctx, runErr)
+	interrupted := ctx.Err() != nil
+	cancel()
+	var fatal error
+	select {
+	case fatal = <-runErr:
+	case <-time.After(opts.DrainTimeout + 5*time.Second):
+		eng.Close()
+		fatal = <-runErr
+	}
+	sigStatus()
+	switch {
+	case interrupted:
+		return 1
+	case fatal != nil:
+		fmt.Fprintf(os.Stderr, "run: %v\n", fatal)
+		return 1
+	}
+	if errs := eng.SourceErrors(); len(errs) > 0 {
+		for node, err := range errs {
+			fmt.Fprintf(os.Stderr, "run: source %q failed: %v\n", node, err)
+		}
+		return 1
+	}
+	if eng.Metrics.DeadLettered.Load() > 0 {
+		return 1 // completed with dead letters: partial
 	}
 	return 0
 }

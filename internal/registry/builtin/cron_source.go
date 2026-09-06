@@ -38,9 +38,9 @@ type cronSource struct {
 
 func (s *cronSource) Init(state []byte) error { return nil }
 
-func (s *cronSource) Run(ctx context.Context, emit func(registry.Message)) {
+func (s *cronSource) Run(ctx context.Context, emit func(registry.Message)) error {
 	if _, err := cron.ParseStandard(s.expr); err != nil {
-		return
+		return fmt.Errorf("cron source: invalid expression: %w", err)
 	}
 	// A cron source has no deterministic replayable offset; we schedule on the
 	// wall clock and let the spool provide durability once a tick is emitted.
@@ -63,6 +63,7 @@ func (s *cronSource) Run(ctx context.Context, emit func(registry.Message)) {
 	s.mu.Lock()
 	s.closed = true
 	s.mu.Unlock()
+	return nil // cancelled: a voluntary stop, not a failure
 }
 
 func (s *cronSource) Commit(ctx context.Context, throughSrcSeq int64) ([]byte, error) {

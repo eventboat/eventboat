@@ -39,7 +39,7 @@ type kafkaSource struct {
 
 func (s *kafkaSource) Init(state []byte) error { return nil } // offsets live in the consumer group
 
-func (s *kafkaSource) Run(ctx context.Context, emit func(registry.Message)) {
+func (s *kafkaSource) Run(ctx context.Context, emit func(registry.Message)) error {
 	s.mu.Lock()
 	s.reader = kafka.NewReader(kafka.ReaderConfig{
 		Brokers:     s.brokers,
@@ -52,7 +52,7 @@ func (s *kafkaSource) Run(ctx context.Context, emit func(registry.Message)) {
 		msg, err := s.reader.FetchMessage(ctx)
 		if err != nil {
 			if ctx.Err() != nil {
-				return
+				return nil // cancelled: a voluntary stop, not a failure
 			}
 			continue
 		}

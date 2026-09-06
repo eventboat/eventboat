@@ -69,15 +69,32 @@ type managed struct {
 	name    string
 	file    string
 	cfg     *config.Pipeline
-	kind    string // "continuous" | "job"
+	kind    string // "continuous" | "job" | "batch"
 	eng     *engine.Engine
 	jobs    *jobs.Manager
 	cancel  context.CancelFunc
 	done    chan struct{}
 	paused  bool
+	mu      sync.Mutex // guards status/err (written from lifecycle goroutines)
 	status  string
 	err     string
 	started time.Time
+}
+
+// setStatus/setErr are the only writers of the status surface; Status() is
+// the only reader and takes the same mutex (v1.24: the batch completion
+// watcher added a long-lived writer, so the field is no longer
+// publication-safe by construction).
+func (m *managed) setStatus(st string) {
+	m.mu.Lock()
+	m.status = st
+	m.mu.Unlock()
+}
+
+func (m *managed) setErr(msg string) {
+	m.mu.Lock()
+	m.err = msg
+	m.mu.Unlock()
 }
 
 // Event is one SSE-notifiable change.
@@ -286,6 +303,9 @@ func (s *Service) startManaged(ctx context.Context, cfg *config.Pipeline, file s
 		}()
 	} else {
 		m.kind = "continuous"
+		if cfg.IsBatch() {
+			m.kind = "batch"
+		}
 		pip, diags := ir.Build(cfg, s.reg, starhost.DefaultOptions(), nil)
 		if pip == nil {
 			cancel()
@@ -303,6 +323,12 @@ func (s *Service) startManaged(ctx context.Context, cfg *config.Pipeline, file s
 		if cfg.Telemetry != nil {
 			opts.SpanSampleRate = cfg.Telemetry.SpanSampleRate
 		}
+		// A failed source must be observable in the daemon surface too (the
+		// run keeps going; the error lands on the pipeline's status).
+		opts.OnSourceError = func(node string, err error) {
+			m.setErr(fmt.Sprintf("source %q failed: %v", node, err))
+			s.emit("status", m.name)
+		}
 		eng, err := engine.New(pip, st, s.reg, opts)
 		if err != nil {
 			cancel()
@@ -310,19 +336,54 @@ func (s *Service) startManaged(ctx context.Context, cfg *config.Pipeline, file s
 		}
 		m.eng = eng
 		s.pipelines[cfg.Name] = m
+		runDone := make(chan error, 1)
+		go func() { runDone <- eng.Run(runCtx) }()
 		go func() {
 			defer close(m.done)
-			if err := eng.Run(runCtx); err != nil {
-				m.err = err.Error()
+			if err := <-runDone; err != nil {
+				m.setErr(err.Error())
 			}
 		}()
 		// Wait briefly for readiness so status immediately reflects reality.
 		for i := 0; i < 200 && !eng.Ready(); i++ {
 			time.Sleep(2 * time.Millisecond)
 		}
+		if m.kind == "batch" {
+			go s.watchBatchCompletion(m, eng, runCtx)
+		}
 	}
 	m.status = "running"
 	return m, nil
+}
+
+// watchBatchCompletion flips a batch pipeline to "completed" once it has
+// quiesced (all sources exhausted, everything committed). The daemon stays
+// up — a completed pipeline keeps its history and its admin surface. A
+// worker-fatal racing the quiesce poll wins: the settle window lets the
+// engine's drain land its error in m.err before the status is published.
+func (s *Service) watchBatchCompletion(m *managed, eng *engine.Engine, runCtx context.Context) {
+	for {
+		if eng.Quiesced() {
+			time.Sleep(100 * time.Millisecond)
+			if runCtx.Err() != nil {
+				return // service shutting down: shutdown() owns the status
+			}
+			m.mu.Lock()
+			failed := m.err != ""
+			m.mu.Unlock()
+			if failed {
+				return
+			}
+			m.setStatus("completed")
+			s.emit("status", m.name)
+			return
+		}
+		select {
+		case <-runCtx.Done():
+			return
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
 }
 
 func (m *managed) shutdown() {
@@ -337,7 +398,7 @@ func (m *managed) shutdown() {
 	case <-m.done:
 	case <-time.After(15 * time.Second):
 	}
-	m.status = "stopped"
+	m.setStatus("stopped")
 }
 
 // of returns a managed pipeline by name.
@@ -400,7 +461,9 @@ func (s *Service) Status() []PipelineStatus {
 
 	out := make([]PipelineStatus, 0, len(s.pipelines))
 	for _, m := range s.pipelines {
+		m.mu.Lock()
 		st := PipelineStatus{Pipeline: m.name, Mode: m.kind, Status: m.status, Error: m.err}
+		m.mu.Unlock()
 		for _, name := range m.cfg.Order {
 			var n *config.Node
 			switch {
@@ -685,7 +748,7 @@ func (s *Service) Drain(pipeline string) error {
 		return err
 	}
 	m.shutdown()
-	m.status = "drained"
+	m.setStatus("drained")
 	s.emit("status", pipeline)
 	return nil
 }
@@ -702,7 +765,7 @@ func (s *Service) Pause(pipeline string) error {
 	}
 	m.shutdown()
 	m.paused = true
-	m.status = "paused"
+	m.setStatus("paused")
 	s.emit("status", pipeline)
 	return nil
 }

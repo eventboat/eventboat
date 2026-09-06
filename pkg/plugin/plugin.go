@@ -34,7 +34,10 @@ type (
 	// branches share the underlying Decoded/Meta maps — never mutate them
 	// in place; assign a fresh value instead (see registry.Message).
 	Message = registry.Message
-	// Source is implemented by continuous source plugins.
+	// Source is implemented by source plugins. Run's return value is the
+	// completion signal: nil = exhausted/voluntary stop, error = failed
+	// source (ctx cancellation is a voluntary stop — return nil, never
+	// ctx.Err()).
 	Source = registry.Source
 	// PullSource is a source with job-pipeline pull semantics (declare the
 	// "pull" capability).
@@ -59,9 +62,12 @@ type (
 
 // RegisterSource registers a source plugin whose config contract is the
 // struct C (schema generated from its tags). capabilities may declare
-// "pull" (then S must also implement PullSource). Call from init; an error
-// (reserved name, duplicate, version < 1, malformed constraint) means the
-// plugin can never load — fail loudly.
+// "pull" (job-schedulable: implement PullSource for bounded per-run pulls;
+// a source WITHOUT PullSource is also job-eligible when Run itself
+// terminates — e.g. a file source with on_eof:stop) and "finite" (Run can
+// exhaust; the run.mode: batch verify warning keys off this). Call from
+// init; an error (reserved name, duplicate, version < 1, malformed
+// constraint) means the plugin can never load — fail loudly.
 func RegisterSource[S Source, C any](name string, version int, capabilities []string, build func(C) (S, error)) error {
 	return registry.RegisterSourceT(registry.Default(), name, version, capabilities, build)
 }

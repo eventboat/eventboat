@@ -384,7 +384,7 @@ func TestDecodeTypedRejectsUnknownAndMistyped(t *testing.T) {
 type demoSource struct{}
 
 func (d *demoSource) Init([]byte) error                             { return nil }
-func (d *demoSource) Run(context.Context, func(Message))            {}
+func (d *demoSource) Run(context.Context, func(Message)) error      { return nil }
 func (d *demoSource) Commit(context.Context, int64) ([]byte, error) { return nil, nil }
 func (d *demoSource) Close() error                                  { return nil }
 

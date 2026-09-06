@@ -395,10 +395,10 @@ func parseRun(file string, raw map[string]any, p *Pipeline, lines *lineIndex, re
 	r := &RunSpec{Mode: "continuous", Overlap: "skip"}
 	if v, ok := rm["mode"]; ok {
 		s, ok := v.(string)
-		if !ok || (s != "continuous" && s != "job") {
+		if !ok || (s != "continuous" && s != "job" && s != "batch") {
 			res.Diagnostics = append(res.Diagnostics, Diagnostic{
 				Severity: "error", Code: "cfg_run_mode", File: file, Line: lines.line("run", "mode"),
-				Message: fmt.Sprintf("run.mode must be \"continuous\" or \"job\", got %v", v), Hint: "",
+				Message: fmt.Sprintf("run.mode must be \"continuous\", \"job\" or \"batch\", got %v", v), Hint: "",
 			})
 		} else {
 			r.Mode = s

@@ -834,3 +834,86 @@ func (w *wedgedSink) Write(ctx context.Context, msgs []registry.Message) error {
 }
 
 func (w *wedgedSink) Close() error { return w.inner.Close() }
+
+// A file source with on_eof: stop is job-eligible (finite exhaustion): one
+// trigger reads the whole file, the run completes success, and a second
+// trigger re-reads nothing (the byte offset is the persisted watermark).
+func TestTriggerFileSourceJobReadsToEOF(t *testing.T) {
+	dir := t.TempDir()
+	input := filepath.Join(dir, "in.jsonl")
+	if err := writeFile(input, []byte("{\"i\":1}\n{\"i\":2}\n{\"i\":3}\n")); err != nil {
+		t.Fatal(err)
+	}
+	yamlText := fmt.Sprintf(`
+apiVersion: eventboat/v1
+kind: Pipeline
+metadata: { name: file-drain }
+run:
+  mode: job
+  retention:
+    history: 1h
+sources:
+  in:
+    decoder: json
+    file:
+      path: %s
+      poll_every_ms: 10
+      on_eof: stop
+sinks:
+  out:
+    depends_on: [in]
+    memsink: { id: drained }
+`, filepath.ToSlash(input))
+	path := filepath.Join(dir, "p.yaml")
+	if err := writeFile(path, []byte(yamlText)); err != nil {
+		t.Fatal(err)
+	}
+	h := &jharness{t: t, reg: registry.New(), sinks: map[string]*recordingSink{}, yamlPath: path}
+	if err := builtin.RegisterAll(h.reg); err != nil {
+		t.Fatal(err)
+	}
+	if err := testkit.RegisterFakePull(h.reg); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.reg.RegisterSink("memsink", 1, memSinkSchema, func(cfg map[string]any) (registry.Sink, error) {
+		id, _ := cfg["id"].(string)
+		h.sinkMu.Lock()
+		defer h.sinkMu.Unlock()
+		if s, ok := h.sinks[id]; ok {
+			return s, nil
+		}
+		s := &recordingSink{}
+		h.sinks[id] = s
+		return s, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	st := store.NewMemory()
+	m := h.buildManager(st, time.Now)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	_ = m.Start(ctx)
+	_, jr, err := m.Trigger(ctx, nil, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if jr.Status != store.JobSuccess {
+		t.Fatalf("status = %s (%s)", jr.Status, jr.Error)
+	}
+	if got := len(h.sink("drained").snapshot()); got != 3 {
+		t.Fatalf("delivered %d rows, want 3", got)
+	}
+
+	// Second trigger: the committed offset is at EOF — nothing re-reads.
+	_, jr2, err := m.Trigger(ctx, nil, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if jr2.Status != store.JobSuccess {
+		t.Fatalf("second run status = %s (%s)", jr2.Status, jr2.Error)
+	}
+	if got := len(h.sink("drained").snapshot()); got != 3 {
+		t.Fatalf("second run re-delivered: %d rows total, want 3", got)
+	}
+}

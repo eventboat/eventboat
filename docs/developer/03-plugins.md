@@ -112,7 +112,7 @@ transforms). The factory also receives `dir` — the pipeline file's directory
 ```go
 type Source interface {
     Init(state []byte) error
-    Run(ctx context.Context, emit func(Message))
+    Run(ctx context.Context, emit func(Message)) error
     Commit(ctx context.Context, throughSrcSeq int64) (state []byte, err error)
     Close() error
 }
@@ -121,9 +121,15 @@ type Source interface {
 - `Init` receives the persisted state the source previously returned from
   `Commit` — the engine calls it only when state exists. Restore your offset
   here.
-- `Run` emits continuously; `emit` blocks under backpressure (the admission
-  gate), so no buffering is needed. Set `Message.SrcSeq` to a per-source
-  monotonic sequence — it advances the commit watermark.
+- `Run` returns the source's completion signal (v1.24): `nil` = exhausted
+  (a finite source read to its end — batch runs exit, job runs commit) or a
+  voluntary stop; a non-nil error is a failed source, routed to
+  `OnSourceError` / `SourceErrors` (failed job or batch run). **ctx
+  cancellation is a voluntary stop — return nil, never ctx.Err().** An
+  infinite source (tailer, broker consumer) simply never returns until ctx
+  is cancelled. `emit` blocks under backpressure (the admission gate), so no
+  buffering is needed. Set `Message.SrcSeq` to a per-source monotonic
+  sequence — it advances the commit watermark.
 - `Commit(ctx, throughSrcSeq)` is called whenever the contiguous committed
   frontier advances; commit your offsets *here* (Kafka offsets, file
   offsets, SQL watermarks). The builtin sources use a watermark-bounded
@@ -135,7 +141,12 @@ type Source interface {
 - `PullSource` adds `Pull(ctx, emit) error` for job pipelines: emit rows
   synchronously, return nil on exhaustion (the run commits) or an error
   (the run fails — distinct from per-message dead letters). Sources
-  declaring the `"pull"` capability must implement it.
+  declaring the `"pull"` capability SHOULD implement it; a source without
+  `PullSource` is still job-eligible when `Run` itself terminates (v1.24:
+  the file source with `on_eof: stop` works exactly this way — the job run
+  drives `Run` and its nil return IS the exhaustion signal). The `"finite"`
+  capability declares "Run can exhaust"; the batch mode's
+  `batch_no_finite_source` verify warning keys off it.
 
 ### Sink
 
