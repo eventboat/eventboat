@@ -143,7 +143,7 @@ func (h *harness) request(method string, params any, out any) {
 	}
 }
 
-const brokenDoc = `apiVersion: eventboat/v3
+const brokenDoc = `apiVersion: eventboat/v1
 kind: Pipeline
 metadata: {name: lsp-test}
 sources:
@@ -156,7 +156,7 @@ sinks:
     file: {path: out.jsonl}
 `
 
-const fixedDoc = `apiVersion: eventboat/v3
+const fixedDoc = `apiVersion: eventboat/v1
 kind: Pipeline
 metadata: {name: lsp-test}
 sources:
@@ -273,7 +273,7 @@ func labels(items []completionItem) map[string]bool {
 func TestCompletionInTransformNode(t *testing.T) {
 	h := newHarness(t)
 	h.request("initialize", map[string]any{}, nil)
-	doc := `apiVersion: eventboat/v3
+	doc := `apiVersion: eventboat/v1
 kind: Pipeline
 metadata: {name: c}
 transforms:
@@ -296,7 +296,7 @@ transforms:
 func TestCompletionInSourceNode(t *testing.T) {
 	h := newHarness(t)
 	h.request("initialize", map[string]any{}, nil)
-	doc := `apiVersion: eventboat/v3
+	doc := `apiVersion: eventboat/v1
 kind: Pipeline
 metadata: {name: c}
 sources:
@@ -317,7 +317,7 @@ sources:
 func TestCompletionInsidePluginBlock(t *testing.T) {
 	h := newHarness(t)
 	h.request("initialize", map[string]any{}, nil)
-	doc := `apiVersion: eventboat/v3
+	doc := `apiVersion: eventboat/v1
 kind: Pipeline
 metadata: {name: c}
 sources:
@@ -334,7 +334,7 @@ sources:
 	}
 
 	// With a prefix, the set filters.
-	doc2 := `apiVersion: eventboat/v3
+	doc2 := `apiVersion: eventboat/v1
 kind: Pipeline
 metadata: {name: c}
 sources:
@@ -352,7 +352,7 @@ sources:
 func TestCompletionTopLevel(t *testing.T) {
 	h := newHarness(t)
 	h.request("initialize", map[string]any{}, nil)
-	doc := "apiVersion: eventboat/v3\nkind: Pipeline\n"
+	doc := "apiVersion: eventboat/v1\nkind: Pipeline\n"
 	items := completionAt(t, h, doc, 2, 0)
 	got := labels(items)
 	if !got["sources"] || !got["sinks"] || !got["transforms"] || !got["constants"] || !got["dlq"] {
@@ -363,7 +363,7 @@ func TestCompletionTopLevel(t *testing.T) {
 func TestCompletionDecoderValue(t *testing.T) {
 	h := newHarness(t)
 	h.request("initialize", map[string]any{}, nil)
-	doc := `apiVersion: eventboat/v3
+	doc := `apiVersion: eventboat/v1
 kind: Pipeline
 metadata: {name: c}
 sources:
@@ -380,7 +380,7 @@ sources:
 func TestCompletionInFromObject(t *testing.T) {
 	h := newHarness(t)
 	h.request("initialize", map[string]any{}, nil)
-	doc := `apiVersion: eventboat/v3
+	doc := `apiVersion: eventboat/v1
 kind: Pipeline
 metadata: {name: c}
 sources:
@@ -405,7 +405,7 @@ sinks:
 func TestHover(t *testing.T) {
 	h := newHarness(t)
 	h.request("initialize", map[string]any{}, nil)
-	doc := `apiVersion: eventboat/v3
+	doc := `apiVersion: eventboat/v1
 kind: Pipeline
 metadata: {name: c}
 sources:

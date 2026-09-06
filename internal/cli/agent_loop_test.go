@@ -35,7 +35,7 @@ func TestAgentLoopOverMCP(t *testing.T) {
 
 	pipelineYAML := func(scriptLine string) string {
 		return fmt.Sprintf(`
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: agent-loop-sync }
 run: { mode: job }

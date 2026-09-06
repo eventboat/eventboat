@@ -26,7 +26,7 @@ func TestEnginePluginTransformFilters(t *testing.T) {
 		t.Fatal(err)
 	}
 	pip := h.build(`
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: sieve }
 sources:
@@ -73,7 +73,7 @@ func TestEnginePluginTransformExpands(t *testing.T) {
 		t.Fatal(err)
 	}
 	pip := h.build(`
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: triple }
 sources:
@@ -114,7 +114,7 @@ func TestEnginePluginTransformErrorRetriesThenDeadLetters(t *testing.T) {
 		t.Fatal(err)
 	}
 	pip := h.build(`
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: flaky }
 edge_defaults:
@@ -174,7 +174,7 @@ func TestEngineTransformCloneFailureFailsPipeline(t *testing.T) {
 		t.Fatal(err)
 	}
 	pip := h.build(`
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: cloner }
 sources:

@@ -12,7 +12,7 @@ import (
 func TestCesqlEdgePredicate(t *testing.T) {
 	h := newHarness(t)
 	pip := h.build(`
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: cesql-edges }
 sources:

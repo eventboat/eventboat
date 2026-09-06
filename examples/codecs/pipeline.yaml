@@ -1,7 +1,7 @@
 # Named codec declarations (§5.10): csv in, avro out. One message is one
 # CSV record; the transform sees typed fields (float amount, int quantity),
 # and the sink encodes the enriched record as Avro.
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: {name: codecs-example}
 

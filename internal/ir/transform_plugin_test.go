@@ -10,7 +10,7 @@ import (
 // findings with the same diagnostic codes.
 func TestTransformPluginUnknown(t *testing.T) {
 	_, diags := build(t, `
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: x }
 sources:
@@ -31,7 +31,7 @@ sinks:
 // the plugin catalog for a plugin that cannot exist.
 func TestTransformGrpcBlockHintFutureWork(t *testing.T) {
 	_, diags := build(t, `
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: x }
 sources:
@@ -56,7 +56,7 @@ sinks:
 
 func TestTransformVersionPin(t *testing.T) {
 	_, diags := build(t, `
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: x }
 sources:
@@ -77,7 +77,7 @@ sinks:
 
 func TestTransformScriptCompileErrorKeepsCode(t *testing.T) {
 	_, diags := build(t, `
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: x }
 sources:
@@ -106,7 +106,7 @@ sinks:
 // plugin's JSON Schema expresses every range and the allowlist.
 func TestTransformWasmSchemaGates(t *testing.T) {
 	_, diags := build(t, `
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: x }
 sources:
@@ -137,7 +137,7 @@ sinks:
 
 func TestTransformWasmMissingModuleIsCompileFinding(t *testing.T) {
 	_, diags := build(t, `
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: x }
 sources:

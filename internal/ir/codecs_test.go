@@ -34,7 +34,7 @@ func errCodes(diags []config.Diagnostic) []string {
 }
 
 const csvPipeline = `
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: {name: codecs-test}
 codecs:

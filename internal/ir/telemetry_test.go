@@ -6,7 +6,7 @@ import "testing"
 // match, so it is a verify error (telemetry_redact_pattern).
 func TestTelemetryRedactPatternVerified(t *testing.T) {
 	_, diags := build(t, `
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: x }
 telemetry:
@@ -20,7 +20,7 @@ sinks:
 		t.Fatalf("expected telemetry_redact_pattern, got %+v", diags)
 	}
 	if pip, _ := build(t, `
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: x }
 telemetry:

@@ -10,7 +10,7 @@ import (
 
 func TestLoadValidThreeSection(t *testing.T) {
 	res := LoadBytes("p.yaml", []byte(`
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: orders }
 
@@ -63,7 +63,7 @@ sinks:
 
 func TestUnknownTopLevelAndNodeFieldsAreErrors(t *testing.T) {
 	res := LoadBytes("p.yaml", []byte(`
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: x }
 bogus_section: { mode: job }
@@ -93,7 +93,7 @@ func TestTransformMultiplePluginBlocksRejected(t *testing.T) {
 	// script and split are plugin keys now (spec v1.19): two plugin blocks on
 	// one transform node is the same error as on a source.
 	res := LoadBytes("p.yaml", []byte(`
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: x }
 sources:
@@ -123,7 +123,7 @@ func TestTransformPluginBlockRetainedRaw(t *testing.T) {
 	// string, wasm a mapping); schema validation happens at verify with a
 	// registry, not at parse.
 	res := LoadBytes("p.yaml", []byte(`
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: x }
 sources:
@@ -183,7 +183,7 @@ func TestWasmRawConfigPreserved(t *testing.T) {
 	// M3-audit J2: unset vs explicit timeout_ms is a verify-time lint against
 	// the raw block; parse keeps both exactly as written.
 	res := LoadBytes("p.yaml", []byte(`
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: x }
 sources:
@@ -211,7 +211,7 @@ sinks:
 
 func TestSourceWithFromRejected(t *testing.T) {
 	res := LoadBytes("p.yaml", []byte(`
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: x }
 sources:
@@ -237,7 +237,7 @@ func TestEnvSubstitutionForms(t *testing.T) {
 	defer func() { _ = os.Unsetenv("EB_TEST_WORKERS") }()
 
 	res := LoadBytes("p.yaml", []byte(`
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: x }
 sources:
@@ -284,7 +284,7 @@ sinks:
 
 func TestConstantsSubstitution(t *testing.T) {
 	res := LoadBytes("p.yaml", []byte(`
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: x }
 constants:
@@ -318,7 +318,7 @@ func TestLoadFileMissing(t *testing.T) {
 // redesign-v3.md §5.5): only `constants` is a legal scope in the POC.
 func TestScopedSubstitutionUnknownScopeErrors(t *testing.T) {
 	res := LoadBytes("p.yaml", []byte(`
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: x }
 sources:
@@ -344,7 +344,7 @@ sinks:
 // in a job pipeline the token passes through unresolved (resolved per run).
 func TestScopedSubstitutionParametersGuided(t *testing.T) {
 	res := LoadBytes("p.yaml", []byte(`
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: x }
 sources:
@@ -367,7 +367,7 @@ sinks:
 
 	// Job pipeline: the token survives for the jobs runner.
 	res = LoadBytes("job.yaml", []byte(`
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: x }
 run:
@@ -394,7 +394,7 @@ func TestScopedSubstitutionConstantsAndEnvStillWork(t *testing.T) {
 	_ = os.Setenv("EB_TEST_OK_VAR", "prod")
 	defer func() { _ = os.Unsetenv("EB_TEST_OK_VAR") }()
 	res := LoadBytes("p.yaml", []byte(`
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: x }
 constants:
@@ -425,7 +425,7 @@ func TestOptionalScopedReferencesAreErrors(t *testing.T) {
 	}
 	for _, tc := range cases {
 		res := LoadBytes("p.yaml", []byte(`
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: x }
 constants:
@@ -451,7 +451,7 @@ sinks:
 // key silently — optionality remains valid for plain environment variables.
 func TestOptionalEnvStillOmitsKey(t *testing.T) {
 	res := LoadBytes("p.yaml", []byte(`
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: x }
 sources:
@@ -480,7 +480,7 @@ func TestEnvUnsetDiagnosticReportedOnce(t *testing.T) {
 		`file: { brokers: ["${EB_TEST_MISSING_ONCE}"], path: a }`, // sequence element (kafka-style)
 	} {
 		res := LoadBytes("p.yaml", []byte(`
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: x }
 sources:
@@ -506,7 +506,7 @@ sinks:
 // Options happens via engine.Options.WithLimits).
 func TestLimitsSection(t *testing.T) {
 	res := LoadBytes("p.yaml", []byte(`
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: x }
 limits:
@@ -538,7 +538,7 @@ sinks:
 		{"not a mapping", "limits: 10", "cfg_limits_type"},
 	} {
 		res := LoadBytes("p.yaml", []byte(`
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: x }
 `+tc.body+`
@@ -564,7 +564,7 @@ sinks:
 // applies no non-zero default because deletion destroys `replay` input.
 func TestDLQSection(t *testing.T) {
 	res := LoadBytes("p.yaml", []byte(`
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: x }
 dlq:
@@ -583,7 +583,7 @@ sinks:
 
 	// Unset: DLQ nil (keep forever) and dlq is no longer an unknown section.
 	res = LoadBytes("p.yaml", []byte(`
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: x }
 sources:
@@ -610,7 +610,7 @@ sinks:
 		{"not a mapping", "dlq: 10", "cfg_dlq_type"},
 	} {
 		res := LoadBytes("p.yaml", []byte(`
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: x }
 `+tc.body+`
@@ -658,7 +658,7 @@ func TestMetadataNameValidation(t *testing.T) {
 	// the single gate every consumer (CLI, LSP, MCP, Admin REST) passes
 	// through before the name reaches the filesystem.
 	pipeline := func(name string) string {
-		return "apiVersion: eventboat/v3\nkind: Pipeline\nmetadata: { name: " + name + " }\n" +
+		return "apiVersion: eventboat/v1\nkind: Pipeline\nmetadata: { name: " + name + " }\n" +
 			"sources:\n  in: { decoder: json, file: { path: a } }\n" +
 			"sinks:\n  out: { depends_on: [in], file: { path: o } }\n"
 	}
@@ -694,7 +694,7 @@ func TestMetadataNameValidation(t *testing.T) {
 	} {
 		var res *Result
 		if tc.name == "" {
-			res = LoadBytes("p.yaml", []byte("apiVersion: eventboat/v3\nkind: Pipeline\n"+
+			res = LoadBytes("p.yaml", []byte("apiVersion: eventboat/v1\nkind: Pipeline\n"+
 				"sources:\n  in: { decoder: json, file: { path: a } }\n"+
 				"sinks:\n  out: { depends_on: [in], file: { path: o } }\n"))
 		} else {

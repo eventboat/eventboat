@@ -39,7 +39,7 @@ func TestCustomBuildAcceptance(t *testing.T) {
 	output := filepath.Join(work, "echoed.out.jsonl")
 	pipeline := filepath.Join(work, "myecho.pipeline.yaml")
 	yaml := fmt.Sprintf(`
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: custom-build-acceptance }
 sources:

@@ -82,8 +82,8 @@ func Load(path string) (Config, error) {
 	if err := yaml.Unmarshal(raw, &doc); err != nil {
 		return cfg, fmt.Errorf("runtime config %s: %w", file, err)
 	}
-	if v, ok := doc["apiVersion"].(string); ok && v != "eventboat/v3" {
-		return cfg, fmt.Errorf("runtime config %s: apiVersion must be eventboat/v3", file)
+	if v, ok := doc["apiVersion"].(string); ok && v != "eventboat/v1" {
+		return cfg, fmt.Errorf("runtime config %s: apiVersion must be eventboat/v1", file)
 	}
 	if v, ok := doc["kind"].(string); ok && v != "Runtime" {
 		return cfg, fmt.Errorf("runtime config %s: kind must be Runtime", file)

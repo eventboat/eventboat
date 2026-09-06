@@ -33,7 +33,7 @@ func buildPipeline(t *testing.T, yamlText string) *ir.Pipeline {
 }
 
 const branchingYAML = `
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: eb }
 constants:
@@ -93,7 +93,7 @@ func TestTraceMessageLevel(t *testing.T) {
 // stops (exactly what production would do with the same input).
 func TestTraceScriptFailureShown(t *testing.T) {
 	pip := buildPipeline(t, `
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: boom }
 sources:
@@ -124,7 +124,7 @@ sinks:
 // post-transform (the disclosure the transform-plugin refactor dropped).
 func TestTraceMessageLevelWasmDisclosed(t *testing.T) {
 	pip := buildPipeline(t, `
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: wasm-explain }
 sources:

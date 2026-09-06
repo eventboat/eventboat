@@ -14,7 +14,7 @@ import (
 func TestSharedAdmissionPoolCapsConcurrentEngines(t *testing.T) {
 	h := newHarness(t)
 	const pipelineYAMLA = `
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: poola }
 edge_defaults:
@@ -29,7 +29,7 @@ sinks:
     mem: { id: shared }
 `
 	const pipelineYAMLB = `
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: poolb }
 edge_defaults:

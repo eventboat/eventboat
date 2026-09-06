@@ -11,7 +11,7 @@ func TestGrpcRestartParsing(t *testing.T) {
 	manifest := filepath.ToSlash(filepath.Join("..", "..", "examples", "plugins", "ticker-source", "manifest.json"))
 	mk := func(restart string) *Result {
 		return LoadBytes("p.yaml", []byte(`
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: x }
 sources:

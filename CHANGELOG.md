@@ -88,6 +88,15 @@ hygiene findings.
 
 ### Changed
 
+- **Breaking: the config `apiVersion` is renamed from `eventboat/v3` to
+  `eventboat/v1`** — the version stamps the config format's own generation,
+  not the redesign document that produced it; `v3` leaked the internal spec
+  numbering (redesign-v3) into the public config surface. Hard switch, no
+  alias (POC, no backward-compat obligation): configs still using the old
+  value fail verify with `cfg_api_version` (and the runtime-config loader
+  errors) pointing at the new spelling. The loader, runtimecfg, all six
+  examples, both READMEs, the developer guide, and the spec (v1.23 revision
+  note) are synced.
 - **Breaking: the node wiring field `from` is renamed to `depends_on`** —
   transforms and sinks declare their upstream nodes with
   `depends_on: [upstream]` or `depends_on: { upstream: { when: '...' } }`;

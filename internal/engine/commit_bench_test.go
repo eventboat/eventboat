@@ -18,7 +18,7 @@ import (
 // tracker must stay available to arrivals and other commits).
 func BenchmarkCommitThroughput(b *testing.B) {
 	const benchYAML = `
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: bench }
 edge_defaults:

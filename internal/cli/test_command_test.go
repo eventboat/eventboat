@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-const mixedPipelineYAML = `apiVersion: eventboat/v3
+const mixedPipelineYAML = `apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: mixed }
 sources:

@@ -116,7 +116,7 @@ func TestSoakMixedLoadWithFaults(t *testing.T) {
 		return nil
 	}
 	eng1, stop1 := mustRun(t, reg, wrapped, opts, buildPipeline(t, reg, "fan", `
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: soak-fan }
 edge_defaults:
@@ -155,7 +155,7 @@ sinks:
 		return nil
 	}
 	eng2, stop2 := mustRun(t, reg, st2, opts, buildPipeline(t, reg, "dlq", `
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: soak-dlq }
 edge_defaults:

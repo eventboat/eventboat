@@ -75,7 +75,7 @@ type jharness struct {
 }
 
 const jobYAMLTemplate = `
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: nightly }
 run:
@@ -469,7 +469,7 @@ func TestJobParameterBackfill(t *testing.T) {
 	testkit.ResetFakePull()
 	dir := t.TempDir()
 	yamlText := `
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: backfill }
 run: { mode: job }
@@ -685,7 +685,7 @@ func TestJobPartialOnDeadLetters(t *testing.T) {
 	testkit.ResetFakePull()
 	dir := t.TempDir()
 	yamlText := `
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: partial }
 run: { mode: job }

@@ -63,7 +63,7 @@ func TestAbandonStoreError(t *testing.T) {
 func TestAbandonDeadLettersOutstanding(t *testing.T) {
 	h := newHarness(t)
 	const yamlText = `
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: abandons }
 edge_defaults:

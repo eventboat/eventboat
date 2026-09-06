@@ -61,7 +61,7 @@ agents that write your pipelines.
 plugin name is the key:
 
 ```yaml
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: order-branching }
 

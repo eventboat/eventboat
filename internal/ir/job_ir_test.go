@@ -21,7 +21,7 @@ func defaultStarOpts() starhost.Options { return starhost.DefaultOptions() }
 // A job pipeline whose source lacks pull capability is a verify error.
 func TestJobSourceMustBePull(t *testing.T) {
 	_, diags := build(t, `
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: badjob }
 run: { mode: job, schedule: "0 1 * * *" }
@@ -42,7 +42,7 @@ sinks:
 // capability path is covered by TestJobSourceMustBePull and the sql tests.
 func TestJobBadScheduleRejected(t *testing.T) {
 	_, diags := build(t, `
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: badcron }
 run: { mode: job, schedule: "not cron" }
@@ -63,7 +63,7 @@ sinks:
 func TestParametersReferenceLegality(t *testing.T) {
 	// Continuous pipeline referencing parameters binding in a script.
 	_, diags := build(t, `
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: cont }
 sources:
@@ -82,7 +82,7 @@ sinks:
 
 	// Continuous pipeline referencing parameters in a when.
 	_, diags = build(t, `
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: cont2 }
 sources:
@@ -96,7 +96,7 @@ sinks:
 
 	// Job pipeline: undeclared ${parameters.x} token.
 	_, diags = build(t, `
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: job1 }
 run: { mode: job }
@@ -117,7 +117,7 @@ sinks:
 // Hooks are validated against sink plugin schemas.
 func TestHookSinkSchemaValidated(t *testing.T) {
 	_, diags := build(t, `
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: jobhooks }
 run: { mode: job }
@@ -135,7 +135,7 @@ sinks:
 	}
 
 	_, diags = build(t, `
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: jobhooks2 }
 run: { mode: job }
@@ -156,7 +156,7 @@ sinks:
 // sql (pull) source in a continuous pipeline is a warning, not an error.
 func TestSqlInContinuousIsWarning(t *testing.T) {
 	pip, diags := build(t, `
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: contsql }
 sources:
@@ -184,7 +184,7 @@ sinks:
 // predicates; resolved actuals override defaults when provided.
 func TestJobPipelineBuildsWithParameters(t *testing.T) {
 	lr := loadBytes(t, `
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: jobok }
 run: { mode: job }
@@ -229,7 +229,7 @@ sinks:
 func TestJobRunRetentionUnsetWarns(t *testing.T) {
 	job := func(run string) string {
 		return `
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: retjob }
 run: { mode: job` + run + ` }
@@ -257,7 +257,7 @@ sinks:
 
 	// Continuous pipelines have no run history — out of scope.
 	_, diags = build(t, `
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: cont }
 sources:

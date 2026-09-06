@@ -211,7 +211,7 @@ func TestKafkaRoundtripThroughEngine(t *testing.T) {
 	mustCreateTopic(t, "int-out", 1)
 	outFile := filepath.Join(t.TempDir(), "audit.jsonl")
 	eng, _ := runPipeline(t, fmt.Sprintf(`
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: kafka-roundtrip }
 edge_defaults:
@@ -282,7 +282,7 @@ sinks:
 func TestKafkaMalformedRecordDeadLetters(t *testing.T) {
 	mustCreateTopic(t, "int-bad", 1)
 	eng, _ := runPipeline(t, fmt.Sprintf(`
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: kafka-dlq }
 sources:
@@ -323,7 +323,7 @@ func TestKafkaConsumerGroupRebalance(t *testing.T) {
 	outB := filepath.Join(t.TempDir(), "b.jsonl")
 	pipeline := func(out string) string {
 		return fmt.Sprintf(`
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: kafka-reb-%[2]s }
 sources:

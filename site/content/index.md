@@ -62,7 +62,7 @@ eventboat run --config examples/linear/pipeline.yaml
 A minimal pipeline — three sections joined by `depends_on` (`examples/linear`):
 
 ```yaml
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: linear-etl }
 

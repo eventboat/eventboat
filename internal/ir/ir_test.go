@@ -39,7 +39,7 @@ func hasCode(diags []config.Diagnostic, code string) bool {
 
 func TestBuildHappyPath(t *testing.T) {
 	pip, diags := build(t, `
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: x }
 sources:
@@ -71,7 +71,7 @@ sinks:
 
 func TestCycleDetected(t *testing.T) {
 	_, diags := build(t, `
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: x }
 sources:
@@ -89,7 +89,7 @@ sinks:
 
 func TestMissingReferenceAndOrphan(t *testing.T) {
 	_, diags := build(t, `
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: x }
 sources:
@@ -106,7 +106,7 @@ sinks:
 
 func TestNoSourceSinkPath(t *testing.T) {
 	_, diags := build(t, `
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: x }
 sources:
@@ -122,7 +122,7 @@ sinks:
 
 func TestDuplicateNameAcrossSections(t *testing.T) {
 	_, diags := build(t, `
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: x }
 sources:
@@ -139,7 +139,7 @@ sinks:
 
 func TestSinkAsUpstreamRejected(t *testing.T) {
 	_, diags := build(t, `
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: x }
 sources:
@@ -156,7 +156,7 @@ sinks:
 func TestRouteSugarCompilesAndDanglingDetected(t *testing.T) {
 	// No meta.route assignment upstream => dangling route error.
 	_, diags := build(t, `
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: x }
 sources:
@@ -176,7 +176,7 @@ sinks:
 
 	// With the assignment present, route compiles to a when predicate.
 	pip, diags := build(t, `
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: x }
 sources:
@@ -207,7 +207,7 @@ sinks:
 
 func TestCelCompileErrorDiagnostic(t *testing.T) {
 	_, diags := build(t, `
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: x }
 sources:
@@ -222,7 +222,7 @@ sinks:
 
 func TestStarlarkCompileErrorDiagnostic(t *testing.T) {
 	_, diags := build(t, `
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: x }
 sources:
@@ -239,7 +239,7 @@ sinks:
 
 func TestPluginSchemaUnknownFieldIsError(t *testing.T) {
 	_, diags := build(t, `
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: x }
 sources:
@@ -262,7 +262,7 @@ sinks:
 
 func TestLintWarnsOnLiteralAndUnusedConstant(t *testing.T) {
 	_, diags := build(t, `
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: x }
 constants:
@@ -287,7 +287,7 @@ sinks:
 // it on the loader's pre-substitution record (M1 debt regression test).
 func TestLintCountsSubstitutedConstantReferences(t *testing.T) {
 	_, diags := build(t, `
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: x }
 constants:
@@ -317,7 +317,7 @@ sinks:
 // (substitution happens in the loader, before CEL compilation).
 func TestLintCountsSubstitutedConstantInWhen(t *testing.T) {
 	_, diags := build(t, `
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: x }
 constants:

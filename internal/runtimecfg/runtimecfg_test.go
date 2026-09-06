@@ -10,7 +10,7 @@ func TestSpoolRetention(t *testing.T) {
 	dir := t.TempDir()
 	file := filepath.Join(dir, "eventboat.yaml")
 	if err := os.WriteFile(file, []byte(`
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Runtime
 storage:
   data_dir: elsewhere

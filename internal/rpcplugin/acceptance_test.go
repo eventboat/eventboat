@@ -44,7 +44,7 @@ func buildTicker(t *testing.T) (bin, manifest string) {
 
 func acceptanceYAML(bin, manifest, outFile string) string {
 	return fmt.Sprintf(`
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: ticker-acceptance }
 sources:

@@ -183,10 +183,10 @@ func LoadBytes(file string, data []byte) *Result {
 		}
 	}
 
-	if v, ok := raw["apiVersion"].(string); !ok || v != "eventboat/v3" {
+	if v, ok := raw["apiVersion"].(string); !ok || v != "eventboat/v1" {
 		res.Diagnostics = append(res.Diagnostics, Diagnostic{
 			Severity: "error", Code: "cfg_api_version", File: file, Line: lines.line("apiVersion"),
-			Message: fmt.Sprintf("apiVersion must be %q", "eventboat/v3"), Hint: "set apiVersion: eventboat/v3",
+			Message: fmt.Sprintf("apiVersion must be %q", "eventboat/v1"), Hint: "set apiVersion: eventboat/v1",
 		})
 	}
 	if v, ok := raw["kind"].(string); !ok || v != "Pipeline" {

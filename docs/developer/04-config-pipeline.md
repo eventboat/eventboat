@@ -113,7 +113,7 @@ Every diagnostic code that exists in the code, by emitting layer. Severity
 | `yaml_parse` | error | YAML syntax error, top level not a mapping, or decode failure | `top level must be a mapping` |
 | `empty_config` | error | the document is empty | `configuration is empty` |
 | `cfg_unknown_top_section` | error | unknown top-level key | `unknown top-level key "codecs2"` |
-| `cfg_api_version` | error | `apiVersion` is not `eventboat/v3` | `apiVersion must be "eventboat/v3"` |
+| `cfg_api_version` | error | `apiVersion` is not `eventboat/v1` | `apiVersion must be "eventboat/v1"` |
 | `cfg_kind` | error | `kind` is not `Pipeline` | `kind must be "Pipeline"` |
 | `cfg_metadata_name` | error | `metadata.name` missing/blank | `metadata.name is required` |
 | `cfg_name_invalid` | error | name violates charset/`..`/reserved-name rules | `metadata.name "con" must be 1-64 characters of [a-zA-Z0-9._-]...` |

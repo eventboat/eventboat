@@ -6,7 +6,7 @@ import "testing"
 // rate, strict whitelist, nil when absent.
 func TestTelemetrySectionParsing(t *testing.T) {
 	res := LoadBytes("p.yaml", []byte(`
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: x }
 telemetry:
@@ -36,7 +36,7 @@ sinks:
 
 func TestTelemetrySectionErrors(t *testing.T) {
 	res := LoadBytes("p.yaml", []byte(`
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: x }
 telemetry:
@@ -65,7 +65,7 @@ sinks:
 
 func TestTelemetryAbsentMeansNil(t *testing.T) {
 	res := LoadBytes("p.yaml", []byte(`
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: x }
 sources:

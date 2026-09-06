@@ -106,7 +106,7 @@
 
 ## 三、一致性核查
 
-1. **§5.1 命名决定 ↔ 全文示例**：逐处抽查 `edge_defaults`/`constants`/`parameters`/`when`/`route`/`delivery`/`required`/`dlq`/`max_in_flight`/`catchup_window`/`apiVersion: eventboat/v3`/`hooks`/`telemetry`——§5.3、§5.4、§5.7、§5.8、§5.10、§3.6 CLI 标志（`--parameters`、`replay --dlq`）相互一致；v1.5/v1.6 全称原则的回退项（dlq/args/dsn 保留）在 §5.10 与 §3.6 用法统一。未发现残留旧名。
+1. **§5.1 命名决定 ↔ 全文示例**：逐处抽查 `edge_defaults`/`constants`/`parameters`/`when`/`route`/`delivery`/`required`/`dlq`/`max_in_flight`/`catchup_window`/`apiVersion: eventboat/v1`/`hooks`/`telemetry`——§5.3、§5.4、§5.7、§5.8、§5.10、§3.6 CLI 标志（`--parameters`、`replay --dlq`）相互一致；v1.5/v1.6 全称原则的回退项（dlq/args/dsn 保留）在 §5.10 与 §3.6 用法统一。未发现残留旧名。
 2. **settle/spool/checkpoint/死信跨节自洽**：§6.2"死信写入成功 = 分支终态" ↔ 不变量 4"死信写入失败不得 settle"（正反两面）；§6.2"checkpoint = settled 消息的 spool 位点" ↔ 不变量 2；§5.8"水位只推进到已 settle 消息的 max(cursor_column)" ↔ 不变量 7（作业版同一原理）；§6.3 死信表字段（原始消息+错误+backtrace）↔ §4.3 错误模型。无矛盾。
 3. **七条不变量独立可测**：1（spool 先于可见）/2（settle 先于 checkpoint）/3（kill-9 重放 ⊇ 未 settle）/4（死信写失败阻塞 settle）/5（required:false 隔离）/6（幂等键稳定）/7（水位 ≤ settled max）——无一条可由另一条推导，每条可写专属测试（测试名 `TestInvariant_*` 可检索）。
 4. **§5.7 before/after 对照**与 §5.3 唯一写法一致；合体 step 在三段式下物理不可表达（结构杜绝）属实。

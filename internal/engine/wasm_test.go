@@ -36,7 +36,7 @@ func TestWasmTransformChain(t *testing.T) {
 	mod := guestPath(t)
 	h := newHarness(t)
 	pip := h.build(`
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: wasm-chain }
 sources:
@@ -71,7 +71,7 @@ func TestWasmTransformFailureDeadLetters(t *testing.T) {
 	mod := guestPath(t)
 	h := newHarness(t)
 	pip := h.build(`
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: wasm-fail }
 sources:
@@ -124,7 +124,7 @@ func TestWasmNoKillSwitchLint(t *testing.T) {
 	buildDiags := func(wasmExtra string) []config.Diagnostic {
 		t.Helper()
 		lr := config.LoadBytes("wasm-lint.yaml", []byte(`
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: wasm-lint }
 sources:

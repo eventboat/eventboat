@@ -110,7 +110,7 @@
 | `edgeDefaults` | `edge_defaults`（buffer size→max_events；`required` 同名） | 自动（字段级差异见下） |
 | `delivery:{retry:{max,backoff},timeout}` | `delivery:{retries,backoff,timeout_ms}` | 自动（5s→5000） |
 | v2 `codecs:`（name/type/config + `ref` 引用） | v3 `codecs:` 命名声明（R4 形状） | 自动（第三步落地后） |
-| `apiVersion/kind/metadata` | 同形（`eventboat/v3`） | 自动 |
+| `apiVersion/kind/metadata` | 同形（`eventboat/v1`） | 自动 |
 | `engine.max_workers` / `error_mode` | 无对应（v3 无全局 worker/error_mode） | **报告**（建议逐节点 `workers:`） |
 | `engine` 其余、`observability:` | Runtime 部署配置 | **报告**（提示 kind: Runtime 形态，不自动生成） |
 | `dlq:` 段 + 无入边 dlq-sink step | v3 死信库（store 机制）+ `replay --dlq` | **自动删除 + 报告**（dlq-sink 节点移除） |

@@ -55,7 +55,7 @@ func TestReplayCLIDeadLetters(t *testing.T) {
 
 	pipeline := filepath.Join(dir, "p.yaml")
 	if err := os.WriteFile(pipeline, []byte(`
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: replayme }
 sources:

@@ -16,7 +16,7 @@ import (
 func TestMCPHTTPRefusesNonLoopbackWithoutToken(t *testing.T) {
 	t.Setenv("EVENTBOAT_ADMIN_TOKEN", "")
 	rt := filepath.Join(t.TempDir(), "eventboat.yaml")
-	cfg := "apiVersion: eventboat/v3\nkind: Runtime\nadmin:\n  listen: \"0.0.0.0:7788\"\n"
+	cfg := "apiVersion: eventboat/v1\nkind: Runtime\nadmin:\n  listen: \"0.0.0.0:7788\"\n"
 	if err := os.WriteFile(rt, []byte(cfg), 0o644); err != nil {
 		t.Fatal(err)
 	}

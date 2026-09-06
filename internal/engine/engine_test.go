@@ -11,7 +11,7 @@ import (
 )
 
 const linearYAML = `
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: linear }
 sources:
@@ -62,7 +62,7 @@ func TestEngineLinearFlow(t *testing.T) {
 func TestEngineFanIn(t *testing.T) {
 	h := newHarness(t)
 	pip := h.build(`
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: fanin }
 sources:
@@ -104,7 +104,7 @@ sinks:
 func TestEngineSplit(t *testing.T) {
 	h := newHarness(t)
 	pip := h.build(`
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: split }
 sources:
@@ -137,7 +137,7 @@ sinks:
 func TestEngineConditionalRouting(t *testing.T) {
 	h := newHarness(t)
 	pip := h.build(`
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: branch }
 sources:
@@ -177,7 +177,7 @@ sinks:
 func TestEngineDecodeErrorGoesToDeadLetter(t *testing.T) {
 	h := newHarness(t)
 	pip := h.build(`
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: dlq }
 sources:
@@ -210,7 +210,7 @@ sinks:
 func TestEngineScriptErrorRetriesThenDeadLetters(t *testing.T) {
 	h := newHarness(t)
 	pip := h.build(`
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: scriptfail }
 edge_defaults:
@@ -256,7 +256,7 @@ sinks:
 func TestEngineSinkRetryThenSuccess(t *testing.T) {
 	h := newHarness(t)
 	pip := h.build(`
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: retry }
 edge_defaults:
@@ -290,7 +290,7 @@ sinks:
 func TestEngineBackpressurePausesSource(t *testing.T) {
 	h := newHarness(t)
 	pip := h.build(`
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: bp }
 sources:
@@ -344,7 +344,7 @@ sinks:
 func TestEngineCELWrongTypeCountsAsNotPassed(t *testing.T) {
 	h := newHarness(t)
 	pip := h.build(`
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: celerr }
 sources:
@@ -384,7 +384,7 @@ func (e errString) Error() string { return string(e) }
 func TestEngineInjectReplayPreservesIdentity(t *testing.T) {
 	h := newHarness(t)
 	pip := h.build(`
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: replayid }
 sources:
@@ -473,7 +473,7 @@ func TestOptionsWithLimits(t *testing.T) {
 func TestEngineDrainBoundedByDrainTimeout(t *testing.T) {
 	h := newHarness(t)
 	pip := h.build(`
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: drainlim }
 limits: { drain_timeout: 50ms }

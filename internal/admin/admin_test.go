@@ -38,7 +38,7 @@ func newService(t *testing.T) *ops.Service {
 }
 
 const tinyPipeline = `
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: tiny }
 sources:
@@ -97,7 +97,7 @@ func TestAdminRESTSurface(t *testing.T) {
 
 	// A broken deploy is rejected with diagnostics (verify-first).
 	body := post("/admin/deploy",
-		`{"config":"apiVersion: eventboat/v3\nkind: Pipeline\nmetadata: { name: bad }\nrun:\n  mode: job\nsources:\n  x:\n    decoder: json\n    cron: { expression: \"0 0 * * *\" }\nsinks:\n  o: { depends_on: [x], file: { path: o } }\n"}`,
+		`{"config":"apiVersion: eventboat/v1\nkind: Pipeline\nmetadata: { name: bad }\nrun:\n  mode: job\nsources:\n  x:\n    decoder: json\n    cron: { expression: \"0 0 * * *\" }\nsinks:\n  o: { depends_on: [x], file: { path: o } }\n"}`,
 		http.StatusBadRequest)
 	if !strings.Contains(body, "job_source_not_pull") {
 		t.Fatalf("deploy diagnostics missing the capability error: %s", body)
@@ -339,7 +339,7 @@ func TestAdminDeployRejectsTraversalName(t *testing.T) {
 	h := Handler(svc, nil, nil, Security{Listen: "127.0.0.1:7788"})
 
 	req := httptest.NewRequest(http.MethodPost, "/admin/deploy", strings.NewReader(
-		`{"config":"apiVersion: eventboat/v3\nkind: Pipeline\nmetadata: { name: ../../evil }\nsources:\n  in: { decoder: json, file: { path: a } }\nsinks:\n  out: { depends_on: [in], file: { path: o } }\n"}`))
+		`{"config":"apiVersion: eventboat/v1\nkind: Pipeline\nmetadata: { name: ../../evil }\nsources:\n  in: { decoder: json, file: { path: a } }\nsinks:\n  out: { depends_on: [in], file: { path: o } }\n"}`))
 	req.Host = "127.0.0.1:7788"
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)

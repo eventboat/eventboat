@@ -51,7 +51,7 @@ sources、transforms、sinks 通过 `depends_on` 连成显式 DAG——Eventboat
 **管道模型**——管道即三段式，`depends_on` 连边，插件名即键：
 
 ```yaml
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: order-branching }
 

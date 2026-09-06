@@ -7,7 +7,7 @@ import (
 )
 
 const jobPipeline = `
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: nightly }
 run:
@@ -68,7 +68,7 @@ func TestJobSectionsParse(t *testing.T) {
 func TestJobSectionsValidation(t *testing.T) {
 	base := func(body string) *Result {
 		return LoadBytes("job.yaml", []byte(`
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: nightly }
 `+body+`

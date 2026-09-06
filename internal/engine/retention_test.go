@@ -19,7 +19,7 @@ import (
 // restart (invariant 3 under retention).
 
 const retentionYAML = `
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: ret }
 edge_defaults:
@@ -184,7 +184,7 @@ func TestSpoolRetentionBindsMemoryStore(t *testing.T) {
 // dlqYAML arms dlq.retention through the pipeline config: the engine must
 // pick it up without any Options plumbing (the IR-config fallback in New).
 const dlqYAML = `
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: ret }
 edge_defaults:

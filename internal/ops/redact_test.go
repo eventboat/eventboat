@@ -121,7 +121,7 @@ func TestDeadLetterQueryAppliesRedaction(t *testing.T) {
 	t.Cleanup(svc.Stop)
 
 	if _, err := svc.Deploy(context.Background(), `
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: redact-dlq }
 telemetry:

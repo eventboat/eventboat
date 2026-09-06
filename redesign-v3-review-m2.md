@@ -114,7 +114,7 @@
 - **建议**：**最小 Runtime 配置文件 + CLI 覆盖**，而非继续堆 CLI 标志。理由：M2 新增 knobs（OTLP endpoint、采样率、admin 监听、MCP 开关）已超过 3 个心智单位；spec §5.10 明文"全局端点与导出器在部署级配置文件"（文件形态是规范本意，不是新发明）；CI/测试仍可用全标志形态（标志覆盖文件）。形态（kind: Runtime，~10 个字段，严格白名单校验，未知字段=错误）：
 
   ```yaml
-  apiVersion: eventboat/v3
+  apiVersion: eventboat/v1
   kind: Runtime
   storage:   { data_dir: data, ephemeral: false }
   admin:     { listen: "127.0.0.1:7788", enable: true }   # REST+SSE+UI+/metrics

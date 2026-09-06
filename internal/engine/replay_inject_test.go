@@ -13,7 +13,7 @@ import (
 // a fan-out from it.
 
 const replayInjectYAML = `
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: replayinject }
 sources:

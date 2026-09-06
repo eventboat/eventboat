@@ -17,7 +17,7 @@ import (
 // dedicated, retrievable test (TestInvariant_*).
 
 const invYAML = `
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: inv }
 edge_defaults:
@@ -221,7 +221,7 @@ func TestInvariant_DeadLetterWriteFailureBlocksCommit(t *testing.T) {
 func TestInvariant_RequiredFalseFailureDoesNotBlockSiblingBranches(t *testing.T) {
 	h := newHarness(t)
 	pip := h.build(`
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: inv5 }
 edge_defaults:
@@ -360,7 +360,7 @@ func TestInvariant_RedeliveryKeepsMessageIdStable(t *testing.T) {
 func TestInvariant_CursorWatermarkNeverExceedsCommitted(t *testing.T) {
 	h := newHarness(t)
 	pip := h.build(`
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: inv7 }
 sources:
@@ -434,7 +434,7 @@ sinks:
 func TestInvariant_BranchIsolation(t *testing.T) {
 	h := newHarness(t)
 	pip := h.build(`
-apiVersion: eventboat/v3
+apiVersion: eventboat/v1
 kind: Pipeline
 metadata: { name: inv8 }
 edge_defaults:
