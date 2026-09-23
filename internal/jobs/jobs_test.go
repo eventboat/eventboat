@@ -463,6 +463,44 @@ func TestJobOverlapLatestCancelsAndReruns(t *testing.T) {
 	m.Stop()
 }
 
+// A canceled run whose abandon cannot record its outstanding messages is
+// JobFailed, not JobCanceled (candidate 02: the rows stay uncommitted for the
+// next run's replay — never loss).
+func TestJobCancelAbandonErrorFailsRun(t *testing.T) {
+	testkit.ResetFakePull()
+	h := newJobHarness(t, "", "skip", "0s", false, "")
+	st := &testkit.StoreWrapper{Inner: store.NewMemory()}
+	st.DeadLetterHook = func(store.DeadLetter) error { return fmt.Errorf("dlq down") }
+	m := h.buildManager(st, time.Now)
+
+	gate := make(chan struct{})
+	closeOnce := sync.OnceFunc(func() { close(gate) })
+	t.Cleanup(closeOnce)
+	h.sink("out").block = func(int) (<-chan struct{}, bool) { return gate, true }
+	feed := testkit.FakePull("feed")
+	feed.StageJSON(`{"i":1}`, "c1")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	_ = m.Start(ctx)
+	runID, _, err := m.Trigger(ctx, nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, 5*time.Second, func() bool { return h.sink("out").writes() >= 1 })
+
+	cancel() // cancellation-time abandon runs; its store is down
+	waitFor(t, 10*time.Second, func() bool {
+		jr, err := st.GetJobRun("nightly", runID)
+		return err == nil && jr.Status == store.JobFailed
+	})
+	jr, _ := st.GetJobRun("nightly", runID)
+	if !strings.Contains(jr.Error, "abandon") {
+		t.Errorf("run error = %q, want the abandon failure", jr.Error)
+	}
+	m.Stop()
+}
+
 // Parameters flow into strings (${parameters.x}) and script bindings; a
 // backfill trigger overrides defaults (§5.9).
 func TestJobParameterBackfill(t *testing.T) {

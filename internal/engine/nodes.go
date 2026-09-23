@@ -257,7 +257,22 @@ func (e *Engine) deadLetter(inst *instance, node, reason, backtrace string) {
 	e.deadLetterMsg(inst.seq, inst.msg, node, edgeLabel(inst.via), reason, backtrace)
 }
 
+// deadLetterMsg is the normal (invariant 4) dead-letter path: it retries with
+// the ENGINE ctx until the write succeeds or the engine shuts down; on
+// shutdown the message stays uncommitted and is replayed on restart. A
+// successful record commits the branch; Abandon's path force-terminates
+// instead (the message is canceled, not processed).
 func (e *Engine) deadLetterMsg(seq int64, msg registry.Message, node, edge, reason, backtrace string) {
+	dl := e.deadLetterRecord(msg, node, edge, reason, backtrace)
+	if err := e.writeDeadLetter(e.ctx, seq, dl); err == nil {
+		e.commit.done(seq)
+	}
+}
+
+// deadLetterRecord assembles the durable record for one terminally failed
+// message (run attribution: the engine's MetaStamps win, a replayed message
+// keeps its own).
+func (e *Engine) deadLetterRecord(msg registry.Message, node, edge, reason, backtrace string) store.DeadLetter {
 	runID := ""
 	if e.Opts.MetaStamps != nil {
 		if v, ok := e.Opts.MetaStamps["job_run_id"].(string); ok {
@@ -269,7 +284,7 @@ func (e *Engine) deadLetterMsg(seq int64, msg registry.Message, node, edge, reas
 			runID = m // replayed message keeps its original run attribution
 		}
 	}
-	dl := store.DeadLetter{
+	return store.DeadLetter{
 		Pipeline:  e.IR.Config.Name,
 		MessageID: msg.ID,
 		RunID:     runID,
@@ -284,21 +299,28 @@ func (e *Engine) deadLetterMsg(seq int64, msg registry.Message, node, edge, reas
 		SrcName:   msg.SrcName,
 		SrcSeq:    msg.SrcSeq,
 	}
+}
+
+// writeDeadLetter durably records one dead letter, retrying until success or
+// ctx cancellation (backoff Options.DLBackoff). The normal path passes the
+// engine ctx — retry forever, invariant 4; Abandon passes a caller-bounded
+// ctx — a failed write stops the attempt and the message stays uncommitted
+// (candidate 02). A nil return means the record is durable.
+func (e *Engine) writeDeadLetter(ctx context.Context, seq int64, dl store.DeadLetter) error {
 	for {
 		err := e.Store.WriteDeadLetter(dl)
 		if err == nil {
 			e.Metrics.DeadLettered.Add(1)
-			e.Opts.Obs.RecordDeadLetter(e.IR.Config.Name, node, obs.ReasonClass(reason))
-			e.finishSpan(seq, "dead_letter", reason)
-			e.commit.done(seq)
-			return
+			e.Opts.Obs.RecordDeadLetter(e.IR.Config.Name, dl.Node, obs.ReasonClass(dl.Reason))
+			e.finishSpan(seq, "dead_letter", dl.Reason)
+			return nil
 		}
 		e.Metrics.DlqFailures.Add(1)
 		e.Opts.Obs.RecordDlqFailure(e.IR.Config.Name)
 		select {
 		case <-time.After(e.Opts.DLBackoff):
-		case <-e.ctx.Done():
-			return // stays uncommitted; replayed on restart
+		case <-ctx.Done():
+			return ctx.Err()
 		}
 	}
 }

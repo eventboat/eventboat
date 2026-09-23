@@ -121,10 +121,17 @@ func cmdTrigger(args []string, jsonOut bool) int {
 			fmt.Printf("  error: %s\n", jr.Error)
 		}
 	}
-	switch jr.Status {
-	case "success":
+	return triggerExitCode(jr.Status)
+}
+
+// triggerExitCode is the one-shot job process contract (unchanged by the run
+// outcome work): success = 0, partial = 1, everything else (failed, canceled)
+// = 1.
+func triggerExitCode(status string) int {
+	switch status {
+	case store.JobSuccess:
 		return 0
-	case "partial":
+	case store.JobPartial:
 		return 1
 	default:
 		return 1

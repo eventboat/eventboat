@@ -469,11 +469,6 @@ func (m *Manager) runOnce(ctx context.Context, jr *store.JobRun, triggerParams, 
 		opts.MetaStamps["job_scheduled_for"] = jr.ScheduledFor
 	}
 
-	var sourceErr error
-	opts.OnSourceError = func(node string, err error) {
-		sourceErr = err
-	}
-
 	eng, err := engine.New(pip, m.st, m.reg, opts)
 	if err != nil {
 		fail(store.JobFailed, "run: engine: "+err.Error())
@@ -484,72 +479,37 @@ func (m *Manager) runOnce(ctx context.Context, jr *store.JobRun, triggerParams, 
 	defer engineCancel()
 	go func() { runDone <- eng.Run(engineCtx) }()
 
-	// Wait for quiescence: all sources stopped (exhausted or failed) and
-	// nothing outstanding (committing phase). The completion policy lives in
-	// engine.WaitQuiesced, shared with the batch run mode (v1.24).
-	if err := eng.WaitQuiesced(ctx, runDone); err != nil {
-		if ctx.Err() != nil {
-			// Canceled (overlap: latest, manager stop, or trigger ctx):
-			// terminal-dead-letter the outstanding set (R2), then stop the
-			// engine with a bounded wait — a wedged writer goroutine may
-			// outlive the run by design (the process is "gone" from the
-			// run's perspective; the store stays consistent). A store failure
-			// mid-abandon means outstanding rows may survive: escalate to
-			// JobFailed instead of reporting a clean cancel (review-2026-09).
-			_, abandonErr := eng.Abandon("job canceled")
-			eng.Close()
-			engineCancel()
-			select {
-			case <-runDone:
-			case <-time.After(opts.DrainTimeout + 2*time.Second):
-			}
-			jr.RowsRead = eng.Metrics.MessagesIn.Load()
-			jr.Delivered = eng.Metrics.CommittedCount.Load() - eng.Metrics.DeadLettered.Load()
-			jr.DeadLettered = eng.Metrics.DeadLettered.Load()
-			if abandonErr != nil {
-				fail(store.JobFailed, "run: "+abandonErr.Error())
-				return
-			}
-			fail(store.JobCanceled, "run canceled")
+	// One decision point for "how did the run end" (candidate 02): the engine
+	// classifies, the manager only maps the outcome onto the run status. On
+	// caller cancellation the outstanding set is terminal-dead-lettered first
+	// (R2, bounded by the engine's DrainTimeout); a failed abandon escalates
+	// to JobFailed — the rows it could not record stay uncommitted for the
+	// next run's replay (never loss). An engine self-stop (source failure,
+	// worker-fatal) is failed, never canceled.
+	outcome := eng.Wait(ctx, runDone, engine.WaitOptions{
+		AbandonOnCancel: true,
+		AbandonReason:   "job canceled",
+	})
+	jr.RowsRead = outcome.RowsRead
+	jr.Delivered = outcome.Committed - outcome.DeadLettered
+	jr.DeadLettered = outcome.DeadLettered
+
+	switch outcome.Status {
+	case engine.RunCompleted:
+		fail(store.JobSuccess, "")
+	case engine.RunPartial:
+		fail(store.JobPartial, "")
+	case engine.RunInterrupted:
+		if outcome.AbandonError != nil {
+			fail(store.JobFailed, "run: "+outcome.AbandonError.Error())
 			return
 		}
-		// Run returned before quiescence: the engine stopped itself on a
-		// worker-fatal error (e.g. a transform clone failure). Outstanding
-		// messages stay uncommitted for the next run's replay.
-		fail(store.JobFailed, "run: "+err.Error())
-		return
+		fail(store.JobCanceled, "run canceled")
+	case engine.RunFailed:
+		fail(store.JobFailed, "run: "+outcome.FailureText())
+	default:
+		fail(store.JobFailed, "run: unknown outcome "+string(outcome.Status))
 	}
-
-	// Sources done and committed: stop the engine gracefully, then surface
-	// any worker-fatal that raced the quiesce — failNode cancels and drains
-	// asynchronously, so the fatal may land in runDone just after the last
-	// Quiesced() poll saw all-clear (dropping it would report a failed run
-	// as success).
-	engineCancel()
-	var runErr error
-	select {
-	case runErr = <-runDone:
-	case <-time.After(opts.DrainTimeout + 5*time.Second):
-		eng.Close()
-		runErr = <-runDone
-	}
-
-	jr.RowsRead = eng.Metrics.MessagesIn.Load()
-	jr.Delivered = eng.Metrics.CommittedCount.Load() - eng.Metrics.DeadLettered.Load()
-	jr.DeadLettered = eng.Metrics.DeadLettered.Load()
-	if runErr != nil {
-		fail(store.JobFailed, "run: "+runErr.Error())
-		return
-	}
-	if sourceErr != nil {
-		fail(store.JobFailed, "source: "+sourceErr.Error())
-		return
-	}
-	if jr.DeadLettered > 0 {
-		fail(store.JobPartial, "")
-		return
-	}
-	fail(store.JobSuccess, "")
 }
 
 // admissionPool returns the shared spool admission pool, creating it on first

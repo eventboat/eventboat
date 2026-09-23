@@ -47,9 +47,11 @@ type admission struct {
 	// concurrent overlap:all runs instead of multiplying per run.
 	gate chan struct{}
 
-	// admitting counts callers waiting on the gate: WaitCommit must not read
-	// "committed" while an admission is in flight (a gate-blocked message
-	// momentarily looks like outstanding == 0 — flaky-test class, M3 CI).
+	// admitting counts in-flight admissions, from the gate wait through
+	// registration: WaitCommit/Quiesced must not read "committed" while an
+	// admission is between gate acquisition and arrived (a message in that
+	// window momentarily looks like outstanding == 0 — flaky-test class,
+	// M3 CI; the guard closes it for Quiesced too, candidate 02).
 	admitting atomic.Int64
 
 	// acquired is the ledger of spool seqs holding an admission slot; release
@@ -108,12 +110,13 @@ func (a *admission) admit(ctx context.Context, req admitRequest) (int64, error) 
 	e := a.eng
 
 	// Backpressure: block while too many uncommitted messages are in flight.
+	// The counter stays up until the admission finishes registering: quiesce
+	// observers must not read "no work" between gate acquisition and arrived.
 	a.admitting.Add(1)
+	defer a.admitting.Add(-1)
 	select {
 	case a.gate <- struct{}{}:
-		a.admitting.Add(-1)
 	case <-ctx.Done():
-		a.admitting.Add(-1)
 		e.Metrics.Backpressured.Add(1)
 		e.Opts.Obs.RecordBackpressure(e.IR.Config.Name, req.node)
 		return 0, ctx.Err()

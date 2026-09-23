@@ -26,10 +26,11 @@ hygiene findings.
   Verify warns `batch_no_finite_source` (strict-escalated) when nothing
   declares finite exhaustion — the run would hang. In the config-dir daemon
   a batch pipeline transitions to a new `completed` status (distinct from
-  the admin-initiated `drained`), with source failures now surfaced on the
-  pipeline's error field via `OnSourceError`; the admin UI renders the new
-  state. `run.mode: batch` pipelines take no `parameters:` (job-only) and no
-  `schedule`.
+  the admin-initiated `drained`), and a failed batch reports `failed` with
+  the failure on the pipeline's error field (candidate 02 supersedes the
+  original `OnSourceError` callback this entry described); the admin UI
+  renders the new state. `run.mode: batch` pipelines take no `parameters:`
+  (job-only) and no `schedule`.
 - **Finite file sources (`on_eof: stop`) and file-source job eligibility**:
   the file source gains `on_eof: tail|stop` (default `tail` = today's
   tailing semantics, zero change). `stop` is for COMPLETE batch files: once
@@ -132,11 +133,53 @@ hygiene findings.
 
 ### Changed
 
+- **One run outcome for every runner (candidate 02: `Engine.Wait` /
+  `Outcome`)**: every runner re-derived the terminal state around
+  `WaitQuiesced` (jobs read a racy `OnSourceError` callback, batch read
+  `SourceErrors`, the daemon polled `Quiesced` behind a 100ms settle window
+  and reported a failed batch as still `running`). The engine now owns the
+  decision: `Wait(ctx, runDone, WaitOptions)` encapsulates quiesce → cancel →
+  bounded wait for `Run` → classification, and `Outcome` carries the status,
+  rows read/committed/dead-lettered, the `SourceErrors` snapshot, the
+  worker-fatal error and the abandon count/error. `RunStatus` is `completed |
+  partial | failed | interrupted` with the priority worker-fatal → source
+  errors → caller cancellation (the ctx passed to `Wait`, never the engine's
+  internal cancel) → dead letters > 0 → completed, so an engine self-stop is
+  never misreported as interrupted. Consumers map the outcome: job runs to
+  `success`/`partial`/`failed`/`canceled` (on cancel: abandon first —
+  `AbandonError` escalates to `JobFailed`), batch to exit 0/1/1/1, the
+  continuous `run --config` to exit 1 only on a failed run and 0 on
+  SIGTERM/SIGINT (the long-lived contract), the daemon to
+  `completed`/`failed` (a failed batch reports `failed` with the failure
+  text; the settle poll and the source-error SSE callback are gone).
+  `Quiesced` gains the `replayDone`/`admitting` guards, so an injected or
+  admission-blocked message can no longer read as quiesced. **A genuine
+  source failure now stops the engine in every mode** — a continuous pipeline
+  must not keep running with a dead source; restart resumes from the source
+  watermarks (duplicate delivery, never loss), and an error returned under an
+  already-cancelled engine ctx is a shutdown artifact, not a failure.
+  `Options.OnSourceError` is deleted (jobs, ops and the docs updated):
+  `SourceErrors`, carried by the outcome, is the only channel.
+  **`Abandon` is now `Abandon(ctx, reason)`**: bounded by the caller's ctx
+  (`WaitOptions.AbandonTimeout`, default the engine's `DrainTimeout`), the
+  durable record is written FIRST and the tracker is force-terminated only
+  after a successful write; a ctx cancellation or store failure stops the
+  attempt, leaves every unrecorded message uncommitted and returns an error —
+  the next run replays them (never loss). The normal dead-letter path keeps
+  retrying forever on the engine ctx (invariant 4); only Abandon is bounded.
+  New tests: the four-status classification matrix and end-to-end outcomes,
+  the source-failure self-stop in continuous mode (engine + a binary-level
+  exit-1 acceptance), the bounded abandon with a failing dead-letter store
+  (messages stay uncommitted, the next run replays them) and the
+  record-before-force-terminate ordering, the Quiesced guards (replay scan,
+  in-flight admission, injection scenario), the exit-code mapping table and
+  the ops batch status machine (`completed`/`failed`).
+
 - **BREAKING: `registry.Source.Run` returns `error`** (pkg/plugin aliases
   follow; compiled-in plugins must be rebuilt, v1.18 precedent). The return
   value is the source's completion signal: nil = exhausted or voluntary
-  stop, non-nil = failed source — routed to `OnSourceError`/`SourceErrors`
-  exactly like a pull failure (previously the engine hardwired push-source
+  stop, non-nil = failed source — recorded in `SourceErrors` exactly like a
+  pull failure (previously the engine hardwired push-source
   completion to "done, no error" and a failed source was indistinguishable
   from a stopped one; the gRPC adapter's comment said so in as many words).
   ctx cancellation is defined as a VOLUNTARY stop — sources return nil, never
@@ -145,8 +188,10 @@ hygiene findings.
   protocol is UNCHANGED: a clean Run-stream end already mapped to
   exhaustion on the wire; the host adapter now propagates it instead of
   swallowing it. `http_server` sources now fail loudly on bind errors (port
-  occupied) instead of returning silently. `Options.OnSourceError` fires for
-  every source kind, not just pull sources.
+  occupied) instead of returning silently. A failed source is recorded for
+  every source kind, not just pull sources (candidate 02 deleted the
+  `Options.OnSourceError` callback this entry originally added — the
+  `SourceErrors` snapshot carried by the run outcome is the only channel).
 - **BREAKING: the source emit callback returns `error`**
   (`Source.Run(ctx, func(Message) error) error`, `PullSource.Pull` likewise;
   `pkg/plugin` aliases follow; compiled-in plugins must be rebuilt). The

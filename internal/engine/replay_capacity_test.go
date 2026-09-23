@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"context"
 	"fmt"
 	"testing"
 	"time"
@@ -175,7 +176,7 @@ func TestAbandonReleasesAdmissionSlots(t *testing.T) {
 		t.Fatalf("gate holds %d slot(s) before Abandon, want 2", n)
 	}
 
-	n, err := eng.Abandon("quota test")
+	n, err := eng.Abandon(context.Background(), "quota test")
 	if err != nil {
 		t.Fatalf("Abandon: %v", err)
 	}

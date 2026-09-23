@@ -141,8 +141,10 @@ type Source interface {
     advances the commit watermark.
 - `Run` returns the source's completion signal (v1.24): `nil` = exhausted
   (a finite source read to its end — batch runs exit, job runs commit) or a
-  voluntary stop; a non-nil error is a failed source, routed to
-  `OnSourceError` / `SourceErrors` (failed job or batch run). **ctx
+  voluntary stop; a non-nil error is a failed source: the engine records it
+  in `SourceErrors` and **stops in every run mode** (candidate 02), so the
+  run outcome is `failed` (a failed job, a non-zero exit) instead of a live
+  pipeline with a dead source. **ctx
   cancellation is a voluntary stop — return nil, never ctx.Err().** An
   infinite source (tailer, broker consumer) simply never returns until ctx
   is cancelled.

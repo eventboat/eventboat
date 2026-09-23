@@ -49,7 +49,7 @@ func TestAbandonStoreError(t *testing.T) {
 	}
 	spoolInjected(t, inner, "linear", "in", "x1", `{"id":"A1"}`)
 
-	n, aerr := eng.Abandon("test")
+	n, aerr := eng.Abandon(context.Background(), "test")
 	if aerr == nil || !strings.Contains(aerr.Error(), "engine: abandon:") {
 		t.Fatalf("Abandon err = %v, want \"engine: abandon: ...\" wrapper", aerr)
 	}
@@ -90,7 +90,7 @@ sinks:
 		return writes >= 1 // wedged mid-delivery: one outstanding message
 	})
 
-	n, err := eng.Abandon("test canceled")
+	n, err := eng.Abandon(context.Background(), "test canceled")
 	if err != nil {
 		t.Fatalf("Abandon: %v", err)
 	}

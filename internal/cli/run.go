@@ -9,7 +9,6 @@ import (
 	"os/signal"
 	"path/filepath"
 	"syscall"
-	"time"
 
 	"github.com/eventboat/eventboat/internal/config"
 	"github.com/eventboat/eventboat/internal/engine"
@@ -155,7 +154,7 @@ func cmdRun(args []string, jsonOut bool) int {
 	}
 
 	if pip.Config.IsBatch() {
-		code := finishBatchRun(eng, engOpts, ctx, cancel, runErr, sigStatus)
+		code := finishBatchRun(eng, ctx, cancel, runErr, sigStatus)
 		_ = st.Close()
 		if !jsonOut {
 			fmt.Println("eventboat: stopped")
@@ -163,62 +162,64 @@ func cmdRun(args []string, jsonOut bool) int {
 		return code
 	}
 
-	select {
-	case err := <-runErr:
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "run: %v\n", err)
-			sigStatus()
-			_ = st.Close()
-			return 1
-		}
-	case <-ctx.Done():
-	}
+	// Continuous pipeline: a long-lived process. Wait blocks until the run
+	// ends — SIGINT/SIGTERM (interrupted → 0), a self-stop on a source
+	// failure or worker-fatal (failed → 1), or a finite source exhausting
+	// (completed → 0).
+	outcome := eng.Wait(ctx, runErr, engine.WaitOptions{})
 	sigStatus()
 	_ = st.Close()
+	if outcome.Status == engine.RunFailed {
+		reportRunFailure(outcome)
+	}
 	if !jsonOut {
 		fmt.Println("eventboat: stopped")
+	}
+	return continuousExitCode(outcome)
+}
+
+// finishBatchRun drives a run.mode: batch pipeline to completion through the
+// engine's single run-outcome decision point (candidate 02): Wait encapsulates
+// quiesce, cancel and the bounded fold-in of a worker-fatal racing the quiesce
+// poll; the exit code is the one-shot process contract — completed = 0,
+// partial/failed/interrupted = 1.
+func finishBatchRun(eng *engine.Engine, ctx context.Context, cancel context.CancelFunc, runErr <-chan error, sigStatus func()) int {
+	outcome := eng.Wait(ctx, runErr, engine.WaitOptions{})
+	cancel() // release the signal handler (idempotent)
+	sigStatus()
+	if outcome.Status == engine.RunFailed {
+		reportRunFailure(outcome)
+	}
+	return batchExitCode(outcome)
+}
+
+// batchExitCode maps a batch run outcome onto the one-shot process contract:
+// completed = 0; partial, failed and interrupted = 1 (a one-shot run that did
+// not complete exits non-zero).
+func batchExitCode(o engine.Outcome) int {
+	if o.Status == engine.RunCompleted {
+		return 0
+	}
+	return 1
+}
+
+// continuousExitCode maps a long-lived run outcome onto its process contract:
+// only a failed run (worker-fatal or source failure) exits non-zero; a
+// graceful SIGINT/SIGTERM stop (interrupted) and a self-completed run exit
+// zero.
+func continuousExitCode(o engine.Outcome) int {
+	if o.Status == engine.RunFailed {
+		return 1
 	}
 	return 0
 }
 
-// finishBatchRun drives a run.mode: batch pipeline to completion: wait for
-// quiescence (every source exhausted, all work committed and flushed), stop
-// the engine, and map the terminal state onto an exit code exactly like
-// `trigger` maps job statuses (success=0, partial/failed=1). A worker-fatal
-// that raced the quiesce is folded in from runDone after the cancel — the
-// engine drains asynchronously, so the all-clear poll may have preceded it.
-func finishBatchRun(eng *engine.Engine, opts engine.Options, ctx context.Context, cancel context.CancelFunc, runErr <-chan error, sigStatus func()) int {
-	// ctx cancellation lands here too (interrupted batch): interrupted is
-	// captured BEFORE our own cancel() below, so an interrupted run never
-	// maps to success while a completed one is not mistaken for one.
-	_ = eng.WaitQuiesced(ctx, runErr)
-	interrupted := ctx.Err() != nil
-	cancel()
-	var fatal error
-	select {
-	case fatal = <-runErr:
-	case <-time.After(opts.DrainTimeout + 5*time.Second):
-		eng.Close()
-		fatal = <-runErr
+// reportRunFailure prints a failed outcome's cause (worker-fatal first, then
+// the first source error in stable node order).
+func reportRunFailure(o engine.Outcome) {
+	if text := o.FailureText(); text != "" {
+		fmt.Fprintf(os.Stderr, "run: %s\n", text)
 	}
-	sigStatus()
-	switch {
-	case interrupted:
-		return 1
-	case fatal != nil:
-		fmt.Fprintf(os.Stderr, "run: %v\n", fatal)
-		return 1
-	}
-	if errs := eng.SourceErrors(); len(errs) > 0 {
-		for node, err := range errs {
-			fmt.Fprintf(os.Stderr, "run: source %q failed: %v\n", node, err)
-		}
-		return 1
-	}
-	if eng.Metrics.DeadLettered.Load() > 0 {
-		return 1 // completed with dead letters: partial
-	}
-	return 0
 }
 
 func storeLabel(ephemeral bool, dataDir string) string {
@@ -278,6 +279,9 @@ func runJobPipeline(configPath string, pip *ir.Pipeline, reg *registry.Registry,
 	if !jsonOut {
 		fmt.Println("eventboat: stopped")
 	}
+	// The long-lived scheduler contract: SIGTERM/SIGINT is a graceful stop,
+	// exit 0. A failed job run is recorded in run history; it never decides
+	// this process's exit code (candidate 02 keeps the mapping unchanged).
 	return 0
 }
 

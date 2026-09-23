@@ -272,7 +272,7 @@ func (s *Service) Deploy(ctx context.Context, configContent string) (map[string]
 
 func (s *Service) startManaged(ctx context.Context, cfg *config.Pipeline, file string) (*managed, error) {
 	runCtx, cancel := context.WithCancel(ctx)
-	m := &managed{name: cfg.Name, file: file, cfg: cfg, cancel: cancel, done: make(chan struct{}), started: s.opts.Clock()}
+	m := &managed{name: cfg.Name, file: file, cfg: cfg, cancel: cancel, done: make(chan struct{}), started: s.opts.Clock(), status: "running"}
 	if cfg.IsJob() {
 		m.kind = "job"
 		st, err := s.opts.StoreFor(cfg.Name)
@@ -298,7 +298,7 @@ func (s *Service) startManaged(ctx context.Context, cfg *config.Pipeline, file s
 		go func() {
 			defer close(m.done)
 			if err := jm.Start(runCtx); err != nil {
-				m.err = err.Error()
+				m.setErr(err.Error())
 			}
 		}()
 	} else {
@@ -323,12 +323,6 @@ func (s *Service) startManaged(ctx context.Context, cfg *config.Pipeline, file s
 		if cfg.Telemetry != nil {
 			opts.SpanSampleRate = cfg.Telemetry.SpanSampleRate
 		}
-		// A failed source must be observable in the daemon surface too (the
-		// run keeps going; the error lands on the pipeline's status).
-		opts.OnSourceError = func(node string, err error) {
-			m.setErr(fmt.Sprintf("source %q failed: %v", node, err))
-			s.emit("status", m.name)
-		}
 		eng, err := engine.New(pip, st, s.reg, opts)
 		if err != nil {
 			cancel()
@@ -338,62 +332,53 @@ func (s *Service) startManaged(ctx context.Context, cfg *config.Pipeline, file s
 		s.pipelines[cfg.Name] = m
 		runDone := make(chan error, 1)
 		go func() { runDone <- eng.Run(runCtx) }()
-		go func() {
-			defer close(m.done)
-			if err := <-runDone; err != nil {
-				m.setErr(err.Error())
-			}
-		}()
+		// One terminal-status watcher for both engine shapes (batch and
+		// continuous): a batch completes by quiescing, while a continuous
+		// pipeline only stops with a live runCtx when it failed (source
+		// failure, worker-fatal) — the outcome decides, never a settle poll.
+		go s.watchEngineCompletion(m, eng, runDone, runCtx)
 		// Wait briefly for readiness so status immediately reflects reality.
 		for i := 0; i < 200 && !eng.Ready(); i++ {
 			time.Sleep(2 * time.Millisecond)
 		}
-		if m.kind == "batch" {
-			go s.watchBatchCompletion(m, eng, runCtx)
-		}
 	}
-	m.status = "running"
 	return m, nil
 }
 
-// watchBatchCompletion flips a batch pipeline to "completed" once it has
-// quiesced (all sources exhausted, everything committed). The daemon stays
-// up — a completed pipeline keeps its history and its admin surface. A
-// worker-fatal racing the quiesce poll wins: the settle window lets the
-// engine's drain land its error in m.err before the status is published.
-func (s *Service) watchBatchCompletion(m *managed, eng *engine.Engine, runCtx context.Context) {
-	for {
-		if eng.Quiesced() {
-			time.Sleep(100 * time.Millisecond)
-			if runCtx.Err() != nil {
-				return // service shutting down: shutdown() owns the status
-			}
-			m.mu.Lock()
-			failed := m.err != ""
-			m.mu.Unlock()
-			if failed {
-				return
-			}
-			m.setStatus("completed")
-			s.emit("status", m.name)
-			return
-		}
-		select {
-		case <-runCtx.Done():
-			return
-		case <-time.After(5 * time.Millisecond):
-		}
+// watchEngineCompletion derives a pipeline's terminal status from the engine
+// outcome once its run ends (candidate 02): failed when the engine stopped
+// itself (source failure, worker-fatal), completed otherwise. The daemon
+// stays up — a finished pipeline keeps its history and its admin surface. A
+// run canceled by the service shutting down leaves the status to shutdown()
+// (it owns "stopped"/"drained"/"paused").
+func (s *Service) watchEngineCompletion(m *managed, eng *engine.Engine, runDone <-chan error, runCtx context.Context) {
+	defer close(m.done)
+	outcome := eng.Wait(runCtx, runDone, engine.WaitOptions{})
+	if runCtx.Err() != nil {
+		return // service shutting down: shutdown() owns the status
 	}
+	if outcome.Status == engine.RunFailed {
+		m.setErr(outcome.FailureText())
+		m.setStatus("failed")
+	} else {
+		m.setStatus("completed")
+	}
+	s.emit("status", m.name)
 }
 
+// shutdown stops one managed pipeline. runCtx is canceled FIRST: the engine's
+// ctx derives from it, so this alone stops the run — and it makes the
+// terminal-status watcher see the shutdown as a caller cancellation (the
+// watcher then leaves the status to shutdown, which owns stopped/drained/
+// paused) instead of racing in a "completed" for a run that was stopped.
 func (m *managed) shutdown() {
+	m.cancel()
 	if m.eng != nil {
 		m.eng.Close()
 	}
 	if m.jobs != nil {
 		m.jobs.Stop()
 	}
-	m.cancel()
 	select {
 	case <-m.done:
 	case <-time.After(15 * time.Second):

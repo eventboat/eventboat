@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"math/rand/v2"
 	"path/filepath"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -82,12 +83,6 @@ type Options struct {
 	// Obs receives OpenTelemetry events (nil-safe: nil disables telemetry).
 	Obs *obs.Obs
 
-	// OnSourceError reports a failed source (Run/Pull returned a non-nil
-	// error, v1.24 contract): job pipelines route this to a failed run, the
-	// batch run mode to a non-zero exit, the daemon to the pipeline's error
-	// field. ctx cancellation is a voluntary stop and never fires this.
-	OnSourceError func(node string, err error)
-
 	// MetaStamps are stamped into every accepted message's metadata (e.g.
 	// job_run_id for job runs).
 	MetaStamps map[string]any
@@ -152,6 +147,75 @@ func (o Options) WithLimits(l *config.Limits) Options {
 		o.DrainTimeout = l.DrainTimeout
 	}
 	return o
+}
+
+// RunStatus is the terminal classification of one run (CONTEXT.md "Run
+// outcome"): completed (quiesced cleanly), partial (quiesced with dead
+// letters), failed (the engine stopped itself: worker-fatal or a source
+// failure) or interrupted (the caller canceled the run).
+type RunStatus string
+
+const (
+	RunCompleted   RunStatus = "completed"
+	RunPartial     RunStatus = "partial"
+	RunFailed      RunStatus = "failed"
+	RunInterrupted RunStatus = "interrupted"
+)
+
+// Outcome is the engine's report of how one run ended — the single decision
+// point every runner reads (candidate 02). Counts are the engine's own
+// metrics; SourceErrors is the race-free snapshot map; WorkerFatal is the
+// error Run returned when the engine stopped itself; Abandoned/AbandonError
+// report the cancel-time abandon attempt (jobs' R2 semantics).
+type Outcome struct {
+	Status       RunStatus
+	RowsRead     int64
+	Committed    int64
+	DeadLettered int64
+	SourceErrors map[string]error
+	WorkerFatal  error
+	Abandoned    int
+	AbandonError error
+}
+
+// FailureText renders a failed outcome's cause: the worker-fatal error first,
+// then the first source error in stable node order. It is the operator-facing
+// summary jobs/ops/CLI report; empty for a non-failed outcome.
+func (o Outcome) FailureText() string {
+	if o.WorkerFatal != nil {
+		return o.WorkerFatal.Error()
+	}
+	if len(o.SourceErrors) == 0 {
+		return ""
+	}
+	nodes := make([]string, 0, len(o.SourceErrors))
+	for node := range o.SourceErrors {
+		nodes = append(nodes, node)
+	}
+	sort.Strings(nodes)
+	return fmt.Sprintf("source %q failed: %v", nodes[0], o.SourceErrors[nodes[0]])
+}
+
+// WaitOptions tunes Engine.Wait.
+type WaitOptions struct {
+	// AbandonOnCancel terminal-dead-letters the outstanding set when the
+	// CALLER's ctx canceled the run (job runs: the R2 semantics). Batch runs
+	// leave it false — uncommitted rows replay on the next run, and dead
+	// letters are operator data, not garbage.
+	AbandonOnCancel bool
+	// AbandonReason is the dead-letter reason the abandon path records
+	// (default "run canceled").
+	AbandonReason string
+	// AbandonTimeout bounds the abandon attempt (0 = the engine's
+	// DrainTimeout). The caller's ctx is already canceled on that path, so
+	// Wait derives a fresh bounded context; the write-first contract means a
+	// timeout leaves every unrecorded message uncommitted (never loss).
+	AbandonTimeout time.Duration
+	// DrainTimeout bounds the post-cancel wait for Run to return (0 = the
+	// engine's DrainTimeout + 5s, the racing-worker-fatal fold-in). A
+	// non-cancellable writer may outlive the bound; the engine's published
+	// fatal is still folded in without waiting on Run.
+	DrainTimeout time.Duration
 }
 
 // Metrics holds engine counters (POC observability: expvar-style atomics).
@@ -655,10 +719,9 @@ func (e *Engine) startSources() {
 			defer e.srcWG.Done()
 			// Both source kinds report completion identically (v1.24):
 			// a nil return is exhaustion/voluntary stop, an error is a
-			// failed source — routed to SourceErrors and OnSourceError.
-			// emit's error is the admission verdict (candidate 01): a
-			// refusal is returned by the builtin default, so it becomes a
-			// failed source here.
+			// failed source. emit's error is the admission verdict
+			// (candidate 01): a refusal is returned by the builtin default,
+			// so it becomes a failed source here.
 			var err error
 			if ps, ok := src.(registry.PullSource); ok {
 				err = ps.Pull(e.ctx, func(msg registry.Message) error {
@@ -669,9 +732,20 @@ func (e *Engine) startSources() {
 					return e.accept(msg, name)
 				})
 			}
-			e.markSourceDone(name, err)
-			if err != nil && e.Opts.OnSourceError != nil {
-				e.Opts.OnSourceError(name, err)
+			// A genuine source failure stops the engine in every mode
+			// (candidate 02): a continuous pipeline must not keep running
+			// with a dead source, and restart resumes from the source
+			// watermarks (duplicate delivery, never loss). The error is
+			// recorded BEFORE the cancel so any observer of the stop (and
+			// the Wait classification) sees it. An error returned under an
+			// already-cancelled engine ctx is a shutdown artifact, not a
+			// failure: the emit contract defines ctx cancellation as a
+			// voluntary stop (the source returns nil, never ctx.Err()).
+			if err != nil && e.ctx.Err() == nil {
+				e.markSourceDone(name, err)
+				e.cancel()
+			} else {
+				e.markSourceDone(name, nil)
 			}
 			_ = src.Close()
 		}(name, src)
@@ -734,9 +808,11 @@ func (e *Engine) drain() {
 	}
 }
 
-// Close cancels the engine (idempotent).
+// Close cancels the engine (idempotent). The started gate publishes the
+// ctx/cancel assignment from Run: reading cancel only after started is true
+// makes Close safe to call from a goroutine racing Run's startup.
 func (e *Engine) Close() {
-	if e.cancel != nil {
+	if e.started.Load() {
 		e.cancel()
 	}
 }
@@ -781,8 +857,15 @@ func (e *Engine) SourceErrors() map[string]error {
 // Quiesced reports whether the pipeline has no outstanding execution work:
 // all sources stopped, nothing uncommitted, and every commit advance flushed
 // (attempted) — job runners poll this to move a run into its terminal state.
+// The replayDone/admitting guards close two holes where a message in flight
+// looks like no work at all: the crash-replay scan has not registered its
+// rows yet, or an admission holds a gate slot but has not called arrived
+// (candidate 02).
 func (e *Engine) Quiesced() bool {
 	if !e.SourcesDone() {
+		return false
+	}
+	if !e.replayDone.Load() || e.admit.admitting.Load() != 0 {
 		return false
 	}
 	outstanding, committedThrough, _ := e.commit.snapshot()
@@ -790,45 +873,147 @@ func (e *Engine) Quiesced() bool {
 }
 
 // WaitQuiesced blocks until the pipeline is quiesced — the completion point
-// of a job or batch run, shared by every runner so the completion policy
-// exists exactly once (v1.24). runDone is eng.Run's result channel: an
-// engine stop before quiescence (worker-fatal) is surfaced as the returned
-// error, a nil result as "engine stopped before quiescence". ctx
+// of a job or batch run (v1.24). runDone is eng.Run's result channel: an
+// engine stop before quiescence (worker-fatal, source failure) is surfaced as
+// the returned error, a nil result as "engine stopped before quiescence". ctx
 // cancellation returns ctx.Err(); when ctx and runDone fire together the
-// CONSUMER must re-check ctx.Err() first so a canceled run is never
-// reported as a failure.
+// CONSUMER must re-check ctx.Err() first so a canceled run is never reported
+// as a failure. Engine.Wait builds on the same loop; this stays the
+// low-level primitive (tests use it).
 func (e *Engine) WaitQuiesced(ctx context.Context, runDone <-chan error) error {
+	waitErr, _, _ := e.waitQuiesced(ctx, runDone)
+	return waitErr
+}
+
+// waitQuiesced is the shared wait loop behind WaitQuiesced and Wait: it
+// returns when the pipeline is quiesced (nil, not returned), when ctx is done
+// (ctx.Err(), not returned), or when Run returns (waitErr, runErr, returned —
+// runErr is Run's raw result, nil included).
+func (e *Engine) waitQuiesced(ctx context.Context, runDone <-chan error) (waitErr, runErr error, runReturned bool) {
 	for {
 		if e.Quiesced() {
-			return nil
+			return nil, nil, false
 		}
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return ctx.Err(), nil, false
 		case err := <-runDone:
 			if err == nil {
-				err = errors.New("engine stopped before quiescence")
+				return errors.New("engine stopped before quiescence"), nil, true
 			}
-			return err
+			return err, err, true
 		case <-time.After(5 * time.Millisecond):
 		}
 	}
 }
 
-// Abandon force-commits every outstanding message by dead-lettering it
-// (M2 review R2: a canceled run must not leave uncommitted spool rows wedging
-// the checkpoint's contiguous prefix forever). Ordering preserves the
-// invariants: the dead letter is written first, and only then does the
-// tracker clear the message (any leftover branches from a mid-flight fan-out
-// are force-terminated after the durable record exists). It returns the
-// number abandoned plus a store error — a failed page means the spool may
-// still hold outstanding rows, so callers must not treat the run as clean
-// (review-2026-09).
-func (e *Engine) Abandon(reason string) (int, error) {
+// Wait drives one run to its terminal state and classifies it: quiesce →
+// cancel → bounded wait for Run → Outcome (candidate 02). Every runner maps
+// this one result onto its own process contract; none of them re-derives the
+// terminal state. Classification priority: worker-fatal → source errors →
+// caller cancellation (the ctx passed in, never the engine's internal cancel,
+// so an engine self-stop is never misreported as interrupted) → dead letters
+// > 0 (partial) → completed. On caller cancellation with AbandonOnCancel the
+// outstanding set is terminal-dead-lettered first (write-first, bounded).
+func (e *Engine) Wait(ctx context.Context, runDone <-chan error, opts WaitOptions) Outcome {
+	_, runErr, runReturned := e.waitQuiesced(ctx, runDone)
+	callerCanceled := ctx.Err() != nil
+
+	abandoned, abandonErr := 0, error(nil)
+	if callerCanceled && opts.AbandonOnCancel {
+		timeout := opts.AbandonTimeout
+		if timeout <= 0 {
+			timeout = e.Opts.DrainTimeout
+		}
+		// The caller's ctx is already done, so it cannot bound the abandon:
+		// derive a fresh context that keeps the values but not the
+		// cancellation (the bound is the abandon's, not the shutdown's).
+		actx, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
+		abandoned, abandonErr = e.Abandon(actx, abandonReason(opts.AbandonReason))
+		cancel()
+	}
+
+	if !runReturned {
+		e.Close() // idempotent; nil-safe if Run has not assigned its cancel yet
+		bound := opts.DrainTimeout
+		if bound <= 0 {
+			bound = e.Opts.DrainTimeout + 5*time.Second
+		}
+		timer := time.NewTimer(bound)
+		defer timer.Stop()
+		select {
+		case runErr = <-runDone:
+		case <-timer.C:
+			// The engine outlived the bound (a non-cancellable writer may
+			// outlive the run by design, R2). Stop it and fold in its
+			// published fatal instead of waiting on Run: failNode records
+			// the error before it cancels, so a racing worker-fatal is
+			// never dropped.
+			e.Close()
+			e.fatalMu.Lock()
+			runErr = e.fatalErr
+			e.fatalMu.Unlock()
+		}
+	}
+
+	sourceErrors := e.SourceErrors()
+	deadLettered := e.Metrics.DeadLettered.Load()
+	return Outcome{
+		Status:       classifyOutcome(runErr, sourceErrors, callerCanceled, deadLettered),
+		RowsRead:     e.Metrics.MessagesIn.Load(),
+		Committed:    e.Metrics.CommittedCount.Load(),
+		DeadLettered: deadLettered,
+		SourceErrors: sourceErrors,
+		WorkerFatal:  runErr,
+		Abandoned:    abandoned,
+		AbandonError: abandonErr,
+	}
+}
+
+// classifyOutcome applies the terminal priority (candidate 02): worker-fatal
+// → source errors → caller cancellation → dead letters > 0 (partial) →
+// completed.
+func classifyOutcome(workerFatal error, sourceErrors map[string]error, callerCanceled bool, deadLettered int64) RunStatus {
+	switch {
+	case workerFatal != nil:
+		return RunFailed
+	case len(sourceErrors) > 0:
+		return RunFailed
+	case callerCanceled:
+		return RunInterrupted
+	case deadLettered > 0:
+		return RunPartial
+	default:
+		return RunCompleted
+	}
+}
+
+// abandonReason defaults the dead-letter reason of the abandon path.
+func abandonReason(reason string) string {
+	if reason == "" {
+		return "run canceled"
+	}
+	return reason
+}
+
+// Abandon terminal-dead-letters every outstanding message (M2 review R2: a
+// canceled run must not leave uncommitted spool rows wedging the checkpoint's
+// contiguous prefix forever). It is BOUNDED by the caller's ctx and the
+// ordering preserves the invariants: the dead letter is written FIRST, and
+// only after a successful write does the tracker clear the message (any
+// leftover branches from a mid-flight fan-out are force-terminated after the
+// durable record exists). A ctx cancellation or store failure stops the
+// attempt and returns an error, leaving every message it did not record
+// uncommitted — the next run replays them (never loss; CONTEXT.md "Abandon").
+// It returns the number abandoned plus the first error.
+func (e *Engine) Abandon(ctx context.Context, reason string) (int, error) {
 	abandoned := 0
 	_, committedThrough, _ := e.commit.snapshot()
 	after := committedThrough
 	for {
+		if err := ctx.Err(); err != nil {
+			return abandoned, fmt.Errorf("engine: abandon: %w", err)
+		}
 		var seqs []int64
 		msgs := map[int64]registry.Message{}
 		last, more, ferr := e.Store.ReplayPage(e.IR.Config.Name, after, 256,
@@ -843,8 +1028,14 @@ func (e *Engine) Abandon(reason string) (int, error) {
 			return abandoned, fmt.Errorf("engine: abandon: %w", ferr)
 		}
 		for _, seq := range seqs {
+			if err := ctx.Err(); err != nil {
+				return abandoned, fmt.Errorf("engine: abandon: %w", err)
+			}
 			msg := msgs[seq]
-			e.deadLetterMsg(seq, msg, firstNonEmpty(msg.SrcName, "unknown"), "", reason, "")
+			dl := e.deadLetterRecord(msg, firstNonEmpty(msg.SrcName, "unknown"), "", reason, "")
+			if err := e.writeDeadLetter(ctx, seq, dl); err != nil {
+				return abandoned, fmt.Errorf("engine: abandon: %w", err)
+			}
 			if e.commit.forceTerminal(seq) {
 				// The force-terminate removes the entry without a terminal
 				// branch event, so the commit sweep never fires onCommit for

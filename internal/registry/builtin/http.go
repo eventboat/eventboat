@@ -81,7 +81,8 @@ func (s *httpServerSource) Run(ctx context.Context, emit func(registry.Message) 
 	}()
 	if err := s.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		// A bind failure (port occupied, bad address) is a real source
-		// failure — it must reach OnSourceError, not vanish.
+		// failure — it must reach SourceErrors (and stop the engine), not
+		// vanish.
 		return fmt.Errorf("http_server source: listen %s: %w", s.listen, err)
 	}
 	return nil // shut down via ctx cancellation: a voluntary stop

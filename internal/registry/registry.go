@@ -81,7 +81,9 @@ type Message struct {
 // end — the engine records the source done and job/batch runners treat the
 // pipeline as complete once everything is committed) or a voluntary stop; a
 // non-nil error means the source itself failed and the pipeline cannot make
-// progress (routed to OnSourceError / SourceErrors, a failed job or batch run).
+// progress — the engine records it in SourceErrors, stops in every run mode
+// (candidate 02) and the run outcome reports failed (a failed job or batch
+// run, a non-zero exit).
 // An infinite source (a tailer, a broker consumer) simply never returns until
 // ctx is cancelled — and ctx cancellation is a VOLUNTARY stop, so it returns
 // nil, never ctx.Err(): a cancelled engine is not a failed source.

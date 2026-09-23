@@ -135,10 +135,13 @@ overrides per edge (`internal/ir/ir.go`): `Required` (default **true**),
   fails the node. Zero outputs filter the message (commit-as-filtered +
   `NoMatch`); N outputs expand the commit accounting by N-1 extra branches —
   the `split` plugin's 1→N contract.
-- **Dead lettering** (`deadLetterMsg`) retries the store write *forever*
-  (backoff `Options.DLBackoff` = 500ms) until it succeeds or the engine
-  shuts down: a dead letter that cannot be written blocks the commit
-  (invariant 4) — degraded, not lossy. The record carries the full original
+- **Dead lettering** (`deadLetterMsg` → `writeDeadLetter`) retries the store
+  write *forever* (backoff `Options.DLBackoff` = 500ms) until it succeeds or
+  the engine shuts down: a dead letter that cannot be written blocks the
+  commit (invariant 4) — degraded, not lossy. `Abandon` calls the same
+  writer with a caller-bounded ctx (candidate 02): a failed write stops the
+  attempt and the message stays uncommitted for the next run's replay. The
+  record carries the full original
   message, node/edge attribution, reason, backtrace and run id.
 - **Delivery on shutdown** is deliberately not committed: an instance that
   could not be queued before `ctx.Done()` stays uncommitted and is replayed
@@ -205,7 +208,10 @@ regressing:
 - `durableThrough()` reports `flushAttempted` — the **visibility barrier**.
   `WaitCommit` and `Quiesced` require `durableThrough >= committedThrough`,
   so "committed" still implies "persistence attempted" now that flushing is
-  asynchronous to the tracker lock.
+  asynchronous to the tracker lock. `Quiesced` additionally refuses to read
+  "no work" while the crash-replay scan is in flight (`replayDone`) or while
+  an admission holds a gate slot but has not registered yet (`admitting`) —
+  both windows would otherwise look like an empty pipeline (candidate 02).
 - **Spool retention.** One batched trim per window of *durable* progress:
   when `persistedThrough >= retentionDue`, rows at or below
   `persistedThrough - SpoolRetention` are deleted
@@ -244,12 +250,52 @@ re-emission — duplicate delivery, never loss (invariant 3;
 `TestInvariant_Kill9ReplayReplaysAllUncommitted`).
 
 Job pipelines resume runs found in `pending/running/committing` on startup;
-`internal/jobs` watches `Quiesced`/`SourcesDone`/`SourceErrors` to move runs
-to terminal states. A canceled run that must stop immediately calls
-`Abandon(reason)`: every outstanding message is dead-lettered first (durable
-record) and only then force-terminated in the tracker — including releasing
-its admission slot, which the force-terminate path would otherwise leak
-(candidate 01) — so the checkpoint prefix never wedges (review R2).
+`internal/jobs` drives each run through `Engine.Wait` and maps the `Outcome`
+onto the run status (below). A canceled run that must stop immediately
+dead-letters its outstanding set through the bounded `Abandon(ctx, reason)`:
+the durable record is written **first** and only then is the tracker cleared
+(force-terminate, which also releases the admission slot the old path
+leaked — candidate 01), so the checkpoint prefix never wedges (review R2). A
+ctx cancellation or store failure stops the abandon attempt, leaves every
+unrecorded message uncommitted and returns an error — the next run replays
+them (never loss, candidate 02). The normal dead-letter path keeps invariant
+4: it retries forever on the engine ctx; only `Abandon` is bounded.
+
+## Run outcome
+
+One decision point for "how did the run end" (candidate 02): every runner
+calls `Engine.Wait(ctx, runDone, WaitOptions)` and maps the returned
+`Outcome` onto its own process contract — none of them re-derives the
+terminal state.
+
+- **Statuses.** `RunStatus` is `completed | partial | failed | interrupted`:
+  completed = quiesced cleanly; partial = quiesced with dead letters; failed
+  = the engine stopped itself (worker-fatal or a source failure);
+  interrupted = the **caller's** ctx was canceled (never the engine's
+  internal cancel, so an engine self-stop is never misreported as
+  interrupted).
+- **Classification priority** (one `classifyOutcome` switch): worker-fatal →
+  source errors → caller cancellation → dead letters > 0 → completed.
+- **`Outcome`** carries status, rows read, committed, dead-lettered, the
+  `SourceErrors` snapshot, the worker-fatal error, and the abandon count /
+  error. `FailureText()` renders the operator-facing cause.
+- **`WaitOptions`**: `AbandonOnCancel` (jobs: R2 semantics; batch does not —
+  uncommitted rows replay), `AbandonReason`, `AbandonTimeout` (bounded, and
+  the caller ctx is already canceled on that path, so Wait derives a fresh
+  context) and `DrainTimeout` (the post-cancel wait bound, defaulting to the
+  engine's `DrainTimeout + 5s`). Past that bound a non-cancellable writer may
+  outlive the run by design; Wait then folds in the engine's published fatal
+  (`failNode` records it before it cancels) instead of waiting on `Run`.
+- **`WaitQuiesced` stays** the low-level primitive (tests use it); `Wait`
+  builds on the same loop.
+
+A source failure (v1.24: `Run`/`Pull` returned a non-nil error) **stops the
+engine in every mode**: the error is recorded first, then the engine cancels
+— a continuous pipeline must not keep running with a dead source. Restart
+resumes from the source watermarks (duplicate delivery, never loss). An
+error returned under an already-cancelled engine ctx is a shutdown artifact
+and never a source failure. `Options.OnSourceError` was deleted; the
+`SourceErrors` snapshot carried by the outcome is the only channel.
 
 ## Shutdown
 
@@ -273,11 +319,13 @@ status line (the "settle status" report: counts + checkpoint).
 
 Per-message failures dead-letter. A *node* that cannot run at all is fatal:
 `failNode` records the first error (first error wins), cancels the context,
-and `Run` returns it after draining — the jobs manager maps a run whose
-engine returned an error to `store.JobFailed`. The motivating case is a
-transform whose `Clone` fails: the master instance is precisely what the
-plugin declared unsafe to share, so the pipeline fails instead of racing
-workers on it (`nodes.go`, `runTransform`).
+and `Run` returns it after draining — the run outcome is `failed`. The
+motivating case is a transform whose `Clone` fails: the master instance is
+precisely what the plugin declared unsafe to share, so the pipeline fails
+instead of racing workers on it (`nodes.go`, `runTransform`). A failed
+*source* stops the engine the same way without a worker-fatal error: the
+error lands in `SourceErrors`, the outcome is `failed`, and `Run` returns nil
+(candidate 02).
 
 ## Transform workers
 

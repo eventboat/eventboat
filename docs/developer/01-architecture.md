@@ -202,6 +202,16 @@ verify-first, then drain-and-swap), and the one-shot verbs (`verify`,
 (`run.mode: job`) put `internal/jobs` between the config and the engine:
 one engine per run, sharing one admission pool across `overlap: all` runs.
 
+Every runner reads one **run outcome** (candidate 02): the engine's
+`Wait`/`Outcome` classifies the run as `completed`, `partial`, `failed` or
+`interrupted`, and the caller maps that onto its own process contract —
+job runs to `success`/`partial`/`failed`/`canceled`, the batch verb to
+exit 0/1, the long-lived continuous verb to exit 0 on a graceful stop and 1
+on a failed run, the daemon to `completed`/`failed` (see
+[Observability & operations](06-observability.md)). A source failure stops
+the engine in every mode; restart resumes from the source watermarks
+(duplicate delivery, never loss).
+
 ## Where to read next
 
 - [Engine internals](02-engine.md) — the accept path, commit frontier,

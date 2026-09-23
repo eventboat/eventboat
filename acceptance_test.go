@@ -215,3 +215,47 @@ sinks:
 		t.Fatalf("trigger output missing success:\n%s", out3)
 	}
 }
+
+// Candidate 02 acceptance 3: a genuine source failure stops a CONTINUOUS run
+// (no run.mode: batch) and the process exits 1 — no silent "alive but not
+// consuming".
+func TestContinuousSourceFailureExitsNonZero(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds the binary")
+	}
+	bin := filepath.Join(t.TempDir(), "eventboat")
+	if runtime.GOOS == "windows" {
+		bin += ".exe"
+	}
+	if out, err := exec.Command("go", "build", "-o", bin, "./cmd/eventboat").CombinedOutput(); err != nil {
+		t.Fatalf("build: %v\n%s", err, out)
+	}
+
+	work := t.TempDir()
+	yaml := fmt.Sprintf(`
+apiVersion: eventboat/v1
+kind: Pipeline
+metadata: { name: continuous-fail }
+sources:
+  in:
+    decoder: json
+    file: { path: %s, poll_every_ms: 10, on_eof: stop }
+sinks:
+  out:
+    depends_on: [in]
+    encoder: json
+    file: { path: %s }
+`, filepath.ToSlash(filepath.Join(work, "absent.jsonl")), filepath.ToSlash(filepath.Join(work, "out.jsonl")))
+	path := filepath.Join(work, "pipeline.yaml")
+	if err := os.WriteFile(path, []byte(yaml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(bin, "run", "--config", path, "--data-dir", filepath.Join(work, "data"))
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("continuous run with a dead source exited 0:\n%s", out)
+	}
+	if code := cmd.ProcessState.ExitCode(); code != 1 {
+		t.Fatalf("exit code = %d, want 1:\n%s", code, out)
+	}
+}

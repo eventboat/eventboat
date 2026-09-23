@@ -182,6 +182,30 @@ same events for Prometheus/OTLP consumers. `ops.Status()` reads them per
 pipeline (`messages_in`, `committed`, `dead_lettered`, `checkpoint`,
 `in_flight`, `messages_per_sec` as a delta over the last snapshot window).
 
+## Run outcomes and exit codes
+
+Every runner derives its terminal state from one engine decision point
+(candidate 02): `Engine.Wait` classifies the run — `completed` (quiesced
+cleanly), `partial` (quiesced with dead letters), `failed` (the engine
+stopped itself: worker-fatal or a source failure) or `interrupted` (the
+caller canceled) — and each process maps that onto its own contract:
+
+| Runner | completed | partial | failed | interrupted |
+|---|---|---|---|---|
+| `run --config` (batch) | 0 | 1 | 1 | 1 |
+| `run --config` (continuous) | 0 | 0 | 1 | 0 (SIGTERM/SIGINT) |
+| `trigger` (one-shot job) | 0 (success) | 1 (partial) | 1 (failed) | 1 (canceled) |
+| job scheduler (`run`, long-lived) | — | — | — (a failed run is history, not a process exit) | 0 (SIGTERM/SIGINT) |
+| daemon status | `completed` | `completed` | `failed` + error | shutdown owns the status |
+
+The exit-code split follows the process shape, not the status: a one-shot
+run that did not complete exits non-zero, while a long-lived process treats
+SIGTERM as a graceful stop. A failed **source** stops the engine in every
+mode (no silent "alive but not consuming"); restart resumes from the source
+watermarks — duplicate delivery, never loss. The daemon's `failed` status
+carries the outcome's failure text (worker-fatal first, then the first
+source error); a batch that fails no longer sits at `running` with an error.
+
 ## SSE event types
 
 `GET /admin/sse` emits `hello` on connect, then typed events — `deploy`
