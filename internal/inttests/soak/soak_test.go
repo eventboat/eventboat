@@ -186,7 +186,7 @@ sinks:
 			defer close(done)
 			i := 0
 			for time.Now().Before(deadline) {
-				if _, err := eng.InjectAt("in", []byte(fmt.Sprintf(`{"i":%d}`, i)), nil); err == nil {
+				if _, err := eng.InjectAt("in", registry.Message{Raw: []byte(fmt.Sprintf(`{"i":%d}`, i))}); err == nil {
 					counter.Add(1)
 				}
 				i++

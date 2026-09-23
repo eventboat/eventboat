@@ -32,7 +32,7 @@ explicitly confirmed.
 
 | # | Candidate | Strength | Status |
 |---|---|---|---|
-| 01 | Start the consumers before replaying (absorbs 03) | Strong | Design agreed |
+| 01 | Start the consumers before replaying (absorbs 03) | Strong | Implemented (stage S1) |
 | 02 | One outcome for every runner | Strong | Design agreed |
 | 04 | One owner for the durable store of a pipeline | Strong | Design agreed |
 | 05 | One verify-first path — the CLI stops re-implementing ops | Strong | Design agreed |

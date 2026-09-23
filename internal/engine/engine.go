@@ -188,21 +188,16 @@ type Engine struct {
 	sources    map[string]registry.Source
 	transforms map[string]registry.Transform
 
-	admitSem chan struct{}
+	// admit is the inbound path (gate, ledger, stamping, spool, dispatch);
+	// committers are the per-source async watermark writers (Run starts them
+	// before the workers and flushes them after drain).
+	admit      *admission
+	committers map[string]*sourceCommitter
 
-	// admitting counts accepts waiting on the admission semaphore, and
 	// replayDone flips once Run's crash replay has registered everything:
-	// WaitCommit must not read "committed" while either is in flight (an
-	// admission-blocked message or an unregistered replay both look like
-	// outstanding==0 for a moment — flaky-test class, M3 CI).
-	admitting  atomic.Int64
+	// WaitCommit must not read "committed" while it is in flight (an
+	// unregistered replay row momentarily looks like outstanding==0).
 	replayDone atomic.Bool
-
-	acquired   map[int64]bool // spool seqs holding an admission slot
-	acquiredMu sync.Mutex
-
-	acceptMu   sync.Mutex
-	acceptedAt map[int64]time.Time // spool seq → accept time (commit latency)
 
 	spanMu sync.Mutex
 	spans  map[int64]trace.Span // spool seq → sampled per-message span (nil rate = empty)
@@ -211,7 +206,6 @@ type Engine struct {
 	persistedThrough int64 // highest checkpoint successfully written
 	flushAttempted   int64 // highest advance whose persistence was attempted
 	retentionDue     int64 // persistedThrough that triggers the next spool trim
-	srcPersisted     map[string]int64
 
 	srcWG    sync.WaitGroup // live source goroutines (exhaustion tracking)
 	srcErrMu sync.Mutex
@@ -288,21 +282,19 @@ func New(p *ir.Pipeline, st store.Store, reg *registry.Registry, opts Options) (
 	}
 
 	e := &Engine{
-		IR:           p,
-		Store:        st,
-		Reg:          reg,
-		Opts:         opts,
-		chans:        map[string]chan *instance{},
-		sinks:        map[string]registry.Sink{},
-		codecs:       map[string]registry.Codec{},
-		sources:      map[string]registry.Source{},
-		transforms:   map[string]registry.Transform{},
-		acquired:     map[int64]bool{},
-		srcErr:       map[string]error{},
-		srcDone:      map[string]bool{},
-		acceptedAt:   map[int64]time.Time{},
-		srcPersisted: map[string]int64{},
-		spans:        map[int64]trace.Span{},
+		IR:         p,
+		Store:      st,
+		Reg:        reg,
+		Opts:       opts,
+		chans:      map[string]chan *instance{},
+		sinks:      map[string]registry.Sink{},
+		codecs:     map[string]registry.Codec{},
+		sources:    map[string]registry.Source{},
+		transforms: map[string]registry.Transform{},
+		committers: map[string]*sourceCommitter{},
+		srcErr:     map[string]error{},
+		srcDone:    map[string]bool{},
+		spans:      map[int64]trace.Span{},
 	}
 
 	for _, name := range p.Order {
@@ -385,10 +377,9 @@ func New(p *ir.Pipeline, st store.Store, reg *registry.Registry, opts Options) (
 		}
 	}
 	e.commit = newCommitTracker(p.Config.Name, sourceNames, e.onCommit, e.persistCheckpoint)
-	if opts.Admission != nil {
-		e.admitSem = opts.Admission // shared pool: pipeline-aggregated quota
-	} else {
-		e.admitSem = make(chan struct{}, opts.HighWatermark)
+	e.admit = newAdmission(e)
+	for name, src := range e.sources {
+		e.committers[name] = newSourceCommitter(p.Config.Name, name, src, st, opts.DrainTimeout)
 	}
 	return e, nil
 }
@@ -414,25 +405,26 @@ func channelCapacity(base int, in []ir.Edge) int {
 func (e *Engine) onCommit(seq int64) {
 	e.Metrics.CommittedCount.Add(1)
 	e.finishSpan(seq, "committed", "")
-	e.acceptMu.Lock()
-	accepted := e.acceptedAt[seq]
-	delete(e.acceptedAt, seq)
-	e.acceptMu.Unlock()
+	accepted := e.admit.takeAccepted(seq)
 	latency := time.Duration(0)
 	if !accepted.IsZero() {
 		latency = e.Opts.Clock().Sub(accepted)
 	}
 	e.Opts.Obs.RecordCommit(e.IR.Config.Name, latency)
-	e.releaseAdmission(seq)
+	e.admit.release(seq)
 }
 
-// persistCheckpoint advances the durable checkpoint (invariant 2) and pushes
-// commit notifications into sources, persisting their returned state. It runs
-// OUTSIDE the commit tracker's lock, on the goroutine that committed the prefix;
-// concurrent advances can therefore flush out of order, so monotonic guards
-// (persistMu) keep the checkpoint, per-source frontiers and the attempt
-// pointer from ever regressing. A failed checkpoint write only widens the
-// replay window on crash; the next advance retries. Never a loss (invariant 3).
+// persistCheckpoint advances the durable checkpoint (invariant 2) and posts
+// the per-source frontiers to their committers. It runs OUTSIDE the commit
+// tracker's lock, on the goroutine that committed the prefix; concurrent
+// advances can therefore flush out of order, so monotonic guards (persistMu)
+// keep the checkpoint and the attempt pointer from ever regressing. A failed
+// checkpoint write only widens the replay window on crash; the next advance
+// retries. Never a loss (invariant 3).
+//
+// Source watermarks are persisted asynchronously (sourceCommitter): the
+// durable barrier is the checkpoint, unchanged, and a source state that lags
+// it only widens the replay window on crash — duplicate delivery, never loss.
 func (e *Engine) persistCheckpoint(committedThrough int64, frontiers map[string]int64) {
 	e.persistMu.Lock()
 	defer e.persistMu.Unlock()
@@ -470,17 +462,9 @@ func (e *Engine) persistCheckpoint(committedThrough int64, frontiers map[string]
 		e.trimDeadLetters()
 		e.retentionDue = pt + e.Opts.SpoolRetention
 	}
-	for name, src := range e.sources {
-		frontier := frontiers[name]
-		if frontier <= 0 || frontier <= e.srcPersisted[name] {
-			continue
-		}
-		state, err := src.Commit(e.ctx, frontier)
-		if err != nil || state == nil {
-			continue
-		}
-		if err := e.Store.SetSourceState(e.IR.Config.Name, name, state, frontier); err == nil {
-			e.srcPersisted[name] = frontier
+	for name, frontier := range frontiers {
+		if c, ok := e.committers[name]; ok {
+			c.post(frontier)
 		}
 	}
 }
@@ -519,19 +503,6 @@ func (e *Engine) durableThrough() int64 {
 	return e.flushAttempted
 }
 
-// releaseAdmission frees the backpressure slot acquired when the message was
-// spooled. Sequences that never acquired a slot (replayed rows) are skipped.
-func (e *Engine) releaseAdmission(seq int64) {
-	e.acquiredMu.Lock()
-	if !e.acquired[seq] {
-		e.acquiredMu.Unlock()
-		return
-	}
-	delete(e.acquired, seq)
-	e.acquiredMu.Unlock()
-	<-e.admitSem
-}
-
 // codec resolves a codec by name: named `codecs:` declarations come
 // pre-instantiated on the IR (config validated at verify); bare names
 // instantiate through the registry (no config, no relative paths).
@@ -553,10 +524,13 @@ func (e *Engine) codec(name string, reg *registry.Registry) (registry.Codec, err
 	return c, nil
 }
 
-// Run replays the spool beyond the checkpoint, starts sources and workers,
-// and blocks until ctx is done. A second call on the same Engine is a
-// programming error (it would replay the spool and duplicate workers) and
-// returns an error instead (review-2026-09).
+// Run starts the engine and blocks until ctx is done. The phases are ordered
+// by an invariant (candidate 01): source committers and workers first, then
+// crash replay, then sources. Replay dispatches into node channels, so the
+// consumers must exist before it runs — a recovery with more uncommitted rows
+// than a channel holds used to block forever on a channel nobody read. A
+// second call on the same Engine is a programming error (it would replay the
+// spool and duplicate workers) and returns an error instead (review-2026-09).
 func (e *Engine) Run(ctx context.Context) error {
 	if !e.runCalled.CompareAndSwap(false, true) {
 		return errors.New("engine: Run called twice")
@@ -567,44 +541,28 @@ func (e *Engine) Run(ctx context.Context) error {
 	// context it promises is live.
 	e.started.Store(true)
 
-	// Crash recovery: replay everything beyond the checkpoint (invariant 3).
-	cp, err := e.Store.Checkpoint(e.IR.Config.Name)
-	if err != nil {
-		return fmt.Errorf("engine: read checkpoint: %w", err)
+	// Source committers first: the first worker commit must have somewhere
+	// to post its frontier.
+	for _, c := range e.committers {
+		go c.run(e.ctx)
 	}
-	if err := e.Store.ReplayFrom(e.IR.Config.Name, cp, func(seq int64, msg registry.Message, ingestTime time.Time) error {
-		// Internal injections re-enter INTO their node (injected_at wins over
-		// source — review-2026-09): fanning OUT of a transform would skip its
-		// script and deliver raw to downstream, and a sink has no out-edges so
-		// the row would be dropped as NoMatch.
-		injected, _ := msg.Meta["injected_at"].(string)
-		if _, known := e.IR.Nodes[injected]; !known {
-			injected = ""
-		}
-		node, _ := msg.Meta["source"].(string)
-		if _, known := e.IR.Nodes[node]; !known {
-			node = ""
-		}
-		if injected == "" && node == "" {
-			// Spooled but never dispatched and not attributable: release it
-			// instead of wedging the contiguous prefix.
-			e.commit.arrived(seq, "", 0)
-			e.commit.done(seq)
-			return nil
-		}
-		e.commit.arrived(seq, "", 0)
-		if injected != "" {
-			e.dispatchInternal(injected, seq, msg)
-			return nil
-		}
-		e.dispatchFrom(node, seq, msg)
-		return nil
-	}); err != nil {
-		return fmt.Errorf("engine: replay: %w", err)
-	}
-	e.replayDone.Store(true)
 
-	// Workers: transforms then sinks.
+	e.startWorkers()
+	if err := e.replaySpool(); err != nil {
+		e.shutdown()
+		return err
+	}
+	e.startSources()
+
+	<-e.ctx.Done()
+	e.shutdown()
+	e.fatalMu.Lock()
+	defer e.fatalMu.Unlock()
+	return e.fatalErr
+}
+
+// startWorkers launches the transform and sink goroutines (Run phase 1).
+func (e *Engine) startWorkers() {
 	for _, name := range e.IR.Order {
 		n := e.IR.Nodes[name]
 		switch n.Section {
@@ -622,10 +580,57 @@ func (e *Engine) Run(ctx context.Context) error {
 			go e.runSink(n)
 		}
 	}
+}
 
-	// Sources last: fresh state, then run. Pull sources (job pipelines) use
-	// Pull and signal exhaustion or failure; the job runner watches
-	// SourcesDone/SourceErrors for run completion (M2 review R1).
+// replaySpool re-dispatches every spool row beyond the checkpoint (invariant
+// 3, Run phase 2). A cancelled context is a voluntary stop (v1.24): the scan
+// stops and Run continues to start the sources, never surfacing an error.
+func (e *Engine) replaySpool() error {
+	cp, err := e.Store.Checkpoint(e.IR.Config.Name)
+	if err != nil {
+		return fmt.Errorf("engine: read checkpoint: %w", err)
+	}
+	err = e.Store.ReplayFrom(e.IR.Config.Name, cp, func(seq int64, msg registry.Message, ingestTime time.Time) error {
+		node, intoNode, ok := e.replayEntry(msg)
+		if !ok {
+			// Spooled but never dispatched and not attributable: release it
+			// instead of wedging the contiguous prefix.
+			e.commit.arrived(seq, "", 0)
+			e.commit.done(seq)
+			return nil
+		}
+		_, aerr := e.admit.admit(e.ctx, admitRequest{
+			mode:     admitReplay,
+			node:     node,
+			msg:      msg,
+			seq:      seq,
+			ingest:   ingestTime,
+			intoNode: intoNode,
+		})
+		if aerr == nil {
+			return nil
+		}
+		if e.ctx.Err() != nil {
+			return errReplayStopped // cancelled: stop replaying, not a failure
+		}
+		return aerr
+	})
+	if err != nil && !errors.Is(err, errReplayStopped) {
+		return fmt.Errorf("engine: replay: %w", err)
+	}
+	e.replayDone.Store(true)
+	return nil
+}
+
+// errReplayStopped aborts the ReplayFrom scan without failing Run: the
+// engine context was cancelled mid-replay (voluntary stop, v1.24).
+var errReplayStopped = errors.New("engine: replay stopped")
+
+// startSources initializes and launches the source goroutines (Run phase 3).
+// Pull sources (job pipelines) use Pull and signal exhaustion or failure; the
+// job runner watches SourcesDone/SourceErrors for run completion (M2 review
+// R1).
+func (e *Engine) startSources() {
 	if e.Opts.DisableSources {
 		e.srcErrMu.Lock()
 		e.srcTotal = len(e.sources)
@@ -634,46 +639,58 @@ func (e *Engine) Run(ctx context.Context) error {
 		}
 		e.srcStart.Store(true)
 		e.srcErrMu.Unlock()
-	} else {
-		e.srcErrMu.Lock()
-		e.srcTotal = len(e.sources)
-		e.srcStart.Store(true) // set before goroutines spawn: SourcesDone is only meaningful once counted
-		e.srcErrMu.Unlock()
-		for name, src := range e.sources {
-			state, _, err := e.Store.SourceState(e.IR.Config.Name, name)
-			if err == nil && len(state) > 0 {
-				_ = src.Init(state)
-			}
-			e.srcWG.Add(1)
-			go func(name string, src registry.Source) {
-				defer e.srcWG.Done()
-				// Both source kinds report completion identically (v1.24):
-				// a nil return is exhaustion/voluntary stop, an error is a
-				// failed source — routed to SourceErrors and OnSourceError.
-				var err error
-				if ps, ok := src.(registry.PullSource); ok {
-					err = ps.Pull(e.ctx, func(msg registry.Message) {
-						_ = e.accept(msg, name)
-					})
-				} else {
-					err = src.Run(e.ctx, func(msg registry.Message) {
-						_ = e.accept(msg, name)
-					})
-				}
-				e.markSourceDone(name, err)
-				if err != nil && e.Opts.OnSourceError != nil {
-					e.Opts.OnSourceError(name, err)
-				}
-				_ = src.Close()
-			}(name, src)
-		}
+		return
 	}
+	e.srcErrMu.Lock()
+	e.srcTotal = len(e.sources)
+	e.srcStart.Store(true) // set before goroutines spawn: SourcesDone is only meaningful once counted
+	e.srcErrMu.Unlock()
+	for name, src := range e.sources {
+		state, _, err := e.Store.SourceState(e.IR.Config.Name, name)
+		if err == nil && len(state) > 0 {
+			_ = src.Init(state)
+		}
+		e.srcWG.Add(1)
+		go func(name string, src registry.Source) {
+			defer e.srcWG.Done()
+			// Both source kinds report completion identically (v1.24):
+			// a nil return is exhaustion/voluntary stop, an error is a
+			// failed source — routed to SourceErrors and OnSourceError.
+			// emit's error is the admission verdict (candidate 01): a
+			// refusal is returned by the builtin default, so it becomes a
+			// failed source here.
+			var err error
+			if ps, ok := src.(registry.PullSource); ok {
+				err = ps.Pull(e.ctx, func(msg registry.Message) error {
+					return e.accept(msg, name)
+				})
+			} else {
+				err = src.Run(e.ctx, func(msg registry.Message) error {
+					return e.accept(msg, name)
+				})
+			}
+			e.markSourceDone(name, err)
+			if err != nil && e.Opts.OnSourceError != nil {
+				e.Opts.OnSourceError(name, err)
+			}
+			_ = src.Close()
+		}(name, src)
+	}
+}
 
-	<-e.ctx.Done()
+// shutdown drains the workers and sources, stops the source committers and
+// flushes their pending frontiers synchronously with a bounded,
+// non-cancelled context (the engine ctx is already cancelled; a cancelled
+// Commit would discard the last frontier).
+func (e *Engine) shutdown() {
+	e.cancel()
 	e.drain()
-	e.fatalMu.Lock()
-	defer e.fatalMu.Unlock()
-	return e.fatalErr
+	for _, c := range e.committers {
+		c.wait(e.Opts.DrainTimeout)
+	}
+	for _, c := range e.committers {
+		c.flush()
+	}
 }
 
 // failNode records a worker-fatal error and stops the engine: per-message
@@ -828,7 +845,13 @@ func (e *Engine) Abandon(reason string) (int, error) {
 		for _, seq := range seqs {
 			msg := msgs[seq]
 			e.deadLetterMsg(seq, msg, firstNonEmpty(msg.SrcName, "unknown"), "", reason, "")
-			e.commit.forceTerminal(seq)
+			if e.commit.forceTerminal(seq) {
+				// The force-terminate removes the entry without a terminal
+				// branch event, so the commit sweep never fires onCommit for
+				// it — the admission slot would leak (candidate 01). release
+				// is idempotent, so a racing commit sweep cannot double-free.
+				e.admit.release(seq)
+			}
 			abandoned++
 		}
 		if !more || last == after {
@@ -846,64 +869,14 @@ func firstNonEmpty(a, b string) string {
 	return b
 }
 
-// accept is the single entry point for source emissions: backpressure gate,
-// engine stamping, durable spool append, then DAG visibility (invariant 1:
-// nothing is visible before the append succeeds).
+// accept is the thin live shell over admission: one source emission through
+// the gate, stamping, the durable spool append and the dispatch (invariant 1:
+// nothing is visible before the append succeeds). The returned error is the
+// admission verdict the emit contract exposes (nil = durably accepted, ctx
+// error = shutdown, anything else = refusal).
 func (e *Engine) accept(raw registry.Message, sourceNode string) error {
-	// Backpressure: block while too many uncommitted messages are in flight.
-	e.admitting.Add(1)
-	select {
-	case e.admitSem <- struct{}{}:
-		e.admitting.Add(-1)
-	case <-e.ctx.Done():
-		e.admitting.Add(-1)
-		e.Metrics.Backpressured.Add(1)
-		e.Opts.Obs.RecordBackpressure(e.IR.Config.Name, sourceNode)
-		return e.ctx.Err()
-	}
-
-	msg := raw
-	msg.SrcName = sourceNode
-	if msg.ID == "" {
-		msg.ID = e.Opts.NewID()
-	}
-	ingest := e.Opts.Clock()
-	meta := cloneMeta(msg.Meta)
-	meta["message_id"] = msg.ID
-	meta["ingest_time"] = ingest.UTC().Format(time.RFC3339Nano)
-	meta["source"] = sourceNode
-	for k, v := range e.Opts.MetaStamps {
-		if _, exists := meta[k]; !exists {
-			meta[k] = v
-		}
-	}
-	msg.Meta = meta
-	node := e.IR.Nodes[sourceNode]
-	codecName := node.Config.Decoder
-	if codecName == "" {
-		codecName = "json"
-	}
-	msg.Codec = codecName
-
-	e.Metrics.MessagesIn.Add(1)
-	e.Opts.Obs.RecordMessageIn(e.IR.Config.Name, sourceNode)
-	seq, err := e.Store.AppendSpool(e.IR.Config.Name, msg, ingest)
-	if err != nil {
-		<-e.admitSem
-		e.Metrics.SpoolFailures.Add(1)
-		e.Opts.Obs.RecordSpoolFailure(e.IR.Config.Name)
-		return fmt.Errorf("engine: spool append failed; message NOT delivered: %w", err)
-	}
-	e.acceptMu.Lock()
-	e.acceptedAt[seq] = ingest
-	e.acceptMu.Unlock()
-	e.acquiredMu.Lock()
-	e.acquired[seq] = true
-	e.acquiredMu.Unlock()
-	e.startMessageSpan(seq, msg.ID, sourceNode)
-	e.commit.arrived(seq, sourceNode, raw.SrcSeq)
-	e.dispatchFrom(sourceNode, seq, msg)
-	return nil
+	_, err := e.admit.admit(e.ctx, admitRequest{mode: admitLive, node: sourceNode, msg: raw})
+	return err
 }
 
 // startMessageSpan samples and starts one per-message span
@@ -1012,81 +985,29 @@ func (e *Engine) deliver(edge *ir.Edge, seq int64, msg registry.Message) {
 	}
 }
 
-// InjectAt feeds a message into a node: at a source it goes through the full
-// accept path (spool + stamps); at an internal node it is spooled and enters
-// the DAG at that node (testkit / replay).
-func (e *Engine) InjectAt(node string, raw []byte, meta map[string]any) (int64, error) {
-	return e.injectAt(node, raw, meta, "")
+// InjectAt feeds a message into a node: at a source it is spooled and fans
+// out of the source (there is no source logic to run); at an internal node it
+// is spooled and enters the DAG at that node (testkit / replay). The message
+// carries its own Raw/Meta/Codec/ID; a non-empty ID is preserved, and an
+// empty codec defaults to json (callers injecting at a source pass the node's
+// decoder when they have no codec of their own — internal/testrun does).
+func (e *Engine) InjectAt(node string, msg registry.Message) (int64, error) {
+	return e.injectAt(node, msg)
 }
 
 // InjectReplay re-injects one previously dead-lettered (or spooled) message
 // (§3.3): it enters at the given node, keeps its ORIGINAL message_id (so
 // idempotent sinks deduplicate re-deliveries) and is stamped
-// meta.is_replay=true for sinks to recognize.
-func (e *Engine) InjectReplay(node string, raw []byte, meta map[string]any, originalID string) (int64, error) {
-	if meta == nil {
-		meta = map[string]any{}
-	}
-	meta = cloneMeta(meta)
+// meta.is_replay=true for sinks to recognize. The message's Codec travels
+// with it — a csv dead letter replays as csv, never as json (candidate 01).
+func (e *Engine) InjectReplay(node string, msg registry.Message) (int64, error) {
+	meta := cloneMeta(msg.Meta)
 	meta["is_replay"] = true
-	if originalID != "" {
-		meta["original_message_id"] = originalID
+	if msg.ID != "" {
+		meta["original_message_id"] = msg.ID
 	}
-	return e.injectAt(node, raw, meta, originalID)
-}
-
-func (e *Engine) injectAt(node string, raw []byte, meta map[string]any, keepID string) (int64, error) {
-	n, ok := e.IR.Nodes[node]
-	if !ok {
-		return 0, fmt.Errorf("engine: unknown node %q", node)
-	}
-	if !e.started.Load() {
-		return 0, fmt.Errorf("engine: not started; call Run first")
-	}
-	if n.Section == config.SectionSource {
-		// accept() preserves a non-empty message_id, so replays keep their
-		// original identity through the full spool path.
-		if err := e.accept(registry.Message{Raw: raw, Meta: meta, SrcSeq: 0, ID: keepID}, node); err != nil {
-			return 0, err
-		}
-		return 0, nil
-	}
-	// Internal injection: spool with the entry node as dispatch origin; the
-	// message enters the DAG at that node, skipping its upstream.
-	msg := registry.Message{Raw: raw, Meta: meta, SrcSeq: 0}
-	msg.ID = e.Opts.NewID()
-	if keepID != "" {
-		msg.ID = keepID
-	}
-	ingest := e.Opts.Clock()
-	m := cloneMeta(msg.Meta)
-	m["message_id"] = msg.ID
-	m["ingest_time"] = ingest.UTC().Format(time.RFC3339Nano)
-	m["source"] = node
-	m["injected_at"] = node
-	for k, v := range e.Opts.MetaStamps {
-		if _, exists := m[k]; !exists {
-			m[k] = v
-		}
-	}
-	msg.Meta = m
-	msg.Codec = "json"
-	select {
-	case e.admitSem <- struct{}{}:
-	case <-e.ctx.Done():
-		return 0, e.ctx.Err()
-	}
-	seq, err := e.Store.AppendSpool(e.IR.Config.Name, msg, ingest)
-	if err != nil {
-		<-e.admitSem
-		return 0, err
-	}
-	e.acquiredMu.Lock()
-	e.acquired[seq] = true
-	e.acquiredMu.Unlock()
-	e.commit.arrived(seq, "", 0)
-	e.dispatchInternal(node, seq, msg)
-	return seq, nil
+	msg.Meta = meta
+	return e.injectAt(node, msg)
 }
 
 // dispatchInternal delivers a message INTO a node instead of fanning out of
@@ -1126,7 +1047,7 @@ func (e *Engine) WaitCommit(ctx context.Context) error {
 	defer tick.Stop()
 	for {
 		outstanding, committedThrough, _ := e.commit.snapshot()
-		if outstanding == 0 && e.durableThrough() >= committedThrough && e.replayDone.Load() && e.admitting.Load() == 0 {
+		if outstanding == 0 && e.durableThrough() >= committedThrough && e.replayDone.Load() && e.admit.admitting.Load() == 0 {
 			return nil
 		}
 		select {

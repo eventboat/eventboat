@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/eventboat/eventboat/internal/config"
+	"github.com/eventboat/eventboat/internal/registry"
 	"github.com/eventboat/eventboat/internal/store"
 )
 
@@ -405,7 +406,7 @@ sinks:
 
 	// Re-inject "at the transform" — exactly what replay --dlq does after a
 	// script bug is fixed.
-	if _, err := eng.InjectReplay("t", []byte(`{"i":1}`), map[string]any{"job_run_id": "r1"}, "original-id-7"); err != nil {
+	if _, err := eng.InjectReplay("t", registry.Message{ID: "original-id-7", Raw: []byte(`{"i":1}`), Meta: map[string]any{"job_run_id": "r1"}}); err != nil {
 		t.Fatal(err)
 	}
 	waitCommit(t, eng)
@@ -430,9 +431,8 @@ sinks:
 		t.Errorf("transform did not run on reinjection: %s", msg.Out)
 	}
 
-	// Source-node reinjection goes through the full accept path and also
-	// keeps the id.
-	if _, err := eng.InjectReplay("in", []byte(`{"i":2}`), nil, "original-id-8"); err != nil {
+	// Source-node reinjection also keeps the id.
+	if _, err := eng.InjectReplay("in", registry.Message{ID: "original-id-8", Raw: []byte(`{"i":2}`)}); err != nil {
 		t.Fatal(err)
 	}
 	waitCommit(t, eng)

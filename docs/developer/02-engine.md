@@ -8,11 +8,13 @@ order: 2
 The engine (`internal/engine`) executes one compiled pipeline against one
 store: source admission through a durable spool, in-memory DAG execution with
 commit tracking, per-edge delivery retries, dead lettering, checkpointing and
-backpressure. The package is three files plus tests: `engine.go` (admission,
-persistence, lifecycle), `nodes.go` (transform/sink workers, dead letters),
-`commit.go` (the commit frontier). Every reliability property is phrased as
-one of the eight invariants (see [Architecture](01-architecture.md)), each
-with a dedicated test in `internal/engine/invariants_test.go`.
+backpressure. The package is five files plus tests: `engine.go` (lifecycle,
+persistence), `admission.go` (the inbound path), `nodes.go` (transform/sink
+workers, dead letters), `commit.go` (the commit frontier), plus
+`sourcecommit.go` (the per-source watermark committers). Every reliability
+property is phrased as one of the eight invariants (see
+[Architecture](01-architecture.md)), each with a dedicated test in
+`internal/engine/invariants_test.go`.
 
 ## Startup sequence
 
@@ -31,28 +33,62 @@ with a dedicated test in `internal/engine/invariants_test.go`.
 2. **Commit tracker.** `newCommitTracker` gets one `srcTracker` per source
    node and the two callbacks: `onCommit` (per-message bookkeeping) and
    `onAdvance` (checkpoint persistence).
-3. **Admission.** A semaphore of `Options.HighWatermark` slots
-   (`DefaultHighWatermark = 10_000`). The jobs manager can hand in a *shared*
-   `Options.Admission` pool so `limits.max_in_flight` aggregates across
-   concurrent `overlap: all` runs instead of multiplying per run.
-4. **`Run(ctx)` order matters**: crash replay first (read checkpoint →
-   `Store.ReplayFrom` beyond it, re-dispatching each row), then transform
-   workers and sink workers, then sources *last* — a fresh source restores its
-   persisted state via `Init(state)` when one exists, then `Run`s (or `Pull`s
-   for pull sources). Sources last so replayed rows are already registered
-   before new emissions race them. `replayDone` flips only after the replay
-   scan finishes; `WaitCommit` refuses to read "all committed" before that
-   (an unregistered replay row momentarily looks like `outstanding == 0`).
+3. **Admission and committers.** `newAdmission` builds the inbound path
+   (below); one `sourceCommitter` is allocated per source node.
+4. **`Run(ctx)` phases, in this order** (candidate 01; the ordering is an
+   invariant, not a preference):
+   1. **committers + workers** — one goroutine per source committer, then
+      the transform and sink workers;
+   2. **crash replay** — read the checkpoint and re-dispatch every spool row
+      beyond it through admission (`replay` mode). Replay dispatches into
+      node channels, so the consumers must already exist: a recovery with
+      more uncommitted rows than a channel holds used to block forever on a
+      channel nobody read. A cancelled context stops the scan without an
+      error (a voluntary stop, v1.24);
+   3. **sources last** — a fresh source restores its persisted state via
+      `Init(state)` when one exists, then `Run`s (or `Pull`s for pull
+      sources). Sources last so replayed rows are already registered before
+      new emissions race them. `replayDone` flips only after the replay
+      scan finishes; `WaitCommit` refuses to read "all committed" before
+      that (an unregistered replay row momentarily looks like
+      `outstanding == 0`).
+
+## The admission path
+
+`internal/engine/admission.go` owns how a message enters the DAG: the
+backpressure gate, the acquired-slot ledger, stamping, the spool append,
+commit registration and the dispatch step. One entry (`admit`) has three
+modes that differ only in request fields:
+
+| Mode | Entry | Append | Stamps | Source ref | Codec |
+|---|---|---|---|---|---|
+| **live** (source emission) | out of the source node | yes | `message_id`, `ingest_time`, `source`, `MetaStamps` | `commit.arrived(seq, node, srcSeq)` | node decoder (json default) |
+| **replay** (crash recovery) | as the spooled row demands (`injected_at` → into the node, else out of its source) | no (existing seq) | original, kept | `arrived(seq, "", 0)` | message (spooled), json default |
+| **inject** (operator/test) | into the target node — out of it when the target is a source, which has no inbound processing | yes | live stamps + `injected_at` (internal target only) | `arrived(seq, "", 0)` | message, json default |
+
+Live admissions also record an accept time (commit latency) and a sampled
+span; replay and inject do not. **Every mode takes admission quota** — one
+slot per uncommitted message. The uncommitted set is ≤ `HighWatermark` by
+construction, so replay cannot wedge on the gate, and the quota is uniform
+across entries. The gate can be a shared pool (`Options.Admission`) so the
+jobs manager aggregates `limits.max_in_flight` across concurrent
+`overlap: all` runs instead of multiplying per run.
+
+The verdict `admit` returns *is* the source contract's emit error: `nil` =
+durably accepted; a ctx error = engine shutdown; anything else = **refusal**
+(not durable, never visible, safe to re-emit — see
+[Plugin system](03-plugins.md)). A refused live emission returns the slot it
+took; a refused injection returns the error to `InjectAt`/`InjectReplay`.
 
 ## The accept path
 
-`accept` is the single entry point for source emissions (`engine.go`):
+`accept` is the thin live shell over admission (`engine.go`):
 
-1. **Admission gate.** The caller blocks on `admitSem` — one slot per
+1. **Admission gate.** The caller blocks on the gate — one slot per
    uncommitted message. When the high watermark is reached, sources stop
    being served (backpressure; `eventboat_backpressure_events_total`). A
    blocked accept that races shutdown returns `ctx.Err()` and the message is
-   *not* accepted — the source re-emits it later; that is at-least-once.
+   *not* accepted — the source may safely re-emit it (at-least-once).
 2. **Stamping.** `message_id` (preserved if the caller supplied one, so
    replays keep identity), `ingest_time`, `source`, plus any
    `Options.MetaStamps` (e.g. `job_run_id`). The source node's decoder names
@@ -61,11 +97,23 @@ with a dedicated test in `internal/engine/invariants_test.go`.
    On failure the admission slot is returned and the message is *refused* —
    never delivered (invariant 1).
 4. **Registration.** `acceptedAt[seq]` records the accept time (commit
-   latency), `acquired[seq]` remembers the backpressure slot, and
+   latency), the acquired-slot ledger remembers the backpressure slot, and
    `commit.arrived(seq, sourceNode, raw.SrcSeq)` pre-registers exactly one
    outstanding branch and records the source emission for watermark
    tracking. Then `dispatchFrom` decodes at the source entry (decode failure
    = dead letter) and fans out.
+
+## Injection
+
+`InjectAt(node, msg)` and `InjectReplay(node, msg)` take a
+`registry.Message` (Raw/Meta/Codec/ID); the message's identity and codec
+travel with it. `InjectReplay` stamps `meta.is_replay=true` and
+`meta.original_message_id` from `msg.ID`, and preserves the ID — a csv dead
+letter replays as csv, never as json. `InjectAt` at a source node fans out of
+it (spooled and stamped like a live emission, but not attributable to the
+source's watermark); at an internal node it is spooled and enters INTO that
+node (transform script, sink batch), which is what makes operator replay
+re-execute the failing step.
 
 ## Per-edge delivery
 
@@ -126,8 +174,21 @@ overrides per edge (`internal/ir/ir.go`): `Required` (default **true**),
 - **`Commit(ctx, throughSrcSeq)` contract** (registry.Source): the engine
   calls it when the contiguous committed frontier advances, with the highest
   committed srcSeq for that source; the source returns its new durable state
-  (Kafka offsets, file offsets, SQL watermarks), which
-  `persistCheckpoint` persists via `Store.SetSourceState`.
+  (Kafka offsets, file offsets, SQL watermarks), which the source committer
+  persists via `Store.SetSourceState`.
+- **Source committers** (`sourcecommit.go`, candidate 01). One worker per
+  source receives coalesced **maximum** frontier advances from
+  `persistCheckpoint` and calls `Source.Commit` off the committing goroutine
+  — so a source may hold an internal lock across `emit` (the file source does)
+  without deadlocking the pipeline. A failed commit or state write keeps its
+  pending value and is retried on the next advance; the `srcPersisted`
+  monotonic guard lives in the committer. After `drain()`, `Run` waits
+  (bounded) for the workers to exit and flushes each pending frontier
+  synchronously with `context.WithTimeout(context.Background(),
+  DrainTimeout)` — the engine ctx is already cancelled, and a cancelled
+  `Commit` would discard the last frontier. A source state that lags the
+  checkpoint only widens the crash replay window: duplicate delivery, never
+  loss.
 
 ## Persistence
 
@@ -166,25 +227,29 @@ regressing:
   logged and retried by the next window, exactly like the spool trim — it
   never blocks the commit path (deleting terminal artifacts cannot affect
   the invariants).
-- Per-source `Commit` states persist alongside the checkpoint, with their own
-  monotonic guard (`srcPersisted`).
+- Per-source `Commit` states persist through the committers (above), with the
+  monotonic guard inside each committer; the checkpoint stays the durable
+  barrier.
 
 ## Recovery
 
-Crash recovery is the `Run` prologue: read the checkpoint, replay every
-spool row beyond it (`Store.ReplayFrom`), re-dispatch each into the DAG. Rows
-whose source node no longer exists in the IR are committed immediately rather
-than wedging the contiguous prefix forever. Pull sources resume from their
-persisted watermark, so the uncommitted tail may arrive twice: once via
-spool replay, once via re-emission — duplicate delivery, never loss
-(invariant 3; `TestInvariant_Kill9ReplayReplaysAllUncommitted`).
+Crash recovery is `Run`'s second phase: read the checkpoint, replay every
+spool row beyond it (`Store.ReplayFrom`) through admission, re-dispatching
+each into the DAG — with the workers already running, so a backlog larger
+than a node channel cannot wedge. Rows whose source node no longer exists in
+the IR are committed immediately rather than wedging the contiguous prefix
+forever. Pull sources resume from their persisted watermark, so the
+uncommitted tail may arrive twice: once via spool replay, once via
+re-emission — duplicate delivery, never loss (invariant 3;
+`TestInvariant_Kill9ReplayReplaysAllUncommitted`).
 
 Job pipelines resume runs found in `pending/running/committing` on startup;
 `internal/jobs` watches `Quiesced`/`SourcesDone`/`SourceErrors` to move runs
 to terminal states. A canceled run that must stop immediately calls
 `Abandon(reason)`: every outstanding message is dead-lettered first (durable
-record) and only then force-terminated in the tracker, so the checkpoint
-prefix never wedges (review R2).
+record) and only then force-terminated in the tracker — including releasing
+its admission slot, which the force-terminate path would otherwise leak
+(candidate 01) — so the checkpoint prefix never wedges (review R2).
 
 ## Shutdown
 
@@ -197,7 +262,9 @@ commit a9250c8 closed the docker-stop gap). On ctx cancellation the engine:
    `limits.drain_timeout`) for worker and source goroutines, then hard-cancels,
 3. flushes pending sink batches (the sink worker's ctx branch flushes before
    returning),
-4. closes sinks and transform masters (clones close themselves).
+4. closes sinks and transform masters (clones close themselves),
+5. stops the source committers and flushes their pending frontiers with a
+   bounded, non-cancelled context (candidate 01).
 
 `Run` then returns the fatal error, if any. The ops layer prints the final
 status line (the "settle status" report: counts + checkpoint).

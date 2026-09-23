@@ -39,7 +39,7 @@ type kafkaSource struct {
 
 func (s *kafkaSource) Init(state []byte) error { return nil } // offsets live in the consumer group
 
-func (s *kafkaSource) Run(ctx context.Context, emit func(registry.Message)) error {
+func (s *kafkaSource) Run(ctx context.Context, emit func(registry.Message) error) error {
 	s.mu.Lock()
 	s.reader = kafka.NewReader(kafka.ReaderConfig{
 		Brokers:     s.brokers,
@@ -67,7 +67,14 @@ func (s *kafkaSource) Run(ctx context.Context, emit func(registry.Message)) erro
 			"kafka_offset":    msg.Offset,
 			"kafka_key":       string(msg.Key),
 		}
-		emit(registry.Message{Raw: msg.Value, Meta: meta, SrcName: "kafka", SrcSeq: seq})
+		if err := emit(registry.Message{Raw: msg.Value, Meta: meta, SrcName: "kafka", SrcSeq: seq}); err != nil {
+			// Refusal: report the source failed (default policy). The Kafka
+			// offset was not committed, so the broker re-delivers it.
+			if ctx.Err() != nil {
+				return nil // engine shutdown under the emit: voluntary stop
+			}
+			return err
+		}
 	}
 }
 

@@ -31,17 +31,25 @@ type cronSource struct {
 	expr    string
 	payload []byte
 
-	mu     sync.Mutex
-	seq    int64
-	closed bool
+	mu      sync.Mutex
+	seq     int64
+	closed  bool
+	emitErr error // first refusal, reported as a failed source
+
+	stopClosed bool
+	stop       chan struct{}
 }
 
 func (s *cronSource) Init(state []byte) error { return nil }
 
-func (s *cronSource) Run(ctx context.Context, emit func(registry.Message)) error {
+func (s *cronSource) Run(ctx context.Context, emit func(registry.Message) error) error {
 	if _, err := cron.ParseStandard(s.expr); err != nil {
 		return fmt.Errorf("cron source: invalid expression: %w", err)
 	}
+	s.mu.Lock()
+	s.stop = make(chan struct{})
+	s.stopClosed = false
+	s.mu.Unlock()
 	// A cron source has no deterministic replayable offset; we schedule on the
 	// wall clock and let the spool provide durability once a tick is emitted.
 	sched := cron.New()
@@ -55,15 +63,41 @@ func (s *cronSource) Run(ctx context.Context, emit func(registry.Message)) error
 		seq := s.seq
 		s.mu.Unlock()
 		meta := map[string]any{"scheduled_time": time.Now().UTC().Format(time.RFC3339Nano)}
-		emit(registry.Message{Raw: s.payload, Meta: meta, SrcName: "cron", SrcSeq: seq})
+		if err := emit(registry.Message{Raw: s.payload, Meta: meta, SrcName: "cron", SrcSeq: seq}); err != nil {
+			// Refusal: stop scheduling and report the source failed. The
+			// callback runs on the scheduler goroutine, so the error is
+			// stashed and Run is woken through stop.
+			s.mu.Lock()
+			if s.emitErr == nil {
+				s.emitErr = err
+			}
+			first := !s.stopClosed
+			s.stopClosed = true
+			s.mu.Unlock()
+			if first {
+				close(s.stop)
+			}
+		}
 	})
 	go sched.Run()
-	<-ctx.Done()
-	sched.Stop()
-	s.mu.Lock()
-	s.closed = true
-	s.mu.Unlock()
-	return nil // cancelled: a voluntary stop, not a failure
+	select {
+	case <-ctx.Done():
+		sched.Stop()
+		s.mu.Lock()
+		s.closed = true
+		s.mu.Unlock()
+		return nil // cancelled: a voluntary stop, not a failure
+	case <-s.stop:
+		sched.Stop()
+		s.mu.Lock()
+		s.closed = true
+		err := s.emitErr
+		s.mu.Unlock()
+		if ctx.Err() != nil {
+			return nil // engine shutdown under the emit: voluntary stop
+		}
+		return err
+	}
 }
 
 func (s *cronSource) Commit(ctx context.Context, throughSrcSeq int64) ([]byte, error) {

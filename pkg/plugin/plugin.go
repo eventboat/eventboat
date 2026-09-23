@@ -34,10 +34,13 @@ type (
 	// branches share the underlying Decoded/Meta maps — never mutate them
 	// in place; assign a fresh value instead (see registry.Message).
 	Message = registry.Message
-	// Source is implemented by source plugins. Run's return value is the
-	// completion signal: nil = exhausted/voluntary stop, error = failed
-	// source (ctx cancellation is a voluntary stop — return nil, never
-	// ctx.Err()).
+	// Source is implemented by source plugins. emit's error is the admission
+	// verdict (candidate 01): nil = the message was durably accepted; a ctx
+	// error = the engine is shutting down (return nil — a voluntary stop);
+	// anything else = a refusal (not durable, never visible, safe to
+	// re-emit — the source decides whether to retry or fail). Run's return
+	// value is the completion signal: nil = exhausted/voluntary stop, error
+	// = failed source.
 	Source = registry.Source
 	// PullSource is a source with job-pipeline pull semantics (declare the
 	// "pull" capability).

@@ -43,6 +43,11 @@ func registerFileSource(reg *registry.Registry) error {
 // the default on_eof:tail never returns on its own. A missing file is an
 // error under stop (a batch run must not sit silent) and a wait-under-poll
 // under tail.
+//
+// Lock-across-emit is deliberate (candidate 01): pump holds s.mu while
+// emitting, and Commit takes the same lock, so this source deadlocks against
+// a commit path that calls Commit synchronously — the regression fixture
+// proving the engine's per-source committer tolerates it.
 type fileSource struct {
 	path      string
 	pollEvery time.Duration
@@ -73,7 +78,7 @@ func (s *fileSource) Init(state []byte) error {
 	return nil
 }
 
-func (s *fileSource) Run(ctx context.Context, emit func(registry.Message)) error {
+func (s *fileSource) Run(ctx context.Context, emit func(registry.Message) error) error {
 	if f, err := os.Open(s.path); err != nil {
 		if s.onEOF == "stop" {
 			// A batch/job run must not sit silent on a missing file.
@@ -107,7 +112,16 @@ func (s *fileSource) Run(ctx context.Context, emit func(registry.Message)) error
 		case <-ctx.Done():
 			return nil // cancelled: a voluntary stop, not a failure
 		case <-tick.C:
-			emitted := s.pump(ctx, emit)
+			emitted, err := s.pump(ctx, emit)
+			if err != nil {
+				// Refusal: the framework reports it as a failed source (the
+				// source watermark is the no-loss safety net). The engine
+				// shutting down under the emit is a voluntary stop instead.
+				if ctx.Err() != nil {
+					return nil
+				}
+				return err
+			}
 			if s.onEOF == "stop" && !emitted && s.atEOF() {
 				return nil // whole file read: exhausted
 			}
@@ -126,17 +140,22 @@ func (s *fileSource) atEOF() bool {
 	return fi.Size() <= s.nextOffset
 }
 
-func (s *fileSource) pump(ctx context.Context, emit func(registry.Message)) (emitted bool) {
+// pump reads the lines appended since the last call. It deliberately holds
+// s.mu across emit (the candidate-01 regression fixture): a source may hold
+// an internal lock across the emit callback, because watermark persistence
+// runs on the engine's source committer, not on the committing goroutine.
+// pump returns the first refusal error; the caller maps it to a failed source.
+func (s *fileSource) pump(ctx context.Context, emit func(registry.Message) error) (emitted bool, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.reader == nil {
 		f, err := os.Open(s.path)
 		if err != nil {
-			return false
+			return false, nil
 		}
 		if _, err := f.Seek(s.nextOffset, io.SeekStart); err != nil {
 			_ = f.Close()
-			return false
+			return false, nil
 		}
 		s.f = f
 		s.reader = bufio.NewReader(f)
@@ -149,7 +168,9 @@ func (s *fileSource) pump(ctx context.Context, emit func(registry.Message)) (emi
 				s.nextSeq++
 				end := s.nextOffset + int64(len(line))
 				s.pending[s.nextSeq] = end
-				emit(registry.Message{Raw: trimmed, SrcName: "file", SrcSeq: s.nextSeq})
+				if eerr := emit(registry.Message{Raw: trimmed, SrcName: "file", SrcSeq: s.nextSeq}); eerr != nil {
+					return emitted, eerr
+				}
 				emitted = true
 			}
 			s.nextOffset += int64(len(line))
@@ -161,7 +182,7 @@ func (s *fileSource) pump(ctx context.Context, emit func(registry.Message)) (emi
 				s.f = nil
 				s.reader = nil
 			}
-			return emitted
+			return emitted, nil
 		}
 	}
 }

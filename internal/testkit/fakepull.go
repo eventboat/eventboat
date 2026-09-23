@@ -78,8 +78,10 @@ func (s *FakePullSource) Init(state []byte) error {
 }
 
 // Pull emits staged rows with cursor strictly after the restored watermark
-// (rows resume after the committed frontier), then reports exhaustion.
-func (s *FakePullSource) Pull(ctx context.Context, emit func(registry.Message)) error {
+// (rows resume after the committed frontier), then reports exhaustion. A
+// refused emission is returned (the source's default policy: report it as a
+// failed pull); ctx cancellation is a voluntary stop.
+func (s *FakePullSource) Pull(ctx context.Context, emit func(registry.Message) error) error {
 	s.mu.Lock()
 	if s.failNext {
 		s.failNext = false
@@ -109,8 +111,13 @@ func (s *FakePullSource) Pull(ctx context.Context, emit func(registry.Message)) 
 		s.pending[seq] = r
 		s.mu.Unlock()
 		// Emit blocks in the engine's admission gate: backpressure pauses
-		// the pull naturally (§5.8 point 4).
-		emit(registry.Message{Raw: raw, Codec: "json", SrcName: "fakepull", SrcSeq: seq, Cursor: r.cursor})
+		// the pull naturally (§5.8 point 4). A refusal stops the pull.
+		if err := emit(registry.Message{Raw: raw, Codec: "json", SrcName: "fakepull", SrcSeq: seq, Cursor: r.cursor}); err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
+			return err
+		}
 	}
 	return nil
 }
@@ -143,7 +150,7 @@ func (s *FakePullSource) Commit(ctx context.Context, throughSrcSeq int64) ([]byt
 	return st, nil
 }
 
-func (s *FakePullSource) Run(ctx context.Context, emit func(registry.Message)) error {
+func (s *FakePullSource) Run(ctx context.Context, emit func(registry.Message) error) error {
 	if err := s.Pull(ctx, emit); err != nil {
 		return err
 	}

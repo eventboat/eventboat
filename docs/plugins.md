@@ -171,7 +171,11 @@ write error / a failed pull, per the delivery policy).
   (v1.24: this completion signal now reaches the engine for Run, matching
   Pull). An errored stream is a failed source. **Honor send blocking**: when
   the host stops reading (backpressure), your `Send` blocks — that is the
-  admission gate; do not buffer unboundedly.
+  admission gate; do not buffer unboundedly. The host reads with the engine's
+  emit contract (candidate 01): if the engine *refuses* an event (spool append
+  failed) or is shutting down, it stops reading and the stream errors — your
+  last acknowledged `Commit` is untouched, so re-emitting from there is safe
+  (at-least-once).
 - `Pull(RunRequest) returns (stream Event)` — job/pull mode, served when your
   manifest declares `capabilities: ["pull"]`. Emit one page of rows, then
   **end the stream with OK status** — that signals "exhausted" and the job
@@ -179,13 +183,18 @@ write error / a failed pull, per the delivery policy).
   failure, distinct from per-message dead letters). Fix page bounds up front:
   if you compute the end from mutable state that Commit updates
   concurrently, the stream never ends (the reference implementation documents
-  this trap).
+  this trap). The refusal contract above applies identically.
 - `Commit(CommitRequest{through_src_seq})` — the contiguous committed
   frontier advanced through `src_seq`. Commit your offsets HERE (Kafka
   offsets, file positions, watermarks) and return the new state bytes in
   `CommitResponse.state`; the host persists and feeds it back through the
   next `Init`. This is the at-least-once contract: a replay may re-deliver
-  everything after the last Commit you acknowledged.
+  everything after the last Commit you acknowledged. Commit runs on the
+  host's per-source committer goroutine, **concurrently with your
+  Run/Pull stream** (it is decoupled from the committing goroutine so a
+  source may hold an internal lock across its sends) — guard shared state,
+  and expect calls to arrive coalesced (the host sends the maximum frontier,
+  not every intermediate value).
 - `Close(CloseRequest)` — last chance to flush; the process then receives
   stdin EOF.
 

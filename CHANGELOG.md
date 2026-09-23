@@ -147,6 +147,49 @@ hygiene findings.
   swallowing it. `http_server` sources now fail loudly on bind errors (port
   occupied) instead of returning silently. `Options.OnSourceError` fires for
   every source kind, not just pull sources.
+- **BREAKING: the source emit callback returns `error`**
+  (`Source.Run(ctx, func(Message) error) error`, `PullSource.Pull` likewise;
+  `pkg/plugin` aliases follow; compiled-in plugins must be rebuilt). The
+  error is the **admission verdict** (candidate 01): nil = the message was
+  durably accepted; a ctx error = engine shutdown (the source returns nil —
+  a voluntary stop); anything else = a **refusal** — not durable, never
+  visible, safe to re-emit. The source owns its input semantics and decides
+  whether to retry internally or fail; the engine retries nothing. Builtin
+  default: report the refusal as a failed source (the source watermark is the
+  no-loss safety net); `http_server` answers 503 instead. `file_source`
+  deliberately keeps its lock-across-emit shape as the regression fixture.
+  The out-of-process gRPC protocol is UNCHANGED; the host adapter surfaces a
+  refusal as the stream's error (the last Commit state is untouched, so the
+  plugin re-emits it).
+- **BREAKING: `Engine.InjectAt` / `Engine.InjectReplay` take a
+  `registry.Message`** (Raw/Meta/Codec/ID) instead of `(raw, meta[, id])`.
+  Identity and codec travel with the message: `InjectReplay` stamps
+  `is_replay`/`original_message_id` from `msg.ID` and preserves it, and a csv
+  dead letter now replays as csv (the old internal-injection path hardcoded
+  json). Callers updated: `ops.DeadLetterReplay`, `eventboat replay` (its
+  items carry the dead letter's / spooled row's codec), `internal/testrun`
+  (injects at a source with the node's decoder), the soak driver.
+- **`Run` starts its consumers before crash replay** (`startWorkers` →
+  `replaySpool` → `startSources`): a recovery with more uncommitted spool
+  rows than a node channel holds used to hang forever on a channel nobody
+  read. The replay callback treats ctx cancellation as a voluntary stop and
+  never surfaces it as an error.
+- **Admission is one module with three modes** (`internal/engine/admission.go`,
+  live / replay / inject) owning the backpressure gate, the acquired-slot
+  ledger, stamping, spool append, commit registration and dispatch; `accept`,
+  `injectAt` and the replay callback are thin shells. Replay rows now take
+  admission quota, and `Abandon` releases the slots its force-terminate path
+  used to leak.
+- **Source watermarks persist asynchronously** (`internal/engine/sourcecommit.go`):
+  one committer per source receives coalesced maximum frontier advances and
+  calls `Source.Commit` off the committing goroutine, so a source may hold an
+  internal lock across `emit` without deadlocking the pipeline (the
+  backpressured file source used to deadlock against its own commit callback).
+  A failed commit or state write keeps its pending value and retries on the
+  next advance; `Run` flushes pending frontiers after drain with a bounded,
+  non-cancelled context. `Source.Commit`'s interface and semantics are
+  unchanged; a source state that lags the checkpoint only widens the crash
+  replay window — duplicate delivery, never loss.
 - **Breaking: the config `apiVersion` is renamed from `eventboat/v3` to
   `eventboat/v1`** — the version stamps the config format's own generation,
   not the redesign document that produced it; `v3` leaked the internal spec

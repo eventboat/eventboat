@@ -122,8 +122,10 @@ func (s *sqlSource) Watermark() string {
 
 // Pull pages through the query until exhaustion (nil) or failure. Backpressure
 // comes for free: emit blocks in the engine's admission gate, pausing
-// pagination between pages (§5.8 semantics point 4).
-func (s *sqlSource) Pull(ctx context.Context, emit func(registry.Message)) error {
+// pagination between pages (§5.8 semantics point 4). A refusal stops the pull
+// and is reported as a failed source (default policy; the watermark has not
+// advanced past the refused row).
+func (s *sqlSource) Pull(ctx context.Context, emit func(registry.Message) error) error {
 	db, err := sql.Open(driverName(s.driver), s.dsn)
 	if err != nil {
 		return fmt.Errorf("sql source: open: %w", err)
@@ -197,7 +199,10 @@ func (s *sqlSource) Pull(ctx context.Context, emit func(registry.Message)) error
 			keys := keyValues(row, s.key)
 			lastPulled = keys
 			if s.emit == "row" {
-				s.emitRow(emit, row, cur, keys)
+				if err := s.emitRow(emit, row, cur, keys); err != nil {
+					_ = rows.Close()
+					return s.refusalErr(ctx, err)
+				}
 			} else {
 				pagePayload = append(pagePayload, row)
 				pageCursor = cur
@@ -220,7 +225,9 @@ func (s *sqlSource) Pull(ctx context.Context, emit func(registry.Message)) error
 			if merr != nil {
 				return fmt.Errorf("sql source: marshal page: %w", merr)
 			}
-			emit(registry.Message{Raw: raw, Codec: "json", SrcName: "sql", SrcSeq: seq, Cursor: pageCursor})
+			if err := emit(registry.Message{Raw: raw, Codec: "json", SrcName: "sql", SrcSeq: seq, Cursor: pageCursor}); err != nil {
+				return s.refusalErr(ctx, err)
+			}
 			s.mu.Lock()
 			s.pending[seq] = pendingRow{cursor: pageCursor, keys: lastPulled}
 			s.mu.Unlock()
@@ -232,16 +239,28 @@ func (s *sqlSource) Pull(ctx context.Context, emit func(registry.Message)) error
 	}
 }
 
-func (s *sqlSource) emitRow(emit func(registry.Message), row map[string]any, cur string, keys []any) {
+// refusalErr maps an emit error to the source's return: engine shutdown under
+// the emit is a voluntary stop (nil), anything else is the refusal itself.
+func (s *sqlSource) refusalErr(ctx context.Context, err error) error {
+	if ctx.Err() != nil {
+		return nil
+	}
+	return err
+}
+
+func (s *sqlSource) emitRow(emit func(registry.Message) error, row map[string]any, cur string, keys []any) error {
 	s.mu.Lock()
 	s.nextSeq++
 	seq := s.nextSeq
 	s.mu.Unlock()
 	raw, _ := json.Marshal(row)
-	emit(registry.Message{Raw: raw, Codec: "json", SrcName: "sql", SrcSeq: seq, Cursor: cur})
+	if err := emit(registry.Message{Raw: raw, Codec: "json", SrcName: "sql", SrcSeq: seq, Cursor: cur}); err != nil {
+		return err
+	}
 	s.mu.Lock()
 	s.pending[seq] = pendingRow{cursor: cur, keys: keys}
 	s.mu.Unlock()
+	return nil
 }
 
 // Commit advances the watermark to the contiguous committed frontier
@@ -279,7 +298,7 @@ func (s *sqlSource) Commit(ctx context.Context, throughSrcSeq int64) ([]byte, er
 // Run is the continuous-mode fallback (lint-warned): one pull at startup,
 // then idle until the engine stops. A failed pull surfaces immediately
 // (v1.24 contract); only a successful pull idles.
-func (s *sqlSource) Run(ctx context.Context, emit func(registry.Message)) error {
+func (s *sqlSource) Run(ctx context.Context, emit func(registry.Message) error) error {
 	if err := s.Pull(ctx, emit); err != nil {
 		return err
 	}

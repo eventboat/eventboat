@@ -34,7 +34,8 @@ sinks:
 
 // Invariant 1: a message must not become visible to the DAG until its spool
 // append has succeeded. A failing append means the message is refused — it
-// never reaches any sink.
+// never reaches any sink — and the refusal reaches the source through emit's
+// error (candidate 01), which reports it as a failed source by default.
 func TestInvariant_SpoolBeforeVisible(t *testing.T) {
 	h := newHarness(t)
 	pip := h.build(invYAML)
@@ -47,7 +48,7 @@ func TestInvariant_SpoolBeforeVisible(t *testing.T) {
 		}
 		return nil
 	}
-	eng, _ := runEngine(t, pip, wrapped, h.reg, fastOptions())
+	eng, stop := runEngine(t, pip, wrapped, h.reg, fastOptions())
 
 	h.source("in").Emit([]byte(`{"i":1}`), "")
 	waitFor(t, func() bool { return eng.Metrics.SpoolFailures.Load() >= 1 })
@@ -59,11 +60,20 @@ func TestInvariant_SpoolBeforeVisible(t *testing.T) {
 	if out, _, _ := eng.CommitSnapshot(); out != 0 {
 		t.Errorf("outstanding = %d, want 0 (message never entered the DAG)", out)
 	}
+	// The refusal is the source's business (the emit error); the builtin
+	// default reports it as a failed source and the source stops.
+	waitFor(t, func() bool { return len(eng.SourceErrors()) > 0 })
+	if eng.SourceErrors()["in"] == nil {
+		t.Fatal("refusal not reported as a source failure")
+	}
+	stop()
 
-	// Positive control: with the store healthy the same emission flows.
+	// Positive control: with the store healthy the same emission flows. A
+	// fresh engine re-runs the shared (restartable) manual source instance.
 	failAppend = false
+	eng2, _ := runEngine(t, pip, wrapped, h.reg, fastOptions())
 	h.source("in").Emit([]byte(`{"i":2}`), "")
-	waitCommit(t, eng)
+	waitCommit(t, eng2)
 	if delivered, _, _ := h.sink("out").snapshot(); len(delivered) != 1 {
 		t.Fatalf("healthy path broken: %d delivered", len(delivered))
 	}
@@ -413,6 +423,14 @@ sinks:
 
 	close(gate)
 	waitCommit(t, eng)
+	// The source committer persists watermarks asynchronously (candidate 01):
+	// wait for the final frontier to land instead of racing it. The invariant
+	// under test is that the watermark never PASSED an uncommitted cursor —
+	// asserted above while c2 was wedged.
+	waitFor(t, func() bool {
+		state, _, err := st.SourceState("inv7", "in")
+		return err == nil && strings.Contains(string(state), `"c3"`)
+	})
 	state, _, _ = st.SourceState("inv7", "in")
 	delivered7, writes7, _ := h.sink("out").snapshot()
 	out7, through7, arrived7 := eng.CommitSnapshot()

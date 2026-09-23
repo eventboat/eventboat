@@ -31,8 +31,10 @@ func CounterID() func() string {
 
 // ManualSource is a source whose emissions are driven by the test: Emit
 // pushes one raw message and returns only after the engine has accepted it
-// (spooled + dispatched), making test flow deterministic. Run may be called
-// multiple times across engine restarts sharing the same instance.
+// (spooled + dispatched), making test flow deterministic. A refused emission
+// is reported as a failed source (the builtin default policy), so Run returns
+// it; Run may be called multiple times across engine restarts sharing the
+// same instance.
 type ManualSource struct {
 	Name    string
 	mu      sync.Mutex
@@ -57,7 +59,7 @@ func NewManualSource() *ManualSource {
 
 func (s *ManualSource) Init(state []byte) error { s.state = state; return nil }
 
-func (s *ManualSource) Run(ctx context.Context, emit func(registry.Message)) error {
+func (s *ManualSource) Run(ctx context.Context, emit func(registry.Message) error) error {
 	s.mu.Lock()
 	s.runCtx = ctx
 	s.mu.Unlock()
@@ -67,8 +69,16 @@ func (s *ManualSource) Run(ctx context.Context, emit func(registry.Message)) err
 		case <-ctx.Done():
 			return nil
 		case e := <-s.emitted:
-			emit(e.msg)
+			err := emit(e.msg)
 			close(e.done)
+			if err != nil {
+				// Refusal: the default policy reports it as a failed source
+				// (ctx cancellation under the emit is a voluntary stop).
+				if ctx.Err() != nil {
+					return nil
+				}
+				return err
+			}
 		}
 	}
 }
@@ -215,10 +225,11 @@ func (s *FlakySink) Close() error { return s.Inner.Close() }
 
 // StoreWrapper wraps a store with fault hooks; nil hooks delegate.
 type StoreWrapper struct {
-	Inner             store.Store
-	AppendHook        func(msg registry.Message) error
-	DeadLetterHook    func(dl store.DeadLetter) error
-	SetCheckpointHook func(seq int64) error
+	Inner              store.Store
+	AppendHook         func(msg registry.Message) error
+	DeadLetterHook     func(dl store.DeadLetter) error
+	SetCheckpointHook  func(seq int64) error
+	SetSourceStateHook func(pipeline, source string, state []byte, srcSeq int64) error
 }
 
 func (w *StoreWrapper) AppendSpool(pipeline string, msg registry.Message, ingestTime time.Time) (int64, error) {
@@ -256,6 +267,11 @@ func (w *StoreWrapper) Checkpoint(pipeline string) (int64, error) {
 }
 
 func (w *StoreWrapper) SetSourceState(pipeline, source string, state []byte, srcSeq int64) error {
+	if w.SetSourceStateHook != nil {
+		if err := w.SetSourceStateHook(pipeline, source, state, srcSeq); err != nil {
+			return err
+		}
+	}
 	return w.Inner.SetSourceState(pipeline, source, state, srcSeq)
 }
 

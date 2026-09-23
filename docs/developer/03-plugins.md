@@ -112,7 +112,7 @@ transforms). The factory also receives `dir` — the pipeline file's directory
 ```go
 type Source interface {
     Init(state []byte) error
-    Run(ctx context.Context, emit func(Message)) error
+    Run(ctx context.Context, emit func(Message) error) error
     Commit(ctx context.Context, throughSrcSeq int64) (state []byte, err error)
     Close() error
 }
@@ -121,15 +121,31 @@ type Source interface {
 - `Init` receives the persisted state the source previously returned from
   `Commit` — the engine calls it only when state exists. Restore your offset
   here.
+- `emit`'s **error is the admission verdict** (candidate 01):
+  - `nil` means the message was **durably accepted** — it is spooled before
+    it becomes visible to the DAG (invariant 1);
+  - an error satisfying `errors.Is(err, context.Canceled)` /
+    `context.DeadlineExceeded` means the **engine is shutting down**: the
+    message was not accepted, and `Run`/`Pull` must return `nil` (a voluntary
+    stop, never a failure);
+  - **any other error is a refusal**: the message is not durable and never
+    became visible, so it is safe to re-emit. The source owns its input
+    semantics (Kafka offset, file offset, HTTP response) and decides whether
+    to retry internally or return the error. The builtin default is to report
+    the refusal as a failed source — the source watermark is the no-loss
+    safety net, and a failed run is louder than a silent zero-output run.
+    (`http_server` answers **503** instead: one client's retry is the source
+    policy there.) The engine retries nothing on its own.
+  - `emit` blocks under backpressure (the admission gate), so no buffering is
+    needed. Set `Message.SrcSeq` to a per-source monotonic sequence — it
+    advances the commit watermark.
 - `Run` returns the source's completion signal (v1.24): `nil` = exhausted
   (a finite source read to its end — batch runs exit, job runs commit) or a
   voluntary stop; a non-nil error is a failed source, routed to
   `OnSourceError` / `SourceErrors` (failed job or batch run). **ctx
   cancellation is a voluntary stop — return nil, never ctx.Err().** An
   infinite source (tailer, broker consumer) simply never returns until ctx
-  is cancelled. `emit` blocks under backpressure (the admission gate), so no
-  buffering is needed. Set `Message.SrcSeq` to a per-source monotonic
-  sequence — it advances the commit watermark.
+  is cancelled.
 - `Commit(ctx, throughSrcSeq)` is called whenever the contiguous committed
   frontier advances; commit your offsets *here* (Kafka offsets, file
   offsets, SQL watermarks). The builtin sources use a watermark-bounded
@@ -137,7 +153,11 @@ type Source interface {
   pending entry it visits, keeping each call O(new work) — see
   `kafkaSource.Commit` / `fileSource.Commit` in
   `internal/registry/builtin/`. `Cursor` on emitted messages is what job
-  pipelines persist as the sql watermark.
+  pipelines persist as the sql watermark. **Commit runs on the engine's
+  per-source committer goroutine, not on the committing goroutine** — a
+  source may hold an internal lock across `emit` without deadlocking the
+  pipeline; watermark persistence merely lags the checkpoint (duplicate
+  delivery on crash, never loss).
 - `PullSource` adds `Pull(ctx, emit) error` for job pipelines: emit rows
   synchronously, return nil on exhaustion (the run commits) or an error
   (the run fails — distinct from per-message dead letters). Sources

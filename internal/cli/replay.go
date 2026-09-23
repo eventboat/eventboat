@@ -153,6 +153,7 @@ func cmdReplay(args []string, jsonOut bool) int {
 		id    int64 // dead letter id (0 for spool rows)
 		node  string
 		msgID string
+		codec string // dead letter codec / spooled codec (identity travels with the message)
 		raw   []byte
 		meta  map[string]any
 	}
@@ -238,7 +239,7 @@ func cmdReplay(args []string, jsonOut bool) int {
 			if *at != "" {
 				node = *at
 			}
-			items = append(items, item{id: dl.ID, node: node, msgID: dl.MessageID, raw: dl.Raw, meta: dl.Meta})
+			items = append(items, item{id: dl.ID, node: node, msgID: dl.MessageID, codec: dl.Codec, raw: dl.Raw, meta: dl.Meta})
 			if dl.ID > 0 {
 				dlIDs = append(dlIDs, dl.ID) // eligible for --delete
 			}
@@ -258,7 +259,7 @@ func cmdReplay(args []string, jsonOut bool) int {
 				if *at != "" {
 					node = *at
 				}
-				batch = append(batch, item{node: node, msgID: msg.ID, raw: msg.Raw, meta: msg.Meta})
+				batch = append(batch, item{node: node, msgID: msg.ID, codec: msg.Codec, raw: msg.Raw, meta: msg.Meta})
 				return nil
 			})
 			_ = l
@@ -320,7 +321,12 @@ func cmdReplay(args []string, jsonOut bool) int {
 	replayed := 0
 	failed := 0
 	for _, it := range items {
-		if _, err := eng.InjectReplay(it.node, it.raw, it.meta, it.msgID); err != nil {
+		if _, err := eng.InjectReplay(it.node, registry.Message{
+			ID:    it.msgID,
+			Codec: it.codec,
+			Raw:   it.raw,
+			Meta:  it.meta,
+		}); err != nil {
 			failed++
 			fmt.Fprintf(os.Stderr, "replay: inject %s at %s: %v\n", it.msgID, it.node, err)
 			continue

@@ -27,7 +27,9 @@ func registerHTTPServerSource(reg *registry.Registry) error {
 // httpServerSource receives events over HTTP POST. There is no offset to
 // commit — the spool is the truth (redesign-v3.md §6.2). The HTTP response
 // acknowledges only that the event has been accepted for spooling, which the
-// engine guarantees before the message becomes visible to the DAG.
+// engine guarantees before the message becomes visible to the DAG. A refused
+// emission (spool append failed, engine shutting down) answers 503 instead of
+// 202 — the client's retry is the source's own policy (candidate 01).
 type httpServerSource struct {
 	listen  string
 	path    string
@@ -40,7 +42,7 @@ type httpServerSource struct {
 
 func (s *httpServerSource) Init(state []byte) error { return nil }
 
-func (s *httpServerSource) Run(ctx context.Context, emit func(registry.Message)) error {
+func (s *httpServerSource) Run(ctx context.Context, emit func(registry.Message) error) error {
 	mux := http.NewServeMux()
 	mux.HandleFunc(s.path, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -60,7 +62,14 @@ func (s *httpServerSource) Run(ctx context.Context, emit func(registry.Message))
 			"http_remote": r.RemoteAddr,
 			"http_path":   r.URL.Path,
 		}
-		emit(registry.Message{Raw: body, Meta: meta, SrcName: "http_server", SrcSeq: seq})
+		if err := emit(registry.Message{Raw: body, Meta: meta, SrcName: "http_server", SrcSeq: seq}); err != nil {
+			// Refusal: 503 tells the client the event was not accepted and
+			// may safely be re-POSTed. Unlike the other builtins this is NOT
+			// a source failure — an HTTP request is one client's business,
+			// not the source's input stream (candidate 01).
+			http.Error(w, "not accepted: "+err.Error(), http.StatusServiceUnavailable)
+			return
+		}
 		w.WriteHeader(http.StatusAccepted)
 	})
 	s.server = &http.Server{Addr: s.listen, Handler: mux, ReadHeaderTimeout: 10 * time.Second}

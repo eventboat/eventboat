@@ -70,12 +70,13 @@ func TestSQLSourcePullPagesAndCommits(t *testing.T) {
 	})
 
 	var got []map[string]any
-	err := src.Pull(context.Background(), func(m registry.Message) {
+	err := src.Pull(context.Background(), func(m registry.Message) error {
 		var row map[string]any
 		if err := json.Unmarshal(m.Raw, &row); err != nil {
 			t.Error(err)
 		}
 		got = append(got, row)
+		return nil
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -116,10 +117,11 @@ func TestSQLSourceResumesFromState(t *testing.T) {
 		t.Fatal(err)
 	}
 	var ids []float64
-	err := src.Pull(context.Background(), func(m registry.Message) {
+	err := src.Pull(context.Background(), func(m registry.Message) error {
 		var row map[string]any
 		_ = json.Unmarshal(m.Raw, &row)
 		ids = append(ids, row["id"].(float64))
+		return nil
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -143,7 +145,7 @@ func TestSQLSourceEmitPage(t *testing.T) {
 		"emit":       "page",
 	})
 	var pages int
-	err := src.Pull(context.Background(), func(m registry.Message) {
+	err := src.Pull(context.Background(), func(m registry.Message) error {
 		pages++
 		var rows []map[string]any
 		if err := json.Unmarshal(m.Raw, &rows); err != nil {
@@ -155,6 +157,7 @@ func TestSQLSourceEmitPage(t *testing.T) {
 		if pages == 3 && len(rows) != 2 {
 			t.Errorf("last page has %d rows, want 2", len(rows))
 		}
+		return nil
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -181,7 +184,7 @@ func TestSQLSourceCommitWatermarkAcrossPullSessions(t *testing.T) {
 		"pagination": map[string]any{"key": []any{"id"}, "page_size": 10},
 	})
 	pulled := 0
-	if err := src.Pull(context.Background(), func(m registry.Message) { pulled++ }); err != nil {
+	if err := src.Pull(context.Background(), func(m registry.Message) error { pulled++; return nil }); err != nil {
 		t.Fatal(err)
 	}
 	if pulled != 20 {
@@ -205,7 +208,7 @@ func TestSQLSourceCommitWatermarkAcrossPullSessions(t *testing.T) {
 		t.Fatal(err)
 	}
 	pulled = 0
-	if err := src.Pull(context.Background(), func(m registry.Message) { pulled++ }); err != nil {
+	if err := src.Pull(context.Background(), func(m registry.Message) error { pulled++; return nil }); err != nil {
 		t.Fatal(err)
 	}
 	if pulled != 10 {
@@ -261,7 +264,7 @@ func TestSQLSourcePullError(t *testing.T) {
 		"query":  "SELECT no_such_column FROM nothing",
 		"cursor": map[string]any{"column": "id"},
 	})
-	err := src.Pull(context.Background(), func(registry.Message) {})
+	err := src.Pull(context.Background(), func(registry.Message) error { return nil })
 	if err == nil {
 		t.Fatal("pull over a missing table must fail")
 	}

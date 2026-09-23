@@ -115,7 +115,7 @@ func (s *source) proc(ctx context.Context) (*process, error) {
 	return s.plug, nil
 }
 
-func (s *source) Run(ctx context.Context, emit func(registry.Message)) error {
+func (s *source) Run(ctx context.Context, emit func(registry.Message) error) error {
 	if err := s.init(nil); err != nil {
 		return err
 	}
@@ -126,7 +126,7 @@ func (s *source) Run(ctx context.Context, emit func(registry.Message)) error {
 	return s.stream(ctx, emit, false)
 }
 
-func (s *source) Pull(ctx context.Context, emit func(registry.Message)) error {
+func (s *source) Pull(ctx context.Context, emit func(registry.Message) error) error {
 	if err := s.init(nil); err != nil {
 		return err
 	}
@@ -137,13 +137,15 @@ func (s *source) Pull(ctx context.Context, emit func(registry.Message)) error {
 }
 
 // stream drives the Run/Pull server stream. Clean end-of-stream is
-// exhaustion (nil), an errored stream is a failed source — identical for
-// both entry points; Run used to drop this distinction at the caller.
-// Under the restart policy a FAILED stream respawns (the supervisor's
-// backoff) and retries; clean end-of-stream is exhaustion and does not
-// restart — which now also serves external stop-shaped sources, whose
-// exhaustion signal reaches the engine instead of being swallowed here.
-func (s *source) stream(ctx context.Context, emit func(registry.Message), pull bool) error {
+// exhaustion (nil), an errored stream is a failed source — identical for both
+// entry points; Run used to drop this distinction at the caller. Under the
+// restart policy a FAILED stream respawns (the supervisor's backoff) and
+// retries; clean end-of-stream is exhaustion and does not restart — which now
+// also serves external stop-shaped sources, whose exhaustion signal reaches
+// the engine instead of being swallowed here. An event the engine refuses
+// (emit error) surfaces as a failed stream too: the plugin's Commit state is
+// untouched, so the respawn re-emits it — at-least-once, never loss.
+func (s *source) stream(ctx context.Context, emit func(registry.Message) error, pull bool) error {
 	for {
 		p, err := s.proc(ctx)
 		if err != nil {
@@ -166,7 +168,7 @@ func (s *source) stream(ctx context.Context, emit func(registry.Message), pull b
 	}
 }
 
-func (s *source) streamOnce(p *process, ctx context.Context, emit func(registry.Message), pull bool) error {
+func (s *source) streamOnce(p *process, ctx context.Context, emit func(registry.Message) error, pull bool) error {
 	var (
 		stream pluginproto.Source_RunClient
 		err    error
@@ -199,7 +201,20 @@ func (s *source) streamOnce(p *process, ctx context.Context, emit func(registry.
 			}
 			return fmt.Errorf("plugin %q: stream: %w", p.hs.Name, err)
 		}
-		emit(eventToMessage(ev))
+		if err := emit(eventToMessage(ev)); err != nil {
+			// The engine refused the event (or is shutting down): the
+			// refusal surfaces as this stream's error — the wire protocol is
+			// unchanged, the host side stops reading. The plugin's stream is
+			// cancelled by the return; its last Commit state is untouched, so
+			// the event is safe to re-emit.
+			if ctx.Err() != nil {
+				return nil // engine shutdown: a voluntary stop
+			}
+			if s.logf != nil {
+				s.logf("plugin %q: event refused by the engine: %v", p.hs.Name, err)
+			}
+			return fmt.Errorf("plugin %q: emit refused: %w", p.hs.Name, err)
+		}
 	}
 }
 

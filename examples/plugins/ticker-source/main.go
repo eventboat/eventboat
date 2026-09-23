@@ -149,6 +149,11 @@ func (t *tickerSource) Run(req *pluginproto.RunRequest, stream pluginproto.Sourc
 // The end bound is fixed up front: Commit RPCs advance t.state concurrently
 // with this stream, and re-reading the bound each iteration would turn the
 // bounded pull into an endless generator.
+//
+// Refusal semantics (host side): when the engine refuses an event it stops
+// reading the stream, so Send fails and this function returns the transport
+// error. The host re-Inits with the last Commit state and the events after
+// that state are re-emitted — at-least-once, never loss.
 func (t *tickerSource) Pull(req *pluginproto.RunRequest, stream pluginproto.Source_PullServer) error {
 	fmt.Fprintf(os.Stderr, "ticker-source: PULL events=%d\n", t.cfg.Events)
 	start := t.state

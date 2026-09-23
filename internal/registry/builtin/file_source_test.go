@@ -41,7 +41,12 @@ func TestFileSourceStopExhausts(t *testing.T) {
 	done := make(chan error, 1)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go func() { done <- src.Run(ctx, func(m registry.Message) { got = append(got, m) }) }()
+	go func() {
+		done <- src.Run(ctx, func(m registry.Message) error {
+			got = append(got, m)
+			return nil
+		})
+	}()
 	select {
 	case err := <-done:
 		if err != nil {
@@ -62,7 +67,7 @@ func TestFileSourceStopMissingFileErrors(t *testing.T) {
 	done := make(chan error, 1)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go func() { done <- src.Run(ctx, func(registry.Message) {}) }()
+	go func() { done <- src.Run(ctx, func(registry.Message) error { return nil }) }()
 	select {
 	case err := <-done:
 		if err == nil {
@@ -80,7 +85,7 @@ func TestFileSourceTailMissingFileWaits(t *testing.T) {
 	src := newFileSource(t, t.TempDir(), "", "tail")
 	done := make(chan error, 1)
 	ctx, cancel := context.WithCancel(context.Background())
-	go func() { done <- src.Run(ctx, func(registry.Message) {}) }()
+	go func() { done <- src.Run(ctx, func(registry.Message) error { return nil }) }()
 	time.Sleep(150 * time.Millisecond)
 	cancel()
 	select {
@@ -103,7 +108,7 @@ func TestFileSourceStopResumeAtEOF(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	emissions := 0
-	_ = src.Run(ctx, func(m registry.Message) { emissions++ })
+	_ = src.Run(ctx, func(m registry.Message) error { emissions++; return nil })
 	state, _ = src.Commit(context.Background(), 1)
 	_ = src.Close()
 
@@ -113,7 +118,12 @@ func TestFileSourceStopResumeAtEOF(t *testing.T) {
 	}
 	done := make(chan error, 1)
 	emissions2 := 0
-	go func() { done <- src2.Run(ctx, func(m registry.Message) { emissions2++ }) }()
+	go func() {
+		done <- src2.Run(ctx, func(m registry.Message) error {
+			emissions2++
+			return nil
+		})
+	}()
 	select {
 	case err := <-done:
 		if err != nil {

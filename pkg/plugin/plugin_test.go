@@ -34,10 +34,10 @@ type tickConfig struct {
 type tickSource struct{ events int }
 
 func (s *tickSource) Init(state []byte) error { return nil }
-func (s *tickSource) Run(ctx context.Context, emit func(plugin.Message)) error {
+func (s *tickSource) Run(ctx context.Context, emit func(plugin.Message) error) error {
 	return nil
 }
-func (s *tickSource) Pull(ctx context.Context, emit func(plugin.Message)) error {
+func (s *tickSource) Pull(ctx context.Context, emit func(plugin.Message) error) error {
 	return nil
 }
 func (s *tickSource) Commit(ctx context.Context, throughSrcSeq int64) ([]byte, error) {

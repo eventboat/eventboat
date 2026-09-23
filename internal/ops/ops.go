@@ -727,7 +727,12 @@ func (s *Service) DeadLetterReplay(pipeline string, ids []int64, at string) (int
 		if at != "" {
 			node = at
 		}
-		if _, err := m.eng.InjectReplay(node, dl.Raw, dl.Meta, dl.MessageID); err != nil {
+		if _, err := m.eng.InjectReplay(node, registry.Message{
+			ID:    dl.MessageID,
+			Codec: dl.Codec,
+			Raw:   dl.Raw,
+			Meta:  dl.Meta,
+		}); err != nil {
 			return replayed, err
 		}
 		replayed++

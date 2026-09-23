@@ -60,6 +60,22 @@ type Message struct {
 // committed (spooled, fully processed) messages advances; sources commit their
 // own offsets there (Kafka offsets, file offsets, SQL watermarks).
 //
+// emit's error is the source's admission verdict (candidate 01):
+//
+//   - nil means the message was DURABLY ACCEPTED — spooled before it became
+//     visible to the DAG (invariant 1);
+//   - an error satisfying errors.Is(err, context.Canceled) or
+//     context.DeadlineExceeded means the ENGINE IS SHUTTING DOWN: the message
+//     was not accepted, and the source must return nil (a voluntary stop,
+//     never a failure);
+//   - any other error is a REFUSAL: the message is not durable and never
+//     became visible, so it is safe to re-emit. The source owns its input
+//     semantics (Kafka offset, file offset, HTTP response): it decides
+//     whether to retry internally or return the error. The builtin default is
+//     to report the refusal as a failed source — the source watermark is the
+//     no-loss safety net, and a failed run is louder than a silent zero-output
+//     run (the http_server source answers 503 instead: the client retries).
+//
 // Run returns when the source is done, and the return value is the source's
 // completion signal (v1.24): nil means exhausted (a finite source read to its
 // end — the engine records the source done and job/batch runners treat the
@@ -71,7 +87,7 @@ type Message struct {
 // nil, never ctx.Err(): a cancelled engine is not a failed source.
 type Source interface {
 	Init(state []byte) error
-	Run(ctx context.Context, emit func(Message)) error
+	Run(ctx context.Context, emit func(Message) error) error
 	Commit(ctx context.Context, throughSrcSeq int64) (state []byte, err error)
 	Close() error
 }
@@ -79,13 +95,14 @@ type Source interface {
 // PullSource is a source with job-pipeline pull semantics (redesign-v3.md
 // §5.8, M2 review R1): the engine calls Pull instead of Run. Pull emits rows
 // synchronously (the engine's admission gate applies backpressure between
-// pages) and returns nil when the source is exhausted for this run — the job
-// then commits — or an error when the source itself failed (run failed,
-// distinct from per-message dead letters). Sources declaring the "pull"
-// capability must implement this interface.
+// pages; emit's error is the admission verdict, see Source) and returns nil
+// when the source is exhausted for this run — the job then commits — or an
+// error when the source itself failed (run failed, distinct from per-message
+// dead letters). Sources declaring the "pull" capability must implement this
+// interface.
 type PullSource interface {
 	Source
-	Pull(ctx context.Context, emit func(Message)) error
+	Pull(ctx context.Context, emit func(Message) error) error
 }
 
 // Sink is implemented by sink plugins. Batching is owned by the engine; Write

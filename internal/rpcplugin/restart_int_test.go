@@ -76,7 +76,7 @@ func TestSupervisorRestartsCrashedPlugin(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	n := 0
-	if err := ps.Pull(ctx, func(registry.Message) { n++ }); err != nil {
+	if err := ps.Pull(ctx, func(registry.Message) error { n++; return nil }); err != nil {
 		t.Fatalf("first pull: %v", err)
 	}
 	if n != 2 {
@@ -96,7 +96,7 @@ func TestSupervisorRestartsCrashedPlugin(t *testing.T) {
 	// Second pull: the supervisor respawns (backoff starts at 250ms),
 	// re-delivers config, and the pull succeeds again.
 	n = 0
-	if err := ps.Pull(ctx, func(registry.Message) { n++ }); err != nil {
+	if err := ps.Pull(ctx, func(registry.Message) error { n++; return nil }); err != nil {
 		t.Fatalf("pull after crash: %v", err)
 	}
 	if n != 2 {
@@ -136,7 +136,7 @@ func TestFastFailDefaultKeepsM3Semantics(t *testing.T) {
 	ps := src.(registry.PullSource)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if err := ps.Pull(ctx, func(registry.Message) {}); err == nil {
+	if err := ps.Pull(ctx, func(registry.Message) error { return nil }); err == nil {
 		t.Fatal("fast-fail: pull after crash must surface an error")
 	}
 }

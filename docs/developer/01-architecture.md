@@ -21,17 +21,19 @@ A pipeline is a three-section YAML document — `sources`, `transforms`,
 
 1. **Admission**: every inbound message is durably spooled (SQLite, or
    in-memory with `--ephemeral`) *before* it becomes visible to the DAG
-   (`internal/engine/engine.go`, `accept`).
+   (`internal/engine/admission.go`, `admit`: live / replay / inject modes).
 2. **Execution**: the message fans out along matched edges into transforms
    and sinks. Each execution branch must reach a terminal state: sink ack,
    dead letter, filtered (zero matching edges or zero transform outputs), or
    an optional-edge drop.
 3. **Commit**: a commit tracker counts outstanding branches per message; the
    checkpoint only advances over the contiguous committed prefix
-   (`internal/engine/commit.go`).
-4. **Recovery**: on restart the engine replays the spool beyond the
-   checkpoint while pull sources resume from their committed watermarks —
-   duplicate delivery, never loss.
+   (`internal/engine/commit.go`). Per-source watermarks are persisted by the
+   async source committers (`internal/engine/sourcecommit.go`).
+4. **Recovery**: on restart the engine starts its workers first, replays the
+   spool beyond the checkpoint through admission, then starts sources — pull
+   sources resume from their committed watermarks: duplicate delivery, never
+   loss.
 
 Sources, transforms and sinks are plugins in the registry
 ([Plugin system](03-plugins.md)); edges carry predicates (CEL or CESQL) and
@@ -43,10 +45,10 @@ delivery policies (retries, backoff, timeout, required/optional)
 ```
  source node                 engine (internal/engine)                    store
  ------------   -----------------------------------------------------   --------
-     │  emit          accept(msg)                                            │
-     │  ──────────▶   admission gate: admitSem (high watermark,              │
-     │                default 10_000 in flight; blocks the source)           │
-     │                stamp meta (message_id, ingest_time, source)           │
+     │  emit          admit(msg) [live mode]                                │
+     │  ◀───────      admission gate: one slot per uncommitted message      │
+     │  error         (high watermark, default 10_000 in flight; blocks)    │
+     │  = verdict     stamp meta (message_id, ingest_time, source)          │
      │                                          │                            │
      │                                          ├─ AppendSpool ────────────▶ │ seq
      │                                          │       (invariant 1: not    │
@@ -78,8 +80,9 @@ delivery policies (retries, backoff, timeout, required/optional)
      │                         │                                             │
      │          onCommit: metrics, span end, admission slot release          │
      │          onAdvance: persistCheckpoint ── SetCheckpoint ─────────────▶ │
-     │                       (source Commit watermarks ── SetSourceState ▶ │)
      │                       (spool retention trim ─ DeleteSpoolThrough ─▶ │)
+     │                       (frontier ─ post ─▶ source committer ─         │
+     │                        Source.Commit ── SetSourceState ────────────▶ │)
 ```
 
 ## Package map
@@ -128,7 +131,8 @@ breaking any of them is a review blocker.
 
 1. **Spool before visible.** A message must not become visible to the DAG
    until its spool append has succeeded. A failing append refuses the message;
-   it never reaches any sink.
+   it never reaches any sink, and the refusal reaches the source through
+   `emit`'s error (the source may safely re-emit it).
 2. **Checkpoint only over committed.** The durable checkpoint may advance
    only across the contiguous prefix of messages whose every execution branch
    reached a terminal state.

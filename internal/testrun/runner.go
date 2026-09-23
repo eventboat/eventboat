@@ -222,9 +222,17 @@ func runCase(baseDir, pipelinePath string, pip *ir.Pipeline, c specCase, reg *re
 	if len(c.Inject.Messages) > 0 && c.Inject.Raw != "" {
 		fail("inject: use either messages or raw, not both")
 	}
+	// The injected message carries the entry node's decoder: a contract case
+	// that injects at a source is exercising that source's decode path
+	// (examples/codecs injects raw CSV at a csv-decoded source). Internal
+	// nodes have no decoder; json is the default.
+	codecName := ""
+	if n, ok := pip.Nodes[c.Inject.At]; ok {
+		codecName = n.Config.Decoder
+	}
 	switch {
 	case c.Inject.Raw != "":
-		if _, err := eng.InjectAt(c.Inject.At, []byte(c.Inject.Raw), nil); err != nil {
+		if _, err := eng.InjectAt(c.Inject.At, registry.Message{Raw: []byte(c.Inject.Raw), Codec: codecName}); err != nil {
 			fail("inject raw at %s: %v", c.Inject.At, err)
 		}
 	case len(c.Inject.Messages) > 0:
@@ -239,7 +247,7 @@ func runCase(baseDir, pipelinePath string, pip *ir.Pipeline, c specCase, reg *re
 				fail("read fixture %s: %v", mf, err)
 				continue
 			}
-			if _, err := eng.InjectAt(c.Inject.At, raw, nil); err != nil {
+			if _, err := eng.InjectAt(c.Inject.At, registry.Message{Raw: raw, Codec: codecName}); err != nil {
 				fail("inject %s at %s: %v", mf, c.Inject.At, err)
 			}
 		}

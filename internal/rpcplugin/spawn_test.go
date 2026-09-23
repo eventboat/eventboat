@@ -57,9 +57,10 @@ func TestSpawnSourceDirect(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	var events []registry.Message
-	if err := ps.Pull(ctx, func(m registry.Message) {
+	if err := ps.Pull(ctx, func(m registry.Message) error {
 		events = append(events, m)
 		t.Logf("event: %s", m.Raw)
+		return nil
 	}); err != nil {
 		t.Fatalf("pull: %v", err)
 	}
@@ -107,7 +108,7 @@ func TestSpawnSourceLargeMessage(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	var events []registry.Message
-	if err := ps.Pull(ctx, func(m registry.Message) { events = append(events, m) }); err != nil {
+	if err := ps.Pull(ctx, func(m registry.Message) error { events = append(events, m); return nil }); err != nil {
 		t.Fatalf("pull: %v", err)
 	}
 	if len(events) != 1 {
