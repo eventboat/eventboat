@@ -180,6 +180,28 @@ sinks:
 	}
 }
 
+// Adversarial review 2026-09-24: an explicit empty `edge_defaults:` (YAML
+// null) is an empty declaration, not a type error; only a non-null
+// non-mapping value is rejected.
+func TestEdgeDefaultsEmptyIsAccepted(t *testing.T) {
+	res := config.LoadBytes("p.yaml", []byte(`
+apiVersion: eventboat/v1
+kind: Pipeline
+metadata: { name: edges-empty }
+edge_defaults:
+sources:
+  in: { file: { path: a.jsonl } }
+sinks:
+  out: { depends_on: [in], debug: {} }
+`))
+	if res.Diagnostics.HasErrors() {
+		t.Fatalf("empty edge_defaults rejected: %+v", res.Diagnostics)
+	}
+	if res.Pipeline.EdgeDefaults.Delivery == nil || res.Pipeline.EdgeDefaults.Delivery.Retries != 3 {
+		t.Fatalf("defaults not materialized for an empty edge_defaults: %+v", res.Pipeline.EdgeDefaults)
+	}
+}
+
 // Candidate 06 acceptance 5a: sinks.workers is rejected (the field was
 // accepted and ignored); transforms.workers still works.
 func TestSinkWorkersRejected(t *testing.T) {

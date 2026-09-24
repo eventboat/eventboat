@@ -668,6 +668,19 @@ scope was checked against §6 — all eight candidates are implemented and
 nothing on the not-doing list was built; every stage's acceptance list was
 verified first-hand at its own gate before the restore point landed.
 
+Post-acceptance adversarial review (2026-09-24): two defects were found and
+fixed. Reinjections that fail again were silently dropped — the injected
+message's synthetic edge was a zero value (`Required: false`), so a
+re-failure at a sink took the optional-drop path while `replay --delete` had
+already removed the original record; the edge is now required and a
+re-failure writes a fresh durable record. The lazy codec cache was an
+unguarded map written by source goroutines, sink workers and operator
+replays — two concurrent resolutions of an un-cached name were a
+concurrent-map-write panic; it is now mutex-guarded. A minor item (an
+explicit empty `edge_defaults:` treated as a type error) and the lease's
+unsupported-platform note were also corrected. Each fix carries a
+regression test; the fixes are covered by the same gates.
+
 ## 8. Index maintenance
 
 `docs/README.md` lists this document. When a candidate is implemented,

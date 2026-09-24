@@ -293,6 +293,13 @@ type Engine struct {
 	chans      map[string]chan *instance
 	sinks      map[string]registry.Sink
 	codecs     map[string]registry.Codec // resolved by codec name
+	// codecMu guards the lazy codecs cache: source goroutines (entry
+	// decode), sink workers (encode) and operator replays/injections
+	// (dispatchInternal) resolve concurrently, and a foreign codec name — a
+	// replayed row whose codec the running config no longer declares — can
+	// be un-cached (adversarial review 2026-09-24: an unguarded map write
+	// here was a concurrent-map-write panic).
+	codecMu sync.Mutex
 	sources    map[string]registry.Source
 	transforms map[string]registry.Transform
 
@@ -576,6 +583,8 @@ func (e *Engine) durableThrough() int64 {
 // pre-instantiated on the IR (config validated at verify); bare names
 // instantiate through the registry (no config, no relative paths).
 func (e *Engine) codec(name string, reg *registry.Registry) (registry.Codec, error) {
+	e.codecMu.Lock()
+	defer e.codecMu.Unlock()
 	if c, ok := e.codecs[name]; ok {
 		return c, nil
 	}
@@ -1231,7 +1240,12 @@ func (e *Engine) dispatchInternal(node string, seq int64, msg registry.Message) 
 		}
 		msg.Decoded = v
 	}
-	e.deliver(&ir.Edge{From: node, To: node}, seq, msg)
+	// An injected message carries no operator-configured edge. It is
+	// delivered as a REQUIRED synthetic edge: a re-failure must dead-letter
+	// again, never take the optional-drop path — `replay --delete` removes
+	// the original record once the reinjection commits, so a silent drop
+	// here would lose the message (adversarial review 2026-09-24).
+	e.deliver(&ir.Edge{From: node, To: node, Required: true}, seq, msg)
 }
 
 // WaitCommit blocks until no outstanding branches remain and every commit

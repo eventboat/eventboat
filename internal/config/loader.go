@@ -362,7 +362,10 @@ func parseEdgeDefaults(file string, raw map[string]any, p *Pipeline, lines *line
 	e := Edge{Line: lines.line("edge_defaults")}
 	if ed, ok := raw["edge_defaults"].(map[string]any); ok {
 		e = parseEdgeAttrs(file, "edge_defaults", nil, ed, lines.line("edge_defaults"), res)
-	} else if _, present := raw["edge_defaults"]; present {
+	} else if v, present := raw["edge_defaults"]; present && v != nil {
+		// An explicit `edge_defaults:` (YAML null) is an empty declaration,
+		// not a type error; only a non-null non-mapping value is rejected
+		// (adversarial review 2026-09-24).
 		res.Diagnostics = append(res.Diagnostics, Diagnostic{
 			Severity: "error", Code: "cfg_edge_defaults_field", File: file, Line: lines.line("edge_defaults"),
 			Message: "edge_defaults must be a mapping of edge attributes",

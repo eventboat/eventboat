@@ -148,6 +148,20 @@ hygiene findings.
   is earlier in time — the `DeadLettersSince`/retention cutoffs and the
   run-history ordering silently misordered rows that differ only in
   sub-second precision.
+- **Reinjections that fail again are dead-lettered, never dropped
+  (adversarial review 2026-09-24)**: `dispatchInternal` delivered injected
+  messages on a zero-value synthetic edge (`Required: false`), so a
+  reinjection that failed again at its sink took the optional-drop path —
+  and since `replay --delete` removes the original record once the
+  reinjection commits, the message was silently lost. The synthetic edge is
+  now required: a re-failure writes a fresh durable record.
+- **The lazy codec cache is mutex-guarded (adversarial review 2026-09-24)**:
+  `Engine.codec` wrote its resolution cache without a lock while source
+  goroutines, sink workers and operator replays resolved concurrently; a
+  foreign codec name (a replayed row whose codec the running config no
+  longer declares) could be un-cached, and two concurrent resolutions were a
+  concurrent-map-write panic. Also: an explicit empty `edge_defaults:` (YAML
+  null) is accepted as an empty declaration instead of a type error.
 
 ### Changed
 

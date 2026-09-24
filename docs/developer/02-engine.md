@@ -249,6 +249,8 @@ regressing:
   `run --config`, `trigger` and a live `replay` acquire it for the duration of
   their run and refuse with a message pointing at the admin/MCP surface when
   they cannot (a second engine on the same spool would race the checkpoint).
+  On a target without a file-lock implementation the run refuses loudly
+  instead of silently skipping the single-writer guarantee.
   The lock is a sidecar so SQLite's own locking is untouched, and the file is
   never deleted — an unlocked leftover is expected and harmless.
 

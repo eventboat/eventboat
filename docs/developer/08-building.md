@@ -160,8 +160,11 @@ extension; the example is the integration.
   or contract changes that would break plugins ride an rc first (the
   v0.2.0-rc1 release bumped lynx-go/commands for a contract fix).
 - **The binary is the release artifact** for non-container users:
-  `CGO_ENABLED=0 go build -trimpath -o eventboat ./cmd/eventboat` on any
-  platform; no platform-specific code paths exist.
+  `CGO_ENABLED=0 go build -trimpath -o eventboat ./cmd/eventboat` on the
+  supported targets (linux, macOS, the BSDs, Windows); the only
+  platform-specific code paths are the store lease's file locks
+  (`flock`/`LockFileEx`), and a target without a lock implementation refuses
+  to run a pipeline loudly rather than skipping the single-writer guarantee.
 
 ## tools/sitegen — the docs site generator
 
