@@ -39,7 +39,7 @@ func TestExamplesVerifyAndTest(t *testing.T) {
 			t.Fatal(err)
 		}
 		lr := config.LoadFile(pipelinePath)
-		if lr.HasErrors() {
+		if lr.Diagnostics.HasErrors() {
 			t.Errorf("%s: verify errors:\n%s", pipelinePath, diagsString(lr.Diagnostics))
 			continue
 		}

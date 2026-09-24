@@ -22,7 +22,7 @@ func buildPipeline(t *testing.T, yamlText string) *ir.Pipeline {
 		t.Fatal(err)
 	}
 	lr := config.LoadBytes("p.yaml", []byte(yamlText))
-	if lr.HasErrors() {
+	if lr.Diagnostics.HasErrors() {
 		t.Fatalf("config: %+v", lr.Diagnostics)
 	}
 	pip, diags := ir.Build(lr.Pipeline, reg, starhost.DefaultOptions(), nil)

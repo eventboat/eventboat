@@ -140,7 +140,7 @@ sinks:
     depends_on: [heavy]
     mem: { id: wout }
 `))
-		if lr.HasErrors() {
+		if lr.Diagnostics.HasErrors() {
 			t.Fatalf("config errors: %+v", lr.Diagnostics)
 		}
 		_, diags := ir.Build(lr.Pipeline, h.reg, starhost.DefaultOptions(), nil)

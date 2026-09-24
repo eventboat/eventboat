@@ -163,11 +163,8 @@ func (e *Engine) runSink(node *ir.Node) {
 // edge timeout can never truncate a longer write sharing the batch. Dead-letter
 // attribution stays per instance (its own via-edge).
 func (e *Engine) writeBatch(node *ir.Node, sink registry.Sink, insts []*instance) {
-	encoderName := node.Config.Encoder
-	if encoderName == "" {
-		encoderName = "json"
-	}
-	encoder, err := e.codec(encoderName, e.Reg)
+	// The loader materialized the encoder (candidate 06).
+	encoder, err := e.codec(node.Config.Encoder, e.Reg)
 	if err != nil {
 		for _, inst := range insts {
 			e.deadLetter(inst, node.Name, "encoder: "+err.Error(), "")

@@ -6,6 +6,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -247,6 +250,72 @@ func TestDiagnosticsRoundTrip(t *testing.T) {
 }
 
 func pos(line, char int) map[string]int { return map[string]int{"line": line, "character": char} }
+
+// Candidate 05 acceptance 4 (LSP half): the document's directory is the
+// relative-path base, so two same-named documents in different directories
+// resolve their own wasm/grpc files instead of the editor process's CWD.
+func TestDiagnosticsResolveRelativeToDocumentDir(t *testing.T) {
+	dirA, dirB := t.TempDir(), t.TempDir()
+	for dir, name := range map[string]string{dirA: "ext", dirB: "other"} {
+		manifestDir := filepath.Join(dir, "plugin")
+		if err := os.MkdirAll(manifestDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		manifest := `{"kind":"source","name":"` + name + `","version":1,"config_schema":{"type":"object","additionalProperties":false}}`
+		if err := os.WriteFile(filepath.Join(manifestDir, "manifest.json"), []byte(manifest), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	doc := `
+apiVersion: eventboat/v1
+kind: Pipeline
+metadata: { name: lsp-basedir }
+sources:
+  in:
+    ext: {}
+    grpc: { command: ["./ext"], schema: "./plugin/manifest.json" }
+sinks:
+  out: { depends_on: [in], debug: {} }
+`
+	h := newHarness(t)
+	h.request("initialize", map[string]any{}, nil)
+	h.notify("initialized", map[string]any{})
+
+	open := func(uri string) publishDiagnosticsParams {
+		t.Helper()
+		h.notify("textDocument/didOpen", map[string]any{
+			"textDocument": map[string]any{"uri": uri, "languageId": "yaml", "version": 1, "text": doc},
+		})
+		notif := h.awaitNotification("textDocument/publishDiagnostics")
+		var params publishDiagnosticsParams
+		if err := json.Unmarshal(notif.Params, &params); err != nil {
+			t.Fatal(err)
+		}
+		return params
+	}
+
+	if got := open(fileURI(dirA, "p.yaml")); len(got.Diagnostics) != 0 {
+		t.Fatalf("dirA document should verify clean, got %+v", got.Diagnostics)
+	}
+	gotB := open(fileURI(dirB, "p.yaml"))
+	found := false
+	for _, d := range gotB.Diagnostics {
+		if d.Code == "grpc_manifest_name" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("dirB document must read dirB's manifest (grpc_manifest_name), got %+v", gotB.Diagnostics)
+	}
+}
+
+func fileURI(dir, name string) string {
+	p := filepath.ToSlash(filepath.Join(dir, name))
+	if !strings.HasPrefix(p, "/") {
+		p = "/" + p
+	}
+	return (&url.URL{Scheme: "file", Path: p}).String()
+}
 
 func completionAt(t *testing.T, h *harness, text string, line, char int) []completionItem {
 	t.Helper()

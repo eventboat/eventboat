@@ -17,6 +17,8 @@ import (
 	"time"
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
+
+	"github.com/eventboat/eventboat/internal/framework"
 )
 
 // Kind enumerates the four plugin sections.
@@ -182,18 +184,14 @@ type Codec interface {
 	Encode(v any) ([]byte, error)
 }
 
-// reservedNames may not be used as plugin names: they collide with node-level
+// reserved plugin names are rejected: they collide with node-level
 // framework fields or edge attributes (redesign-v3-review.md R5). script,
 // split and wasm are NOT reserved — they are the built-in transform plugin
-// names, ordinary members of the transform namespace (spec v1.19).
-var reservedNames = map[string]bool{
-	"depends_on": true, "decoder": true, "encoder": true, "workers": true,
-	"order_key": true, "batch": true,
-	"when": true, "route": true, "buffer": true, "delivery": true, "required": true,
-	// "from" stays reserved: the cfg_from_renamed migration diagnostic claims
-	// the key so old configs get a targeted message, not a plugin-name clash.
-	"from": true,
-}
+// names, ordinary members of the transform namespace (spec v1.19). The set
+// comes from internal/framework, the single source of the vocabulary
+// (candidate 06): a name like grpc or version registers nowhere and could
+// never load, so the registry refuses it.
+func reserved(name string) bool { return framework.Reserved(name) }
 
 type sourceEntry struct {
 	name         string
@@ -275,7 +273,7 @@ func compileSchema(name, schema string) (*jsonschema.Schema, error) {
 // additionalProperties:false expected) and optional capabilities such as
 // "pull".
 func (r *Registry) RegisterSource(name string, version int, schema string, capabilities []string, factory func(cfg map[string]any) (Source, error)) error {
-	if reservedNames[name] {
+	if reserved(name) {
 		return fmt.Errorf("plugin name %q is reserved by the framework field whitelist", name)
 	}
 	if version < 1 {
@@ -310,7 +308,7 @@ type TransformFactory = func(cfg any, dir string) (Transform, error)
 // Schema and optional capabilities such as "explain-safe" (the transform may
 // be dry-run by `eventboat explain` without side effects).
 func (r *Registry) RegisterTransform(name string, version int, schema string, capabilities []string, factory TransformFactory) error {
-	if reservedNames[name] {
+	if reserved(name) {
 		return fmt.Errorf("plugin name %q is reserved by the framework field whitelist", name)
 	}
 	if version < 1 {
@@ -334,7 +332,7 @@ func (r *Registry) RegisterTransform(name string, version int, schema string, ca
 
 // RegisterSink registers a sink plugin with its ABI version and JSON Schema.
 func (r *Registry) RegisterSink(name string, version int, schema string, factory func(cfg map[string]any) (Sink, error)) error {
-	if reservedNames[name] {
+	if reserved(name) {
 		return fmt.Errorf("plugin name %q is reserved by the framework field whitelist", name)
 	}
 	if version < 1 {
@@ -366,7 +364,7 @@ type CodecFactory = func(cfg map[string]any, dir string) (Codec, error)
 // Schema (M4: codecs join the schema-mandatory registration rule, §6.5 —
 // named `codecs:` declarations validate their config against this schema).
 func (r *Registry) RegisterCodec(name string, version int, schema string, factory CodecFactory) error {
-	if reservedNames[name] {
+	if reserved(name) {
 		return fmt.Errorf("plugin name %q is reserved by the framework field whitelist", name)
 	}
 	if version < 1 {

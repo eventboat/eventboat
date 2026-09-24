@@ -19,7 +19,7 @@ sources:
 sinks:
   out: { depends_on: [in], file: { path: b } }
 `))
-	if res.HasErrors() {
+	if res.Diagnostics.HasErrors() {
 		t.Fatalf("unexpected errors: %+v", res.Diagnostics)
 	}
 	tel := res.Pipeline.Telemetry
@@ -73,7 +73,7 @@ sources:
 sinks:
   out: { depends_on: [in], file: { path: b } }
 `))
-	if res.HasErrors() {
+	if res.Diagnostics.HasErrors() {
 		t.Fatal(res.Diagnostics)
 	}
 	if res.Pipeline.Telemetry != nil {

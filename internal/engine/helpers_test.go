@@ -130,7 +130,7 @@ func (h *harness) sink(id string) *memSink {
 func (h *harness) build(yamlText string) *ir.Pipeline {
 	h.t.Helper()
 	lr := config.LoadBytes("test.yaml", []byte(yamlText))
-	if lr.HasErrors() {
+	if lr.Diagnostics.HasErrors() {
 		h.t.Fatalf("config errors:\n%+v", lr.Diagnostics)
 	}
 	pip, diags := ir.Build(lr.Pipeline, h.reg, starhost.DefaultOptions(), nil)

@@ -27,7 +27,7 @@ sinks:
 	}
 
 	res := mk("restart")
-	if res.HasErrors() {
+	if res.Diagnostics.HasErrors() {
 		t.Fatalf("restart rejected: %+v", res.Diagnostics)
 	}
 	if got := res.Pipeline.Sources["in"].Grpc.Restart; got != "restart" {
@@ -35,7 +35,7 @@ sinks:
 	}
 
 	res = mk(`"fast-fail"`)
-	if res.HasErrors() {
+	if res.Diagnostics.HasErrors() {
 		t.Fatalf("fast-fail rejected: %+v", res.Diagnostics)
 	}
 	if got := res.Pipeline.Sources["in"].Grpc.Restart; got != "fast-fail" {

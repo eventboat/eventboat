@@ -31,7 +31,7 @@ sinks:
 
 func TestJobSectionsParse(t *testing.T) {
 	res := LoadBytes("job.yaml", []byte(jobPipeline))
-	if res.HasErrors() {
+	if res.Diagnostics.HasErrors() {
 		t.Fatalf("unexpected errors: %+v", res.Diagnostics)
 	}
 	p := res.Pipeline
@@ -128,7 +128,7 @@ sources:
 sinks:
   out: { depends_on: [in], file: { path: out.jsonl } }
 `))
-	if res.HasErrors() {
+	if res.Diagnostics.HasErrors() {
 		t.Fatalf("batch pipeline rejected: %+v", res.Diagnostics)
 	}
 	for _, d := range res.Diagnostics {

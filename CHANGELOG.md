@@ -342,6 +342,71 @@ hygiene findings.
   counts one skipped episode (counted once — exact per-tick counting is the
   unbounded walk the bisection exists to avoid). Docs: 02-engine (recovery +
   single writer), 06-observability (catch-up counter).
+- **One verify-first path and unified DLQ semantics (candidate 05)**: the
+  load → build → judge composition lived at about ten call sites with
+  different policies — `ops.Verify` always built the IR (cascade diagnostics
+  the CLI skipped), `--strict` existed only in the CLI, the LSP dropped the
+  document URI so relative paths resolved against the editor process's CWD,
+  and eight hand-rolled severity scans decided pass/fail. It now lives in one
+  cycle-free package, `internal/verify`: `File`/`Bytes` return a `Result`
+  carrying the typed config, the built `*ir.Pipeline`, the merged
+  load+build diagnostics and the strict verdict `OK`, while
+  `LoadBytes` → (parameter substitution) → `Build` is the two-stage form jobs
+  uses; a load that already errored skips the build, uniformly. Content-based
+  entries take an explicit `baseDir` (`config.LoadBytesIn`): the LSP passes
+  the document's directory, Deploy the deploy directory (relative
+  wasm/grpc/codec paths now resolve the same at deploy time and on every
+  per-run reload), the CLI the file's directory, and a pure-text MCP/Admin
+  submission `""` (documented: relative paths then resolve against the
+  process CWD) — the engine and IR read the same `Pipeline.BaseDir` instead
+  of re-deriving paths from the file name. `config.Diagnostics` is a
+  first-class value with `HasErrors`/`FirstError`/`StrictOK`/`Errors`/
+  `Warnings`, and every severity scan is gone. `internal/dlq` owns the
+  dead-letter strategy surface: where-filter compilation with the pipeline's
+  constants (the CLI compiled with constants while MCP did not), selection
+  order `ids → where → limit`, and the codec-carrying replay request shared
+  by the live-engine (ops) and local-engine (CLI) transports — **`--ids`
+  with `--limit` no longer deletes dead letters that were never replayed**
+  (only the selected rows are eligible for `--delete`). Explain has one
+  Service-free entry (`ops.ExplainPipeline`, `ExplainRequest.Message/
+  EntryNode/Topology`), so `--at` behaves identically on CLI, MCP (`explain`
+  gains `at`) and Admin; the CLI delegates instead of re-implementing.
+  `ops.Deploy` parses once: verify in memory → write the deployed file →
+  swap the instance through the candidate-08 lifecycle, passing the built IR
+  to the new engine — no third parse, and a rejected deploy writes nothing.
+  Docs: 01-architecture, 04-config-pipeline, 06-observability.
+
+- **One framework vocabulary (candidate 06)**: the framework-field whitelist
+  was hand-copied into five modules and had drifted — `grpc` and `version`
+  were node fields in config yet registrable as plugin names, so such a
+  plugin could register and never load. The single source is now the leaf
+  package `internal/framework` (per-section node fields, top-level keys, edge
+  attributes, reserved plugin names, node-level default constants); config,
+  registry and the LSP read it, and a test pins the reserved set to the
+  union of the framework fields. `Pipeline.Order` is now the **YAML document
+  order** of node declarations (previously Go map iteration): jobs binds
+  `cursor` to the first declared source's watermark, explain's default entry
+  node is the first declared source, and diagnostics iterate a stable order.
+  Pipeline-level defaults are materialized into the typed config at load
+  (decoder/encoder `json`, delivery `retries: 3`/`backoff: exponential`,
+  `required: true`, buffer `max_events: 128`, workers 1) and the downstream
+  re-defaulting (the `json` fallback ten times over, the IR edge defaults)
+  is deleted; engine runtime knobs keep exactly one normalization path
+  (`Options.withDefaults`, shared by `DefaultOptions` and `New`).
+  `edge_defaults` rejects `when`/`route` with `cfg_edge_defaults_field` (a
+  global default predicate is a footgun; `delivery`/`required`/`buffer`
+  unchanged). Dead knobs are closed: **BREAKING** `sinks.workers` — accepted
+  and ignored before — is rejected with `cfg_sink_workers` (sink concurrency
+  is engine-owned), and `mcp.enable: false` means the daemon does not
+  register `/mcp` (the explicit `eventboat mcp --http` command always
+  serves it, documented). Strictness parity: `metadata` gains unknown-key
+  (`cfg_unknown_field`) and non-mapping (`cfg_metadata_type`) diagnostics,
+  and `runtimecfg` moves to a typed strict decode where unknown keys AND
+  type errors are errors (`data_dir: 123`, `enable: "yes"` and
+  `sample_ratio: -1` used to fall through to defaults; `sample_ratio` is
+  now enforced in `[0, 1]`). Docs: 01-architecture, 03-plugins,
+  04-config-pipeline, 06-observability.
+
 - **Admin security hardening**: the `?token=` query form is accepted on
   `/admin/sse` only (EventSource cannot set headers); every other endpoint is
   header-only, so a token leaked in a URL no longer unlocks the write

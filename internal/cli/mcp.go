@@ -29,7 +29,7 @@ import (
 func cmdMCP(args []string, jsonOut bool) int {
 	fs := flag.NewFlagSet("mcp", flag.ContinueOnError)
 	stdio := fs.Bool("stdio", false, "speak MCP over stdin/stdout (for agent hosts to spawn)")
-	httpMode := fs.Bool("http", false, "serve MCP over HTTP (Streamable HTTP) together with the admin surface")
+	httpMode := fs.Bool("http", false, "serve MCP over HTTP (Streamable HTTP) together with the admin surface (explicit: /mcp is served even when the Runtime config sets mcp.enable: false)")
 	configDir := fs.String("config-dir", "", "directory of pipeline YAML files to deploy at startup")
 	runtimeFile := fs.String("runtime", "", "Runtime configuration file (default: ./eventboat.yaml)")
 	dataDir := fs.String("data-dir", "", "override storage.data_dir")
@@ -99,7 +99,7 @@ func cmdMCP(args []string, jsonOut bool) int {
 		return 0
 	}
 
-	handler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server }, nil)
+	handler := mcpHandlerFor(svc, true)
 	adminH := admin.Handler(svc, metricsHandler, handler, sec)
 	fmt.Printf("eventboat: admin + MCP listening on %s (UI: http://%s/admin/)\n", rt.Admin.Listen, rt.Admin.Listen)
 	if err := admin.Serve(ctx, rt.Admin.Listen, adminH); err != nil {
@@ -107,6 +107,19 @@ func cmdMCP(args []string, jsonOut bool) int {
 		return 1
 	}
 	return 0
+}
+
+// mcpHandlerFor returns the /mcp handler for a serving mode: nil when the
+// daemon's Runtime config disables it (mcp.enable: false → the daemon does
+// not register /mcp, candidate 06), and always non-nil for the explicit
+// `eventboat mcp --http` command — an operator asking for MCP is not
+// overridden by a config default.
+func mcpHandlerFor(svc *ops.Service, enable bool) http.Handler {
+	if !enable {
+		return nil
+	}
+	server := mcpserver.NewServer(svc, "eventboat", "v3")
+	return mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server }, nil)
 }
 
 // newOpsService builds the ops service from the runtime config (including
@@ -235,11 +248,16 @@ func cmdRunDir(args []string, jsonOut bool) int {
 	}
 
 	if rt.Admin.Enable {
-		server := mcpserver.NewServer(svc, "eventboat", "v3")
-		mcpHandler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server }, nil)
+		// The MCP endpoint is a separate switch (mcp.enable, candidate 06):
+		// disabled means the daemon does not register /mcp at all.
+		mcpHandler := mcpHandlerFor(svc, rt.MCP.Enable)
 		handler := admin.Handler(svc, metricsHandler, mcpHandler, sec)
 		go func() {
-			fmt.Printf("eventboat: admin + MCP on http://%s/admin/\n", rt.Admin.Listen)
+			if mcpHandler != nil {
+				fmt.Printf("eventboat: admin + MCP on http://%s/admin/\n", rt.Admin.Listen)
+			} else {
+				fmt.Printf("eventboat: admin on http://%s/admin/ (mcp.enable: false — /mcp not registered)\n", rt.Admin.Listen)
+			}
 			_ = admin.Serve(ctx, rt.Admin.Listen, handler)
 		}()
 	}

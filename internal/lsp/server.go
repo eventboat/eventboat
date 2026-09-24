@@ -5,20 +5,22 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"net/url"
+	"path/filepath"
+	"runtime"
+	"strings"
 	"sync"
 
 	"github.com/eventboat/eventboat/internal/config"
-	"github.com/eventboat/eventboat/internal/ops"
 	"github.com/eventboat/eventboat/internal/registry"
 	"github.com/eventboat/eventboat/internal/registry/builtin"
-	"github.com/eventboat/eventboat/internal/store"
+	"github.com/eventboat/eventboat/internal/verify"
 )
 
 // Server is the Eventboat language server. One instance serves one stdio
 // connection; documents live in an in-memory map keyed by URI.
 type Server struct {
 	reg *registry.Registry
-	svc *ops.Service
 
 	mu   sync.Mutex
 	docs map[string]string // uri -> current text
@@ -35,12 +37,7 @@ func NewServer() (*Server, error) {
 		return nil, err
 	}
 	return &Server{
-		reg: reg,
-		// The LSP only ever calls Verify — a pure function of config text —
-		// but ops requires a store provider (candidate 04 deleted the default
-		// factory). A memory owner satisfies the contract without touching
-		// disk; no handle is ever opened, so there is nothing to close.
-		svc:  ops.New(ops.Options{Reg: reg, Stores: store.NewMemoryOwner()}),
+		reg:  reg,
 		docs: map[string]string{},
 	}, nil
 }
@@ -206,18 +203,46 @@ func (s *Server) document(uri string) (string, bool) {
 	return text, ok
 }
 
-// publishDiagnostics runs the real verify pipeline (config.LoadBytes +
-// ir.Build via ops.Service.Verify — the identical path the CLI and MCP
-// verify tools use) on the document text and pushes
-// textDocument/publishDiagnostics. Empty text publishes an empty set
-// (document closed or never had content).
+// publishDiagnostics runs the real verify pipeline (internal/verify — the
+// identical composition the CLI and MCP verify tools run) on the document
+// text and pushes textDocument/publishDiagnostics. The document's directory
+// is the base for relative paths (candidate 05): a wasm/grpc module path in
+// the editor's document resolves like it would on disk, not against the
+// editor process's CWD. Empty text publishes an empty set (document closed
+// or never had content).
 func (s *Server) publishDiagnostics(uri, text string) {
-	var diags []config.Diagnostic
+	var diags config.Diagnostics
 	if text != "" {
-		diags = s.svc.Verify(text)
+		name, baseDir := documentFile(uri)
+		diags = verify.Bytes(name, []byte(text), baseDir, s.reg, verify.Options{}).Diagnostics
 	}
 	_ = s.write(notify("textDocument/publishDiagnostics", publishDiagnosticsParams{
 		URI:         uri,
 		Diagnostics: toLspDiagnostics(text, diags),
 	}))
+}
+
+// documentFile maps a document URI onto the file name and base directory the
+// verify composition reports and resolves against. Non-file URIs (and bare
+// names) fall back to "" — relative paths then resolve against the process
+// CWD, the documented rule for content without a filesystem home.
+func documentFile(uri string) (name, baseDir string) {
+	u, err := url.Parse(uri)
+	if err != nil || u.Scheme != "file" || u.Path == "" {
+		return "document.yaml", ""
+	}
+	p := u.Path
+	if unescaped, err := url.PathUnescape(p); err == nil {
+		p = unescaped
+	}
+	// Windows file URIs arrive as /C:/x/p.yaml; strip the leading slash so
+	// filepath treats the drive letter as a volume.
+	if runtime.GOOS == "windows" && len(p) >= 3 && p[0] == '/' && p[2] == ':' {
+		p = p[1:]
+	}
+	path := filepath.FromSlash(p)
+	if strings.TrimSpace(path) == "" {
+		return "document.yaml", ""
+	}
+	return path, filepath.Dir(path)
 }

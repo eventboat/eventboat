@@ -12,11 +12,10 @@ import (
 
 	"github.com/eventboat/eventboat/internal/config"
 	"github.com/eventboat/eventboat/internal/engine"
-	"github.com/eventboat/eventboat/internal/ir"
 	"github.com/eventboat/eventboat/internal/jobs"
-	"github.com/eventboat/eventboat/internal/lang/starhost"
 	"github.com/eventboat/eventboat/internal/runtimecfg"
 	"github.com/eventboat/eventboat/internal/store"
+	"github.com/eventboat/eventboat/internal/verify"
 )
 
 // cmdTrigger manually fires a job pipeline once, optionally with parameters
@@ -54,17 +53,14 @@ func cmdTrigger(args []string, jsonOut bool) int {
 		return 2
 	}
 
-	lr := config.LoadFile(*configPath)
-	if lr.HasErrors() {
-		printDiagsStderr(lr.Diagnostics)
+	res := verify.File(*configPath, reg, verify.Options{})
+	if res.Pipeline == nil {
+		printDiagsStderr(res.Diagnostics)
 		return 1
 	}
-	if !lr.Pipeline.IsJob() {
-		fmt.Fprintf(os.Stderr, "trigger: pipeline %q is not a job pipeline (run.mode: job required)\n", lr.Pipeline.Name)
-		return 1
-	}
-	if _, diags := ir.Build(lr.Pipeline, reg, starhost.DefaultOptions(), nil); hasErrDiagsCmd(diags) {
-		printDiagsStderr(diags)
+	cfg := res.Config
+	if !cfg.IsJob() {
+		fmt.Fprintf(os.Stderr, "trigger: pipeline %q is not a job pipeline (run.mode: job required)\n", cfg.Name)
 		return 1
 	}
 
@@ -72,21 +68,21 @@ func cmdTrigger(args []string, jsonOut bool) int {
 	defer func() { _ = owner.Close() }()
 	// One writer per pipeline store: refuse while a daemon (or another
 	// one-shot verb) owns the pipeline (candidate 08).
-	lease, err := acquireRunLease(owner, "trigger", lr.Pipeline.Name)
+	lease, err := acquireRunLease(owner, "trigger", cfg.Name)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
 	defer func() { _ = lease.Release() }()
-	st, err := owner.Open(lr.Pipeline.Name)
+	st, err := owner.Open(cfg.Name)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "trigger: open store: %v\n", err)
 		return 2
 	}
 
 	opts := jobs.Options{}
-	opts.EngineOptions = engine.DefaultOptions().WithLimits(lr.Pipeline.Limits)
-	m, err := jobs.New(lr.Pipeline, *configPath, st, reg, opts)
+	opts.EngineOptions = engine.DefaultOptions().WithLimits(cfg.Limits)
+	m, err := jobs.New(cfg, *configPath, st, reg, opts)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "trigger: %v\n", err)
 		return 2
@@ -107,7 +103,7 @@ func cmdTrigger(args []string, jsonOut bool) int {
 
 	if jsonOut {
 		out, _ := json.Marshal(map[string]any{
-			"run_id": runID, "pipeline": lr.Pipeline.Name,
+			"run_id": runID, "pipeline": cfg.Name,
 			"status": jr.Status, "rows_read": jr.RowsRead,
 			"delivered": jr.Delivered, "dead_lettered": jr.DeadLettered,
 			"error": jr.Error, "started_at": jr.StartedAt, "ended_at": jr.EndedAt,
@@ -197,7 +193,7 @@ func cmdJobs(args []string, jsonOut bool) int {
 		dataDir = "data"
 	}
 	lr := config.LoadFile(configPath)
-	if lr.HasErrors() {
+	if lr.Diagnostics.HasErrors() {
 		printDiagsStderr(lr.Diagnostics)
 		return 1
 	}
@@ -262,15 +258,6 @@ func cmdJobs(args []string, jsonOut bool) int {
 	default:
 		return 2
 	}
-}
-
-func hasErrDiagsCmd(diags []config.Diagnostic) bool {
-	for _, d := range diags {
-		if d.Severity == "error" {
-			return true
-		}
-	}
-	return false
 }
 
 func mustJSON(v any) string {

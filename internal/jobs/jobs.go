@@ -21,11 +21,10 @@ import (
 
 	"github.com/eventboat/eventboat/internal/config"
 	"github.com/eventboat/eventboat/internal/engine"
-	"github.com/eventboat/eventboat/internal/ir"
-	"github.com/eventboat/eventboat/internal/lang/starhost"
 	"github.com/eventboat/eventboat/internal/obs"
 	"github.com/eventboat/eventboat/internal/registry"
 	"github.com/eventboat/eventboat/internal/store"
+	"github.com/eventboat/eventboat/internal/verify"
 )
 
 // Options tunes the jobs manager.
@@ -481,10 +480,11 @@ func (m *Manager) runOnce(ctx context.Context, jr *store.JobRun, triggerParams, 
 	}
 
 	// Fresh config per run (trigger-time parameter values are substituted
-	// into a clean tree; nothing leaks between runs).
-	lr := config.LoadFile(m.file)
-	if lr.HasErrors() {
-		fail(store.JobFailed, "run: reload config: "+lr.Diagnostics[0].Error())
+	// into a clean tree; nothing leaks between runs). The two-stage verify
+	// form (candidate 05): load → substitute parameters → build.
+	lr := verify.LoadFile(m.file)
+	if lr.Diagnostics.HasErrors() {
+		fail(store.JobFailed, "run: reload config: "+lr.Diagnostics.FirstErrorText())
 		return
 	}
 	cfg := lr.Pipeline
@@ -507,13 +507,10 @@ func (m *Manager) runOnce(ctx context.Context, jr *store.JobRun, triggerParams, 
 		}
 		return per
 	}
-	if diags := config.SubstituteParameters(cfg, globalValues(resolved, sourceWatermarks), valuesFor); len(diags) > 0 {
-		fail(store.JobFailed, "run: parameter substitution: "+diags[0].Error())
-		return
-	}
-
-	// Bindings for scripts/predicates: cursor → first pull source watermark.
-	bindValues := map[string]any{}
+	// The `cursor` binding is the first source's watermark in DECLARATION
+	// order (candidate 06: cfg.Order is document order, so this is no longer
+	// a random map pick); it feeds the global ${parameters} substitution and
+	// the script/predicate bindings alike.
 	firstWatermark := ""
 	for _, name := range cfg.Order {
 		if cfg.Sources[name] != nil {
@@ -522,6 +519,14 @@ func (m *Manager) runOnce(ctx context.Context, jr *store.JobRun, triggerParams, 
 			}
 		}
 	}
+	if diags := config.SubstituteParameters(cfg, globalValues(resolved, firstWatermark), valuesFor); len(diags) > 0 {
+		fail(store.JobFailed, "run: parameter substitution: "+diags[0].Error())
+		return
+	}
+
+	// Bindings for scripts/predicates: cursor → the same first-source
+	// watermark; now → trigger time.
+	bindValues := map[string]any{}
 	for k, v := range resolved {
 		if s, ok := v.(string); ok && s == "cursor" {
 			bindValues[k] = firstWatermark
@@ -534,9 +539,9 @@ func (m *Manager) runOnce(ctx context.Context, jr *store.JobRun, triggerParams, 
 		bindValues[k] = v
 	}
 
-	pip, diags := ir.Build(cfg, m.reg, starhost.DefaultOptions(), bindValues)
+	pip, diags := verify.Build(cfg, m.reg, verify.Options{Parameters: bindValues})
 	if pip == nil {
-		fail(store.JobFailed, "run: verify: "+firstErr(diags))
+		fail(store.JobFailed, "run: verify: "+diags.FirstErrorText())
 		return
 	}
 
@@ -725,30 +730,19 @@ func auditParams(trigger map[string]any) map[string]any {
 	return trigger
 }
 
-func globalValues(resolved map[string]any, watermarks map[string]string) map[string]any {
+// globalValues substitutes the global `${parameters.x}` tokens: `cursor`
+// binds the first source's watermark (declaration order); everything else is
+// the resolved value.
+func globalValues(resolved map[string]any, firstWatermark string) map[string]any {
 	out := map[string]any{}
 	for k, v := range resolved {
 		if s, ok := v.(string); ok && s == "cursor" {
-			// Global cursor = first source's watermark (single-source jobs
-			// are the norm; documented for multi-source divergence).
-			for _, wm := range watermarks {
-				out[k] = wm
-				break
-			}
+			out[k] = firstWatermark
 			continue
 		}
 		out[k] = v
 	}
 	return out
-}
-
-func firstErr(diags []config.Diagnostic) string {
-	for _, d := range diags {
-		if d.Severity == "error" {
-			return d.Error()
-		}
-	}
-	return "unknown error"
 }
 
 // checkParamValue validates one value against a declaration (types, enum,

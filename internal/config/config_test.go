@@ -40,7 +40,7 @@ sinks:
     encoder: json
     kafka: { topic: orders-eu }
 `))
-	if res.HasErrors() {
+	if res.Diagnostics.HasErrors() {
 		t.Fatalf("expected clean load, got:\n%v", res.Diagnostics)
 	}
 	p := res.Pipeline
@@ -147,7 +147,7 @@ transforms:
 sinks:
   out: { depends_on: [scripted, heavy, diced], file: { path: b } }
 `))
-	if res.HasErrors() {
+	if res.Diagnostics.HasErrors() {
 		t.Fatalf("unexpected errors: %+v", res.Diagnostics)
 	}
 	scripted := res.Pipeline.Transforms["scripted"]
@@ -198,7 +198,7 @@ transforms:
 sinks:
   out: { depends_on: [fast], file: { path: b } }
 `))
-	if res.HasErrors() {
+	if res.Diagnostics.HasErrors() {
 		t.Fatalf("unexpected errors: %+v", res.Diagnostics)
 	}
 	if _, set := res.Pipeline.Transforms["unset"].PluginConfig.(map[string]any)["timeout_ms"]; set {
@@ -299,7 +299,7 @@ transforms:
 sinks:
   out: { depends_on: [t], file: { path: "out-${constants.threshold}.txt" } }
 `))
-	if res.HasErrors() {
+	if res.Diagnostics.HasErrors() {
 		t.Fatalf("unexpected errors: %+v", res.Diagnostics)
 	}
 	if got := (res.Pipeline.Sinks["out"].PluginConfig.(map[string]any))["path"]; got != "out-100.txt" {
@@ -309,7 +309,7 @@ sinks:
 
 func TestLoadFileMissing(t *testing.T) {
 	res := LoadFile(filepath.Join(t.TempDir(), "nope.yaml"))
-	if !res.HasErrors() {
+	if !res.Diagnostics.HasErrors() {
 		t.Fatal("expected io_read error")
 	}
 }
@@ -379,7 +379,7 @@ sources:
 sinks:
   out: { depends_on: [in], file: { path: "run-${parameters.from}.txt" } }
 `))
-	if res.HasErrors() {
+	if res.Diagnostics.HasErrors() {
 		t.Fatalf("job pipeline with ${parameters.x} rejected at load: %+v", res.Diagnostics)
 	}
 	got := (res.Pipeline.Sinks["out"].PluginConfig.(map[string]any))["path"]
@@ -404,7 +404,7 @@ sources:
 sinks:
   out: { depends_on: [in], file: { path: "${constants.tier}-${EB_TEST_OK_VAR}.txt" } }
 `))
-	if res.HasErrors() {
+	if res.Diagnostics.HasErrors() {
 		t.Fatalf("unexpected errors: %+v", res.Diagnostics)
 	}
 	if got := (res.Pipeline.Sinks["out"].PluginConfig.(map[string]any))["path"]; got != "gold-prod.txt" {
@@ -463,7 +463,7 @@ sinks:
       path: fixed.txt
       ${?EB_TEST_OPTIONAL_UNSET}: omit-me
 `))
-	if res.HasErrors() {
+	if res.Diagnostics.HasErrors() {
 		t.Fatalf("unexpected errors: %+v", res.Diagnostics)
 	}
 	if _, present := (res.Pipeline.Sinks["out"].PluginConfig.(map[string]any))["EB_TEST_OPTIONAL_UNSET"]; present {
@@ -517,7 +517,7 @@ sources:
 sinks:
   out: { depends_on: [in], file: { path: o } }
 `))
-	if res.HasErrors() {
+	if res.Diagnostics.HasErrors() {
 		t.Fatalf("unexpected errors: %+v", res.Diagnostics)
 	}
 	l := res.Pipeline.Limits
@@ -574,7 +574,7 @@ sources:
 sinks:
   out: { depends_on: [in], file: { path: o } }
 `))
-	if res.HasErrors() {
+	if res.Diagnostics.HasErrors() {
 		t.Fatalf("unexpected errors: %+v", res.Diagnostics)
 	}
 	if d := res.Pipeline.DLQ; d == nil || d.Retention != 30*24*time.Hour {
@@ -591,7 +591,7 @@ sources:
 sinks:
   out: { depends_on: [in], file: { path: o } }
 `))
-	if res.HasErrors() {
+	if res.Diagnostics.HasErrors() {
 		t.Fatalf("unset dlq: unexpected errors: %+v", res.Diagnostics)
 	}
 	if res.Pipeline.DLQ != nil {
@@ -666,7 +666,7 @@ func TestMetadataNameValidation(t *testing.T) {
 	// the name is persisted (<data-dir>/pipelines/<name>.yaml); longer names
 	// that merely contain them are fine.
 	for _, name := range []string{"orders", "orders-eu", "a.b_c-d", "x0", "p1.q2_r3-s4", "console", "Com1x", "acon"} {
-		if res := LoadBytes("p.yaml", []byte(pipeline(name))); res.HasErrors() {
+		if res := LoadBytes("p.yaml", []byte(pipeline(name))); res.Diagnostics.HasErrors() {
 			t.Errorf("name %q: unexpected errors: %+v", name, res.Diagnostics)
 		}
 	}

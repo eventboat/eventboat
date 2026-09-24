@@ -3,6 +3,8 @@ package lsp
 import (
 	"encoding/json"
 	"strings"
+
+	"github.com/eventboat/eventboat/internal/framework"
 )
 
 // hover answers textDocument/hover: the token under the cursor resolved
@@ -134,15 +136,7 @@ func sectionOfStack(stack []stackEntry) string {
 // enclosingPlugin finds the nearest non-framework key under a node — the
 // plugin block the cursor is inside ("" when none).
 func enclosingPlugin(stack []stackEntry, section string) string {
-	framework := frameworkFields[section]
-	isFramework := func(k string) bool {
-		for _, f := range framework {
-			if f == k {
-				return true
-			}
-		}
-		return false
-	}
+	fields := framework.SectionFields(section)
 	for i := len(stack) - 1; i >= 0; i-- {
 		e := stack[i]
 		if e.indent == 0 {
@@ -151,7 +145,7 @@ func enclosingPlugin(stack []stackEntry, section string) string {
 		if isSection(e.key) {
 			continue
 		}
-		if !isFramework(e.key) {
+		if !framework.Has(fields, e.key) {
 			return e.key
 		}
 	}

@@ -135,7 +135,7 @@ func runPipeline(t *testing.T, yamlText string) (*engine.Engine, func()) {
 		t.Fatal(err)
 	}
 	lr := config.LoadBytes("kafka-int.yaml", []byte(yamlText))
-	if lr.HasErrors() {
+	if lr.Diagnostics.HasErrors() {
 		t.Fatalf("config: %+v", lr.Diagnostics)
 	}
 	pip, diags := ir.Build(lr.Pipeline, reg, starhost.DefaultOptions(), nil)

@@ -30,7 +30,8 @@ transforms).
 
 In YAML, the plugin name *is* the key of a node's block; everything else at
 node level must be a framework field from the per-section whitelist
-(`internal/config/sections.go`):
+(`internal/framework`, the single source config, the registry and the LSP
+all read — candidate 06):
 
 ```yaml
 sources:
@@ -51,10 +52,14 @@ sinks:
 
 Exactly one plugin key per node (`cfg_missing_plugin` /
 `cfg_multiple_plugins` otherwise). Names colliding with framework fields
-(`depends_on`, `decoder`, `encoder`, `workers`, `order_key`, `batch`, `when`,
-`route`, `buffer`, `delivery`, `required`) are rejected at registration
-(registry review R5). A `version:` pin on the node is checked against the
-registered/manifest version at verify (`plugin_version_mismatch`).
+(`depends_on`, `decoder`, `encoder`, `workers`, `order_key`, `batch`, `grpc`,
+`version`, `when`, `route`, `buffer`, `delivery`, `required`, plus `from` for
+the rename migration) are rejected at registration (registry review R5,
+candidate 06: the reserved set *is* the union of the framework fields, so
+`grpc`/`version` can no longer register a plugin that could never load).
+`script`, `split` and `wasm` are ordinary registrable names. A `version:` pin
+on the node is checked against the registered/manifest version at verify
+(`plugin_version_mismatch`).
 
 ## The typed schema system
 

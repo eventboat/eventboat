@@ -215,12 +215,9 @@ func symbolic(pip *ir.Pipeline, b *strings.Builder) error {
 	return nil
 }
 
-func decoderOf(n *ir.Node) string {
-	if n.Config.Decoder == "" {
-		return "json"
-	}
-	return n.Config.Decoder
-}
+// decoderOf returns the source's decoder; the loader materialized the
+// default (candidate 06), so the field is authoritative.
+func decoderOf(n *ir.Node) string { return n.Config.Decoder }
 
 // transformLabel renders the transform line prefix in message mode; the
 // builtins keep their descriptive labels, third-party plugins name
@@ -284,12 +281,9 @@ func wasmBudget(n *ir.Node) int {
 	return 1000
 }
 
-func encoderOf(n *ir.Node) string {
-	if n.Config.Encoder == "" {
-		return "json"
-	}
-	return n.Config.Encoder
-}
+// encoderOf returns the sink's encoder; materialized by the loader
+// (candidate 06).
+func encoderOf(n *ir.Node) string { return n.Config.Encoder }
 
 func sinkEdgeRetries(node *ir.Node) int {
 	for _, e := range node.In {

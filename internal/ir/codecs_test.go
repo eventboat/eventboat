@@ -17,7 +17,7 @@ func buildStr(t *testing.T, yaml string) (*Pipeline, []config.Diagnostic) {
 		t.Fatal(err)
 	}
 	lr := config.LoadBytes("test.yaml", []byte(yaml))
-	if lr.HasErrors() {
+	if lr.Diagnostics.HasErrors() {
 		return nil, lr.Diagnostics
 	}
 	return Build(lr.Pipeline, reg, starhost.DefaultOptions(), nil)

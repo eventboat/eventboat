@@ -10,7 +10,7 @@ import (
 func loadBytes(t *testing.T, yamlText string) *config.Pipeline {
 	t.Helper()
 	lr := config.LoadBytes("p.yaml", []byte(yamlText))
-	if lr.HasErrors() {
+	if lr.Diagnostics.HasErrors() {
 		t.Fatalf("config errors:\n%+v", lr.Diagnostics)
 	}
 	return lr.Pipeline

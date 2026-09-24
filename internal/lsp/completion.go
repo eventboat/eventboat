@@ -7,30 +7,19 @@ import (
 	"strings"
 
 	"github.com/eventboat/eventboat/internal/config"
+	"github.com/eventboat/eventboat/internal/framework"
 )
 
 // Completion context analysis is line/indent-based over the document text
 // (YAML structural parsing of half-typed documents is unreliable; the
 // heuristics target the pipeline shape: top-level sections -> node names ->
 // framework fields / plugin blocks -> plugin fields). Data sources are the
-// registry catalog, plugin JSON Schemas and the loader's framework-field
-// whitelists — the same authorities verify enforces.
+// registry catalog, plugin JSON Schemas and internal/framework — the same
+// authorities verify enforces (candidate 06: the LSP carries no copy of the
+// vocabulary).
 
-var topLevelSections = []string{
-	"apiVersion", "kind", "metadata", "edge_defaults", "constants", "limits",
-	"telemetry", "run", "parameters", "hooks", "codecs", "dlq", "sources", "transforms", "sinks",
-}
-
-// Framework fields per section (mirrors config.sections.go nodeWhitelist).
-// script/split/wasm are not listed for transforms: they are registered
-// transform plugins and arrive through pluginItems (the catalog).
-var frameworkFields = map[string][]string{
-	"run":        {"mode", "schedule", "overlap", "catchup_window", "skip_if_successful", "retention"},
-	"sources":    {"decoder", "grpc", "version"},
-	"transforms": {"depends_on", "workers", "version"},
-	"sinks":      {"depends_on", "encoder", "workers", "order_key", "batch", "grpc", "version"},
-}
-
+// frameworkDocs documents the framework fields offered by completion (the
+// field lists themselves come from internal/framework).
 var frameworkDocs = map[string]string{
 	"mode":       "run mode: continuous (default) | job (§5.8 schedules/parameters) | batch (run to completion, then exit)",
 	"schedule":   "5-field cron for job pipelines; requires run.mode: job",
@@ -254,8 +243,8 @@ func (s *Server) completionsFor(text string, line, character int) []completionIt
 
 	// Top level.
 	if encl == nil {
-		out := make([]completionItem, 0, len(topLevelSections))
-		for _, k := range topLevelSections {
+		out := make([]completionItem, 0, len(framework.TopLevelKeys))
+		for _, k := range framework.TopLevelKeys {
 			out = append(out, completionItem{Label: k, Kind: kindField, Detail: "top-level section", InsertText: k + ":"})
 		}
 		return filter(out)
@@ -304,14 +293,9 @@ func (s *Server) completionsFor(text string, line, character int) []completionIt
 	if nodeIdx < 0 {
 		return nil
 	}
-	framework := frameworkFields[section]
+	frameworkKeys := framework.SectionFields(section)
 	isFramework := func(k string) bool {
-		for _, f := range framework {
-			if f == k {
-				return true
-			}
-		}
-		return false
+		return framework.Has(frameworkKeys, k)
 	}
 
 	// Collect keys already used inside the current node (avoid dupes).
@@ -336,7 +320,7 @@ func (s *Server) completionsFor(text string, line, character int) []completionIt
 	if cursorIndent(lines, line) <= stack[nodeIdx].indent+2 {
 		// Cursor at node-child depth: framework fields + plugins.
 		var out []completionItem
-		for _, f := range framework {
+		for _, f := range frameworkKeys {
 			if present[f] {
 				continue
 			}

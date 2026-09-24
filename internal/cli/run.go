@@ -13,11 +13,11 @@ import (
 	"github.com/eventboat/eventboat/internal/engine"
 	"github.com/eventboat/eventboat/internal/ir"
 	"github.com/eventboat/eventboat/internal/jobs"
-	"github.com/eventboat/eventboat/internal/lang/starhost"
 	"github.com/eventboat/eventboat/internal/obs"
 	"github.com/eventboat/eventboat/internal/registry"
 	"github.com/eventboat/eventboat/internal/runtimecfg"
 	"github.com/eventboat/eventboat/internal/store"
+	"github.com/eventboat/eventboat/internal/verify"
 )
 
 func cmdRun(args []string, jsonOut bool) int {
@@ -45,20 +45,13 @@ func cmdRun(args []string, jsonOut bool) int {
 		return 2
 	}
 
-	lr := config.LoadFile(*configPath)
-	if lr.HasErrors() {
-		printDiagsStderr(lr.Diagnostics)
+	res := verify.File(*configPath, reg, verify.Options{})
+	if res.Pipeline == nil {
+		printDiagsStderr(res.Diagnostics)
 		fmt.Fprintln(os.Stderr, "run: pipeline failed verify (run verify for details)")
 		return 1
 	}
-	pip, diags := ir.Build(lr.Pipeline, reg, starhost.DefaultOptions(), nil)
-	for _, d := range diags {
-		if d.Severity == "error" {
-			printDiagsStderr(diags)
-			fmt.Fprintln(os.Stderr, "run: pipeline failed verify")
-			return 1
-		}
-	}
+	pip := res.Pipeline
 
 	// Telemetry follows the Runtime config (OTLP push; the Prometheus
 	// exposition needs the daemon surface: run --config-dir / mcp --http).
@@ -264,7 +257,7 @@ func runJobPipeline(configPath string, pip *ir.Pipeline, reg *registry.Registry,
 	return 0
 }
 
-func printDiagsStderr(diags []config.Diagnostic) {
+func printDiagsStderr(diags config.Diagnostics) {
 	for _, d := range diags {
 		fmt.Fprintln(os.Stderr, d.Error())
 		if d.Hint != "" {

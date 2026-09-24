@@ -13,20 +13,22 @@ import (
 	"time"
 
 	"github.com/eventboat/eventboat/internal/config"
+	"github.com/eventboat/eventboat/internal/dlq"
 	"github.com/eventboat/eventboat/internal/engine"
-	"github.com/eventboat/eventboat/internal/explain"
 	"github.com/eventboat/eventboat/internal/ir"
-	"github.com/eventboat/eventboat/internal/lang/celhost"
-	"github.com/eventboat/eventboat/internal/lang/starhost"
+	"github.com/eventboat/eventboat/internal/ops"
 	"github.com/eventboat/eventboat/internal/registry"
 	"github.com/eventboat/eventboat/internal/runtimecfg"
 	"github.com/eventboat/eventboat/internal/store"
+	"github.com/eventboat/eventboat/internal/verify"
 )
 
 // cmdExplain renders the deterministic pipeline walkthrough: symbolic by
 // default, message-level with --message (CEL edges really evaluated,
 // Starlark scripts really dry-run — the sandbox is deterministic), plus
-// --topology for mermaid + ASCII renderings (§3.3).
+// --topology for mermaid + ASCII renderings (§3.3). It delegates to the
+// shared ops explain entry (candidate 05): --at behaves identically here and
+// on MCP/Admin.
 func cmdExplain(args []string, jsonOut bool) int {
 	fs := flag.NewFlagSet("explain", flag.ContinueOnError)
 	configPath := fs.String("config", "", "pipeline configuration file")
@@ -46,54 +48,50 @@ func cmdExplain(args []string, jsonOut bool) int {
 		fmt.Fprintf(os.Stderr, "explain: %v\n", err)
 		return 2
 	}
-	lr := config.LoadFile(*configPath)
-	if lr.HasErrors() {
-		printDiagsStderr(lr.Diagnostics)
-		return 1
-	}
-	pip, diags := ir.Build(lr.Pipeline, reg, starhost.DefaultOptions(), nil)
-	if pip == nil {
-		printDiagsStderr(diags)
+	res := verify.File(*configPath, reg, verify.Options{})
+	if res.Pipeline == nil {
+		printDiagsStderr(res.Diagnostics)
 		return 1
 	}
 
-	if *topology {
-		if jsonOut {
-			b, _ := json.Marshal(map[string]string{"mermaid": explain.TopologyMermaid(pip), "ascii": explain.TopologyASCII(pip)})
-			fmt.Println(string(b))
-		} else {
-			fmt.Println(explain.TopologyMermaid(pip))
-			fmt.Println()
-			fmt.Print(explain.TopologyASCII(pip))
-		}
-		return 0
-	}
-
-	opts := explain.Options{EntryNode: *entry}
+	req := ops.ExplainRequest{EntryNode: *entry, Topology: *topology}
 	if *message != "" {
 		raw, err := os.ReadFile(*message)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "explain: read message: %v\n", err)
 			return 2
 		}
-		opts.Message = raw
+		req.Message = raw
 	}
-	trace, err := explain.Trace(pip, opts)
-	if err != nil && trace == "" {
+	out, err := ops.ExplainPipeline(res.Pipeline, req)
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "explain: %v\n", err)
 		return 2
 	}
-	fmt.Print(trace)
+	if *topology {
+		if jsonOut {
+			b, _ := json.Marshal(map[string]string{"mermaid": out.Mermaid, "ascii": out.ASCII})
+			fmt.Println(string(b))
+		} else {
+			fmt.Println(out.Mermaid)
+			fmt.Println()
+			fmt.Print(out.ASCII)
+		}
+		return 0
+	}
+	fmt.Print(out.Trace)
 	return 0
 }
 
 // cmdReplay re-injects dead letters, spool windows or one job run's dead
 // letters into a live pipeline (§3.3). --dry-run explains instead of
-// delivering.
+// delivering. Dead-letter selection (filter compilation with the pipeline's
+// constants, ids/limit ordering, the codec-carrying request) is the shared
+// dlq contract; this verb only chooses the transport (a local engine).
 func cmdReplay(args []string, jsonOut bool) int {
 	fs := flag.NewFlagSet("replay", flag.ContinueOnError)
 	configPath := fs.String("config", "", "pipeline configuration file")
-	dlq := fs.Bool("dlq", false, "replay dead letters (filtered by --since/--where)")
+	dlqMode := fs.Bool("dlq", false, "replay dead letters (filtered by --since/--where)")
 	spoolMode := fs.Bool("spool", false, "replay a spool window from --from <seq>")
 	jobRun := fs.String("job", "", "replay one job run's dead letters (run-id)")
 	since := fs.String("since", "", "duration filter for --dlq (e.g. 2h)")
@@ -115,7 +113,7 @@ func cmdReplay(args []string, jsonOut bool) int {
 		return 2
 	}
 	modes := 0
-	for _, m := range []bool{*dlq, *spoolMode, *jobRun != ""} {
+	for _, m := range []bool{*dlqMode, *spoolMode, *jobRun != ""} {
 		if m {
 			modes++
 		}
@@ -134,31 +132,19 @@ func cmdReplay(args []string, jsonOut bool) int {
 		fmt.Fprintf(os.Stderr, "replay: %v\n", err)
 		return 2
 	}
-	lr := config.LoadFile(*configPath)
-	if lr.HasErrors() {
-		printDiagsStderr(lr.Diagnostics)
+	res := verify.File(*configPath, reg, verify.Options{})
+	if res.Pipeline == nil {
+		printDiagsStderr(res.Diagnostics)
 		return 1
 	}
-	if lr.Pipeline.IsJob() {
+	pip := res.Pipeline
+	if pip.Config.IsJob() {
 		fmt.Fprintln(os.Stderr, "replay: replaying into a job pipeline re-runs its transforms; continuous-style reinjection is intended (job runs replay via --job)")
 	}
-	pip, diags := ir.Build(lr.Pipeline, reg, starhost.DefaultOptions(), nil)
-	if pip == nil {
-		printDiagsStderr(diags)
-		return 1
-	}
 
-	// Collect the messages to replay.
-	type item struct {
-		id    int64 // dead letter id (0 for spool rows)
-		node  string
-		msgID string
-		codec string // dead letter codec / spooled codec (identity travels with the message)
-		raw   []byte
-		meta  map[string]any
-	}
-	var items []item
-	var dlIDs []int64
+	// Collect the messages to replay: one shared request shape for both
+	// transports (candidate 05), carrying codec identity with the payload.
+	var items []dlq.Request
 
 	owner := newStoreOwner(runtimecfg.Storage{DataDir: *dataDir, Ephemeral: *ephemeral})
 	defer func() { _ = owner.Close() }()
@@ -169,19 +155,15 @@ func cmdReplay(args []string, jsonOut bool) int {
 	}
 
 	switch {
-	case *dlq || *jobRun != "":
+	case *dlqMode || *jobRun != "":
 		var dls []store.DeadLetter
 		if *jobRun != "" {
 			dls, err = st.DeadLettersForRun(pip.Config.Name, *jobRun)
 		} else {
-			sinceT := time.Time{}
-			if *since != "" {
-				d, err := config.ParseDuration(*since)
-				if err != nil {
-					fmt.Fprintf(os.Stderr, "replay: --since %q: %v\n", *since, err)
-					return 2
-				}
-				sinceT = time.Now().Add(-d)
+			sinceT, serr := dlq.Since(*since, time.Now())
+			if serr != nil {
+				fmt.Fprintf(os.Stderr, "replay: %v\n", serr)
+				return 2
 			}
 			dls, err = st.DeadLettersSince(pip.Config.Name, sinceT)
 		}
@@ -189,56 +171,20 @@ func cmdReplay(args []string, jsonOut bool) int {
 			fmt.Fprintf(os.Stderr, "replay: %v\n", err)
 			return 2
 		}
-		idFilter := map[int64]bool{}
-		if *ids != "" {
-			for _, part := range strings.Split(*ids, ",") {
-				if id, err := strconv.ParseInt(strings.TrimSpace(part), 10, 64); err == nil {
-					idFilter[id] = true
-					dlIDs = append(dlIDs, id)
-				}
-			}
-		}
-		var wherePred *celhost.Predicate
-		if *where != "" {
-			env, err := celhost.NewEnv(pip.Constants, nil)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "replay: %v\n", err)
-				return 2
-			}
-			wherePred, err = env.Compile(*where)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "replay: --where %q: %v\n", *where, err)
-				return 2
-			}
-		}
-		for _, dl := range dls {
-			if len(items) >= *limit {
-				break
-			}
-			if len(idFilter) > 0 && !idFilter[dl.ID] {
-				continue
-			}
-			if wherePred != nil {
-				var payload any
-				_ = json.Unmarshal(dl.Raw, &payload)
-				ok, evalErr := wherePred.Eval(payload, dl.Meta)
-				if evalErr != nil || !ok {
-					continue
-				}
-			}
-			node := dl.Node
-			if *at != "" {
-				node = *at
-			}
-			items = append(items, item{id: dl.ID, node: node, msgID: dl.MessageID, codec: dl.Codec, raw: dl.Raw, meta: dl.Meta})
-			if dl.ID > 0 {
-				dlIDs = append(dlIDs, dl.ID) // eligible for --delete
-			}
+		items, err = dlq.Select(dls, dlq.Filter{
+			Where: *where,
+			IDs:   parseIDs(*ids),
+			Limit: *limit,
+			At:    *at,
+		}, pip.Constants)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "replay: %v\n", err)
+			return 2
 		}
 	case *spoolMode:
 		last := int64(*from) - 1
 		for {
-			var batch []item
+			var batch []dlq.Request
 			l, more, err := st.ReplayPage(pip.Config.Name, last, 200, func(seq int64, msg registry.Message, _ time.Time) error {
 				if *to > 0 && seq > int64(*to) {
 					return errStopPaging
@@ -250,7 +196,7 @@ func cmdReplay(args []string, jsonOut bool) int {
 				if *at != "" {
 					node = *at
 				}
-				batch = append(batch, item{node: node, msgID: msg.ID, codec: msg.Codec, raw: msg.Raw, meta: msg.Meta})
+				batch = append(batch, dlq.Request{Node: node, MessageID: msg.ID, Codec: msg.Codec, Raw: msg.Raw, Meta: msg.Meta})
 				return nil
 			})
 			_ = l
@@ -278,13 +224,13 @@ func cmdReplay(args []string, jsonOut bool) int {
 	// --dry-run: explain each message's predicted path; no engine, no sinks.
 	if *dryRun {
 		for _, it := range items {
-			fmt.Printf("--- %s (node %s)\n", it.msgID, it.node)
-			trace, err := explain.Trace(pip, explain.Options{Message: it.raw, EntryNode: entryNodeFor(pip, it.node)})
+			fmt.Printf("--- %s (node %s)\n", it.MessageID, it.Node)
+			out, err := ops.ExplainPipeline(pip, ops.ExplainRequest{Message: it.Raw, EntryNode: entryNodeFor(pip, it.Node)})
 			if err != nil {
 				fmt.Printf("  explain error: %v\n", err)
 				continue
 			}
-			for _, line := range strings.Split(strings.TrimRight(trace, "\n"), "\n") {
+			for _, line := range strings.Split(strings.TrimRight(out.Trace, "\n"), "\n") {
 				fmt.Println("  " + line)
 			}
 		}
@@ -320,14 +266,9 @@ func cmdReplay(args []string, jsonOut bool) int {
 	replayed := 0
 	failed := 0
 	for _, it := range items {
-		if _, err := eng.InjectReplay(it.node, registry.Message{
-			ID:    it.msgID,
-			Codec: it.codec,
-			Raw:   it.raw,
-			Meta:  it.meta,
-		}); err != nil {
+		if _, err := eng.InjectReplay(it.Node, it.Message()); err != nil {
 			failed++
-			fmt.Fprintf(os.Stderr, "replay: inject %s at %s: %v\n", it.msgID, it.node, err)
+			fmt.Fprintf(os.Stderr, "replay: inject %s at %s: %v\n", it.MessageID, it.Node, err)
 			continue
 		}
 		replayed++
@@ -341,11 +282,13 @@ func cmdReplay(args []string, jsonOut bool) int {
 	case <-time.After(5 * time.Second):
 	}
 
-	if *del && len(dlIDs) > 0 && failed == 0 {
-		if n, err := st.DeleteDeadLetters(pip.Config.Name, dlIDs); err != nil {
-			fmt.Fprintf(os.Stderr, "replay: delete dead letters: %v\n", err)
-		} else {
-			_ = n
+	// Delete only what was actually selected and replayed: `--ids` with a
+	// limit must not delete rows that were never replayed (candidate 05).
+	if *del && failed == 0 {
+		if ids := dlq.IDs(items); len(ids) > 0 {
+			if _, err := st.DeleteDeadLetters(pip.Config.Name, ids); err != nil {
+				fmt.Fprintf(os.Stderr, "replay: delete dead letters: %v\n", err)
+			}
 		}
 	}
 
@@ -359,6 +302,21 @@ func cmdReplay(args []string, jsonOut bool) int {
 		return 1
 	}
 	return 0
+}
+
+// parseIDs parses the comma-separated --ids flag; malformed entries are
+// ignored (the flag's documented shape is a list of integers).
+func parseIDs(s string) []int64 {
+	if s == "" {
+		return nil
+	}
+	var out []int64
+	for _, part := range strings.Split(s, ",") {
+		if id, err := strconv.ParseInt(strings.TrimSpace(part), 10, 64); err == nil {
+			out = append(out, id)
+		}
+	}
+	return out
 }
 
 // entryNodeFor maps an internal injection target to the explain entry: for

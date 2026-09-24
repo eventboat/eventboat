@@ -67,7 +67,7 @@ sinks:
 func buildIR(t *testing.T, reg *registry.Registry, yamlText string) (*ir.Pipeline, []config.Diagnostic) {
 	t.Helper()
 	lr := config.LoadBytes("acceptance.yaml", []byte(yamlText))
-	if lr.HasErrors() {
+	if lr.Diagnostics.HasErrors() {
 		return nil, lr.Diagnostics
 	}
 	return ir.Build(lr.Pipeline, reg, starhost.DefaultOptions(), nil)

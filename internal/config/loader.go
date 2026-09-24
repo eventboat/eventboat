@@ -6,28 +6,20 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/eventboat/eventboat/internal/framework"
 	"github.com/eventboat/eventboat/internal/fsname"
 )
 
 // Result carries the outcome of loading one configuration file.
 type Result struct {
 	Pipeline    *Pipeline
-	Diagnostics []Diagnostic
-}
-
-// HasErrors reports whether any diagnostic is an error.
-func (r *Result) HasErrors() bool {
-	for _, d := range r.Diagnostics {
-		if d.Severity == "error" {
-			return true
-		}
-	}
-	return false
+	Diagnostics Diagnostics
 }
 
 var envPattern = regexp.MustCompile(`\$\{(\??)([A-Za-z_][A-Za-z0-9_.]*)\}`)
@@ -53,20 +45,31 @@ func validName(name string) bool {
 		namePattern.MatchString(name) && !fsname.WindowsReservedName(name)
 }
 
-// LoadFile reads and parses a pipeline configuration file.
+// LoadFile reads and parses a pipeline configuration file. Relative paths in
+// the config resolve against the file's directory.
 func LoadFile(path string) *Result {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return &Result{Diagnostics: []Diagnostic{{
+		return &Result{Diagnostics: Diagnostics{{
 			Severity: "error", Code: "io_read", File: path, Line: 0,
 			Message: err.Error(), Hint: "check the file path",
 		}}}
 	}
-	return LoadBytes(path, data)
+	return LoadBytesIn(path, filepath.Dir(path), data)
 }
 
-// LoadBytes parses pipeline configuration bytes.
+// LoadBytes parses pipeline configuration bytes with the given file name;
+// relative paths resolve against the file name's directory.
 func LoadBytes(file string, data []byte) *Result {
+	return LoadBytesIn(file, filepath.Dir(file), data)
+}
+
+// LoadBytesIn parses configuration content with an explicit base directory
+// for relative paths (candidate 05): the LSP passes the document's directory,
+// Deploy the deploy directory, and a pure-text MCP/Admin submission "" so
+// relative paths resolve against the process CWD. It is the only content
+// entry; LoadFile and LoadBytes derive the base directory and delegate.
+func LoadBytesIn(file, baseDir string, data []byte) *Result {
 	res := &Result{}
 
 	var doc yaml.Node
@@ -137,6 +140,7 @@ func LoadBytes(file string, data []byte) *Result {
 	// Pass 4: structural validation with whitelists.
 	p := &Pipeline{
 		File:          file,
+		BaseDir:       baseDir,
 		Constants:     constants,
 		ConstantsUsed: cs.used,
 		EdgeDefaults:  EdgeAttrs{},
@@ -146,13 +150,9 @@ func LoadBytes(file string, data []byte) *Result {
 	}
 	res.Pipeline = p
 
-	allowedTop := map[string]bool{
-		"apiVersion": true, "kind": true, "metadata": true,
-		"edge_defaults": true, "constants": true, "limits": true,
-		"telemetry": true,
-		"run":       true, "parameters": true, "hooks": true,
-		"codecs": true, "dlq": true,
-		"sources": true, "transforms": true, "sinks": true,
+	allowedTop := map[string]bool{}
+	for _, k := range framework.TopLevelKeys {
+		allowedTop[k] = true
 	}
 	for _, kv := range mappingPairs(root) {
 		key := kv.key
@@ -160,7 +160,7 @@ func LoadBytes(file string, data []byte) *Result {
 			res.Diagnostics = append(res.Diagnostics, Diagnostic{
 				Severity: "error", Code: "cfg_unknown_top_section", File: file, Line: kv.line,
 				Message: fmt.Sprintf("unknown top-level key %q", key),
-				Hint:    "supported top-level keys: apiVersion, kind, metadata, edge_defaults, constants, limits, telemetry, run, parameters, hooks, codecs, dlq, sources, transforms, sinks",
+				Hint:    "supported top-level keys: " + strings.Join(framework.TopLevelKeys, ", "),
 			})
 		}
 	}
@@ -177,17 +177,44 @@ func LoadBytes(file string, data []byte) *Result {
 			Message: fmt.Sprintf("kind must be %q", "Pipeline"), Hint: "set kind: Pipeline",
 		})
 	}
-	if meta, ok := raw["metadata"].(map[string]any); ok {
-		if name, ok := meta["name"].(string); ok && strings.TrimSpace(name) != "" {
-			p.Name = name
+	// metadata is strictly checked (candidate 06): unknown keys and a
+	// non-mapping value are errors, not silent no-ops.
+	nameReported := false
+	if metaRaw, present := raw["metadata"]; present {
+		meta, ok := metaRaw.(map[string]any)
+		if !ok {
+			res.Diagnostics = append(res.Diagnostics, Diagnostic{
+				Severity: "error", Code: "cfg_metadata_type", File: file, Line: lines.line("metadata"),
+				Message: "metadata must be a mapping", Hint: "metadata: { name: <pipeline-name> }",
+			})
+			nameReported = true // the type error already names the field
+		} else {
+			for k := range meta {
+				if !framework.Has(framework.MetadataFields, k) {
+					res.Diagnostics = append(res.Diagnostics, Diagnostic{
+						Severity: "error", Code: "cfg_unknown_field", File: file, Line: lines.line("metadata", k),
+						Message: fmt.Sprintf("unknown metadata field %q", k),
+						Hint:    "allowed metadata fields: " + strings.Join(framework.MetadataFields, ", "),
+					})
+				}
+			}
+			if name, ok := meta["name"].(string); ok && strings.TrimSpace(name) != "" {
+				p.Name = name
+			} else if _, present := meta["name"]; present {
+				res.Diagnostics = append(res.Diagnostics, Diagnostic{
+					Severity: "error", Code: "cfg_metadata_name", File: file, Line: lines.line("metadata", "name"),
+					Message: "metadata.name must be a non-empty string", Hint: "add metadata: { name: <pipeline-name> }",
+				})
+				nameReported = true
+			}
 		}
 	}
-	if p.Name == "" {
+	if p.Name == "" && !nameReported {
 		res.Diagnostics = append(res.Diagnostics, Diagnostic{
 			Severity: "error", Code: "cfg_metadata_name", File: file, Line: lines.line("metadata", "name"),
 			Message: "metadata.name is required", Hint: "add metadata: { name: <pipeline-name> }",
 		})
-	} else if !validName(p.Name) {
+	} else if p.Name != "" && !validName(p.Name) {
 		res.Diagnostics = append(res.Diagnostics, Diagnostic{
 			Severity: "error", Code: "cfg_name_invalid", File: file, Line: lines.line("metadata", "name"),
 			Message: fmt.Sprintf("metadata.name %q must be 1-64 characters of [a-zA-Z0-9._-], start with a letter or digit, and contain no \"..\" or Windows reserved device name (CON, PRN, AUX, NUL, COM1-9, LPT1-9)", p.Name),
@@ -195,12 +222,9 @@ func LoadBytes(file string, data []byte) *Result {
 		})
 	}
 
-	if ed, ok := raw["edge_defaults"].(map[string]any); ok {
-		e := parseEdgeAttrs(file, "edge_defaults", nil, ed, lines.line("edge_defaults"), res)
-		p.EdgeDefaults = EdgeAttrs{Delivery: e.Delivery, Required: e.Required, Buffer: e.Buffer}
-	}
+	parseEdgeDefaults(file, raw, p, lines, res)
 
-	parseCodecs(file, raw, p, lines, res)
+	parseCodecs(file, raw, p, lines, res, nodeKeys(root, "codecs"))
 
 	if lim, ok := raw["limits"]; ok {
 		lm, ok := lim.(map[string]any)
@@ -253,31 +277,108 @@ func LoadBytes(file string, data []byte) *Result {
 	}
 
 	parseRun(file, raw, p, lines, res)
-	parseParameters(file, raw, p, lines, res)
-	parseHooks(file, raw, p, lines, res)
+	parseParameters(file, raw, p, lines, res, nodeKeys(root, "parameters"))
+	parseHooks(file, raw, p, lines, res, nodeKeys(root, "hooks"))
 	parseTelemetry(file, raw, p, lines, res)
 	parseDLQ(file, raw, p, lines, res)
 
-	parseSection(file, raw, "sources", SectionSource, p, lines, res)
-	parseSection(file, raw, "transforms", SectionTransform, p, lines, res)
-	parseSection(file, raw, "sinks", SectionSink, p, lines, res)
+	// Node sections are parsed in DOCUMENT order (candidate 06): Pipeline.Order
+	// is what jobs binds the cursor to, explain picks its entry node from and
+	// diagnostics iterate, so a shuffled document must still produce the
+	// order a human reads. Missing required sections are reported afterwards.
+	seenSections := map[string]bool{}
+	for _, kv := range mappingPairs(root) {
+		var section Section
+		switch kv.key {
+		case "sources":
+			section = SectionSource
+		case "transforms":
+			section = SectionTransform
+		case "sinks":
+			section = SectionSink
+		default:
+			continue
+		}
+		if seenSections[kv.key] {
+			continue
+		}
+		seenSections[kv.key] = true
+		parseSection(file, raw, kv.key, section, p, lines, res, nodeKeys(root, kv.key))
+	}
+	for _, req := range []struct {
+		key     string
+		section Section
+	}{{"sources", SectionSource}, {"transforms", SectionTransform}, {"sinks", SectionSink}} {
+		if !seenSections[req.key] {
+			parseSection(file, raw, req.key, req.section, p, lines, res, nil)
+		}
+	}
 
-	loadManifests(file, p, res)
+	loadManifests(p, res)
 
 	return res
 }
 
+// nodeKeys returns the mapping keys of one top-level container in YAML
+// document order. The node stream after pass 1 is the effective document
+// (dropped ${?VAR} keys are already gone), so the order here is exactly the
+// declaration order a human sees — the source of Pipeline.Order (candidate
+// 06). Unknown/absent containers yield nil and the caller falls back to
+// nothing to iterate.
+func nodeKeys(root *yaml.Node, container string) []string {
+	for _, kv := range mappingPairs(root) {
+		if kv.key != container {
+			continue
+		}
+		out := make([]string, 0, len(kv.val.Content)/2)
+		for _, pair := range mappingPairs(kv.val) {
+			out = append(out, pair.key)
+		}
+		return out
+	}
+	return nil
+}
+
+// orderedNames returns a container's member names in declaration order. The
+// fallback (no node stream — hand-built Result values in tests) sorts the map
+// keys so iteration stays deterministic.
+func orderedNames(order []string, m map[string]any) []string {
+	if len(order) > 0 {
+		return order
+	}
+	names := make([]string, 0, len(m))
+	for k := range m {
+		names = append(names, k)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// parseEdgeDefaults parses `edge_defaults:` and materializes the
+// pipeline-level edge defaults (candidate 06) through the shared
+// MaterializeEdgeDefaults, so the IR applies typed values instead of
+// re-expressing the same constants.
+func parseEdgeDefaults(file string, raw map[string]any, p *Pipeline, lines *lineIndex, res *Result) {
+	e := Edge{Line: lines.line("edge_defaults")}
+	if ed, ok := raw["edge_defaults"].(map[string]any); ok {
+		e = parseEdgeAttrs(file, "edge_defaults", nil, ed, lines.line("edge_defaults"), res)
+	} else if _, present := raw["edge_defaults"]; present {
+		res.Diagnostics = append(res.Diagnostics, Diagnostic{
+			Severity: "error", Code: "cfg_edge_defaults_field", File: file, Line: lines.line("edge_defaults"),
+			Message: "edge_defaults must be a mapping of edge attributes",
+			Hint:    "edge_defaults: { delivery: { retries: 3 }, required: true, buffer: { max_events: 128 } }",
+		})
+	}
+	p.EdgeDefaults = EdgeAttrs{Delivery: e.Delivery, Required: e.Required, Buffer: e.Buffer}
+	p.MaterializeEdgeDefaults()
+}
+
 // loadManifests reads the plugin manifest of every external (grpc) node.
 // Manifests keep verify static: the schema check runs against the file, not a
-// spawned process (redesign-v3-review-m3.md R5).
-func loadManifests(file string, p *Pipeline, res *Result) {
-	dir := "."
-	if i := strings.LastIndexByte(file, '/'); i >= 0 {
-		dir = file[:i]
-	}
-	if i := strings.LastIndexByte(file, '\\'); i >= 0 && i > len(dir)-1 {
-		dir = file[:i]
-	}
+// spawned process (redesign-v3-review-m3.md R5). Relative schema paths resolve
+// against the pipeline's BaseDir ("" = process CWD).
+func loadManifests(p *Pipeline, res *Result) {
+	file := p.File
 	for _, node := range p.Order {
 		var n *Node
 		if v, ok := p.Sources[node]; ok {
@@ -299,8 +400,8 @@ func loadManifests(file string, p *Pipeline, res *Result) {
 			})
 			continue
 		}
-		if !filepath.IsAbs(path) && dir != "" && dir != "." {
-			path = dir + "/" + n.Grpc.Schema
+		if !filepath.IsAbs(path) && p.BaseDir != "" {
+			path = filepath.Join(p.BaseDir, path)
 		}
 		data, err := os.ReadFile(path)
 		if err != nil {
@@ -364,13 +465,11 @@ func parseRun(file string, raw map[string]any, p *Pipeline, lines *lineIndex, re
 		return
 	}
 	for k := range rm {
-		switch k {
-		case "mode", "schedule", "overlap", "catchup_window", "skip_if_successful", "retention":
-		default:
+		if !framework.Has(framework.RunFields, k) {
 			res.Diagnostics = append(res.Diagnostics, Diagnostic{
 				Severity: "error", Code: "cfg_unknown_field", File: file, Line: lines.line("run"),
 				Message: fmt.Sprintf("unknown run field %q", k),
-				Hint:    "allowed: mode, schedule, overlap, catchup_window, skip_if_successful, retention",
+				Hint:    "allowed: " + strings.Join(framework.RunFields, ", "),
 			})
 		}
 	}
@@ -601,7 +700,7 @@ func parseDLQ(file string, raw map[string]any, p *Pipeline, lines *lineIndex, re
 // declarations — `name: { type: <codec>, ...config }`. The type-check and
 // schema validation happen at verify (ir.Build resolves against the
 // registry); the loader owns shape and the declaration map.
-func parseCodecs(file string, raw map[string]any, p *Pipeline, lines *lineIndex, res *Result) {
+func parseCodecs(file string, raw map[string]any, p *Pipeline, lines *lineIndex, res *Result, order []string) {
 	cn, present := raw["codecs"]
 	if !present {
 		return
@@ -615,7 +714,11 @@ func parseCodecs(file string, raw map[string]any, p *Pipeline, lines *lineIndex,
 		return
 	}
 	p.Codecs = map[string]*CodecDecl{}
-	for name, decl := range cm {
+	for _, name := range orderedNames(order, cm) {
+		decl, present := cm[name]
+		if !present {
+			continue
+		}
 		line := lines.line("codecs", name)
 		dm, ok := decl.(map[string]any)
 		if !ok {
@@ -643,7 +746,7 @@ func parseCodecs(file string, raw map[string]any, p *Pipeline, lines *lineIndex,
 	}
 }
 
-func parseParameters(file string, raw map[string]any, p *Pipeline, lines *lineIndex, res *Result) {
+func parseParameters(file string, raw map[string]any, p *Pipeline, lines *lineIndex, res *Result, order []string) {
 	pn, present := raw["parameters"]
 	if !present {
 		return
@@ -664,7 +767,11 @@ func parseParameters(file string, raw map[string]any, p *Pipeline, lines *lineIn
 		return
 	}
 	out := map[string]*ParameterSpec{}
-	for name, decl := range pm {
+	for _, name := range orderedNames(order, pm) {
+		decl, present := pm[name]
+		if !present {
+			continue
+		}
 		line := lines.line("parameters", name)
 		dm, ok := decl.(map[string]any)
 		if !ok {
@@ -867,7 +974,7 @@ func valueIn(v any, list []any) bool {
 
 // parseHooks validates lifecycle hooks: failure/success inline sinks
 // (plugin name as key, R14).
-func parseHooks(file string, raw map[string]any, p *Pipeline, lines *lineIndex, res *Result) {
+func parseHooks(file string, raw map[string]any, p *Pipeline, lines *lineIndex, res *Result, order []string) {
 	hn, present := raw["hooks"]
 	if !present {
 		return
@@ -881,7 +988,11 @@ func parseHooks(file string, raw map[string]any, p *Pipeline, lines *lineIndex, 
 		return
 	}
 	h := &HooksSpec{}
-	for k, v := range hm {
+	for _, k := range orderedNames(order, hm) {
+		v, present := hm[k]
+		if !present {
+			continue
+		}
 		line := lines.line("hooks", k)
 		if k != "failure" && k != "success" {
 			res.Diagnostics = append(res.Diagnostics, Diagnostic{
@@ -1098,7 +1209,7 @@ func (li *lineIndex) line(path ...string) int {
 
 type envSubstituter struct {
 	file  string
-	diags *[]Diagnostic
+	diags *Diagnostics
 }
 
 // walk applies ${VAR}/${?VAR} to every string scalar exactly once. Keys
@@ -1184,7 +1295,7 @@ func retagScalar(n *yaml.Node) {
 // substituteEnvString expands ${VAR} (unset = error) and ${?VAR} (unset =
 // omit). Dotted names (${constants.x}, ${parameters.x}) are scoping
 // references, not environment variables, and are left for later phases.
-func substituteEnvString(val string, line int, file string, diags *[]Diagnostic) (drop bool, replaced string) {
+func substituteEnvString(val string, line int, file string, diags *Diagnostics) (drop bool, replaced string) {
 	matches := envPattern.FindAllStringSubmatch(val, -1)
 	if len(matches) == 0 {
 		return false, val
@@ -1221,7 +1332,7 @@ func substituteEnvString(val string, line int, file string, diags *[]Diagnostic)
 type constantsSubstituter struct {
 	file          string
 	constants     map[string]any
-	diags         *[]Diagnostic
+	diags         *Diagnostics
 	used          map[string]bool // constants referenced via ${constants.x}
 	jobParameters bool            // pipeline is a job: ${parameters.x} passes through unresolved
 }

@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"path"
-	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -110,7 +109,7 @@ type Pipeline struct {
 // passes the declared defaults; the jobs runner passes trigger-time
 // actuals). A nil map means no parameters.
 func Build(cfg *config.Pipeline, reg *registry.Registry, starOpts starhost.Options, parameters map[string]any) (*Pipeline, []config.Diagnostic) {
-	var diags []config.Diagnostic
+	var diags config.Diagnostics
 	file := cfg.File
 	add := func(d config.Diagnostic) { diags = append(diags, d) }
 
@@ -166,7 +165,7 @@ func Build(cfg *config.Pipeline, reg *registry.Registry, starOpts starhost.Optio
 				Hint:    "declaration names and registered codec names are separate namespaces; pick another name"})
 			continue
 		}
-		c, err := reg.NewCodec(decl.Type, decl.Config, filepath.Dir(file))
+		c, err := reg.NewCodec(decl.Type, decl.Config, cfg.BaseDir)
 		if err != nil {
 			addSchemaDiags(file, &Node{Config: &config.Node{Name: decl.Name, Line: decl.Line, Plugin: decl.Type, PluginConfig: decl.Config}}, err, add)
 			continue
@@ -174,12 +173,15 @@ func Build(cfg *config.Pipeline, reg *registry.Registry, starOpts starhost.Optio
 		p.Codecs[decl.Name] = c
 	}
 
-	// Resolve edges, compile conditions, apply edge defaults.
+	// Resolve edges, compile conditions, apply the pipeline-level defaults
+	// materialized by the loader (candidate 06: no re-defaulting here; the
+	// call is idempotent and covers hand-built configs).
 	celEnv, err := celhost.NewEnv(cfg.Constants, parameters)
 	if err != nil {
 		add(config.Diagnostic{Severity: "error", Code: "expr_cel_env", File: file, Message: err.Error()})
 	}
 
+	cfg.MaterializeEdgeDefaults()
 	edgeDefaults := cfg.EdgeDefaults
 	for _, name := range p.Order {
 		to := p.Nodes[name]
@@ -188,24 +190,11 @@ func Build(cfg *config.Pipeline, reg *registry.Registry, starOpts starhost.Optio
 				From:      ce.From,
 				To:        name,
 				Line:      ce.Line,
-				Required:  true,
-				Retries:   3,
-				Backoff:   "exponential",
-				BufferMax: 128,
-			}
-			if edgeDefaults.Delivery != nil {
-				e.Retries = edgeDefaults.Delivery.Retries
-				e.Backoff = edgeDefaults.Delivery.Backoff
-				e.TimeoutMs = edgeDefaults.Delivery.TimeoutMs
-				if e.Backoff == "" {
-					e.Backoff = "exponential"
-				}
-			}
-			if edgeDefaults.Required != nil {
-				e.Required = *edgeDefaults.Required
-			}
-			if edgeDefaults.Buffer != nil {
-				e.BufferMax = edgeDefaults.Buffer.MaxEvents
+				Required:  *edgeDefaults.Required,
+				Retries:   edgeDefaults.Delivery.Retries,
+				Backoff:   edgeDefaults.Delivery.Backoff,
+				TimeoutMs: edgeDefaults.Delivery.TimeoutMs,
+				BufferMax: edgeDefaults.Buffer.MaxEvents,
 			}
 			whenText := ce.When
 			if ce.Route != "" {
@@ -328,7 +317,7 @@ func Build(cfg *config.Pipeline, reg *registry.Registry, starOpts starhost.Optio
 			} else {
 				meta, _ := reg.LookupTransform(n.Config.Plugin)
 				checkDeclaredVersion(p, n, meta.Version, file, add)
-				t, err := reg.NewTransform(n.Config.Plugin, n.Config.PluginConfig, filepath.Dir(file))
+				t, err := reg.NewTransform(n.Config.Plugin, n.Config.PluginConfig, cfg.BaseDir)
 				if err != nil {
 					addFactoryDiags(file, n, err, add)
 				} else if hasCap(meta.Capabilities, "explain-safe") {
@@ -373,13 +362,11 @@ func Build(cfg *config.Pipeline, reg *registry.Registry, starOpts starhost.Optio
 					addSchemaDiags(file, n, err, add)
 				}
 			}
-			codec := n.Config.Decoder
-			if codec == "" {
-				codec = "json"
-			}
-			if err := resolveCodec(p, reg, codec, file, n, add); err != nil {
+			// The loader materialized the decoder (default json); no
+			// downstream re-defaulting (candidate 06).
+			if err := resolveCodec(p, reg, n.Config.Decoder, file, n, add); err != nil {
 				add(config.Diagnostic{Severity: "error", Code: "codec_unknown", File: file, Line: n.Config.Line,
-					Message: fmt.Sprintf("unknown decoder %q on source %q", codec, name)})
+					Message: fmt.Sprintf("unknown decoder %q on source %q", n.Config.Decoder, name)})
 			}
 		case config.SectionSink:
 			if n.Config.Grpc != nil {
@@ -394,13 +381,9 @@ func Build(cfg *config.Pipeline, reg *registry.Registry, starOpts starhost.Optio
 					addSchemaDiags(file, n, err, add)
 				}
 			}
-			codec := n.Config.Encoder
-			if codec == "" {
-				codec = "json"
-			}
-			if err := resolveCodec(p, reg, codec, file, n, add); err != nil {
+			if err := resolveCodec(p, reg, n.Config.Encoder, file, n, add); err != nil {
 				add(config.Diagnostic{Severity: "error", Code: "codec_unknown", File: file, Line: n.Config.Line,
-					Message: fmt.Sprintf("unknown encoder %q on sink %q", codec, name)})
+					Message: fmt.Sprintf("unknown encoder %q on sink %q", n.Config.Encoder, name)})
 			}
 			if n.Config.OrderKey != "" {
 				pred, err := celEnv.Compile(n.Config.OrderKey)
@@ -424,10 +407,10 @@ func Build(cfg *config.Pipeline, reg *registry.Registry, starOpts starhost.Optio
 
 	lint(p, file, add)
 
-	if hasError(diags) {
-		return nil, diags
+	if !diags.HasErrors() {
+		return p, diags
 	}
-	return p, diags
+	return nil, diags
 }
 
 func sectionOf(cfg *config.Pipeline, name string) config.Section {
@@ -751,15 +734,6 @@ func declaredAnyBinding(text string, declared map[string]bool) bool {
 	return false
 }
 
-func hasError(diags []config.Diagnostic) bool {
-	for _, d := range diags {
-		if d.Severity == "error" {
-			return true
-		}
-	}
-	return false
-}
-
 // addSchemaDiags converts registry schema errors into line-annotated
 // diagnostics anchored at the plugin block.
 func addSchemaDiags(file string, n *Node, err error, add func(config.Diagnostic)) {
@@ -1028,7 +1002,7 @@ func resolveCodec(p *Pipeline, reg *registry.Registry, name, file string, n *Nod
 	if _, ok := reg.LookupCodec(name); !ok {
 		return fmt.Errorf("unknown codec %q", name)
 	}
-	if _, err := reg.NewCodec(name, nil, filepath.Dir(file)); err != nil {
+	if _, err := reg.NewCodec(name, nil, p.Config.BaseDir); err != nil {
 		add(config.Diagnostic{Severity: "error", Code: "codec_config", File: file, Line: n.Config.Line,
 			Message: fmt.Sprintf("codec %q: %v", name, err),
 			Hint:    "codecs that need configuration (csv/avro/protobuf) must be declared under `codecs:` and referenced by name"})

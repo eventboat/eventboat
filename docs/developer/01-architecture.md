@@ -93,10 +93,12 @@ is enforced by Go imports — each "must not" below is checkable with
 
 | Package | Owns | Must not reach into |
 |---|---|---|
-| `internal/config` | Typed pipeline config, the strict loader (`LoadBytes`), `${VAR}`/`${?VAR}`/`${constants.x}` substitution, `metadata.name` validation, sections/edges/hooks/parameters parsing | Nothing internal — a leaf package. It knows nothing of the registry or IR; plugin validity is decided later |
-| `internal/ir` | The static IR: DAG nodes/edges, compiled CEL/CESQL predicates and Starlark programs, topology checks, plugin + codec resolution, lint, job semantics. `ir.Build` *is* verify | `engine`, `store`, anything runtime. IR is built before an engine exists |
+| `internal/config` | Typed pipeline config, the strict loader (`LoadBytes`/`LoadBytesIn`), `${VAR}`/`${?VAR}`/`${constants.x}` substitution, `metadata.name` validation, sections/edges/hooks/parameters parsing, declaration order and materialized defaults | The registry or IR; plugin validity is decided later. It imports only the leaf packages `framework`/`fsname` |
+| `internal/framework` | The single source of the framework vocabulary (candidate 06): per-section node fields, top-level keys, edge attributes, reserved plugin names, node-level default constants. config, registry and the LSP read it | Pipelines, plugins or parsing — a leaf with static lists only |
+| `internal/ir` | The static IR: DAG nodes/edges, compiled CEL/CESQL predicates and Starlark programs, topology checks, plugin + codec resolution, lint, job semantics. `ir.Build` *is* the build stage — reached only through `internal/verify` in production code | `engine`, `store`, anything runtime. IR is built before an engine exists |
+| `internal/verify` | The one verify-first composition (candidate 05): `File`/`Bytes` → a `Result` carrying the built IR, the merged diagnostics and the strict verdict; the two-stage `LoadBytes` → (parameters) → `Build` form; the explicit `baseDir` rule for relative paths | Running anything — it stops at the built IR (`ops`, `cli`, `lsp`, `jobs`, `testrun` enter it) |
 | `internal/engine` | Spool admission, DAG execution, commit tracking, per-edge delivery retries, dead lettering, checkpointing, backpressure, transform/sink workers | Config parsing or expression compilation — it consumes a built `ir.Pipeline` only. It also never decodes payloads itself (codecs do) |
-| `internal/registry` | The plugin registration model: four kinds, JSON Schema validation (santhosh-tekuri), version pins, the typed struct→schema generator, `Catalog` | Any host package. A leaf — plugins register *into* it, it imports nothing internal |
+| `internal/registry` | The plugin registration model: four kinds, JSON Schema validation (santhosh-tekuri), version pins, the typed struct→schema generator, `Catalog`, and the reserved-name gate shared with config through `internal/framework` | Any host package. A leaf — plugins register *into* it; it imports only `internal/framework` |
 | `internal/registry/builtin` | All compiled-in plugins: file/cron/http_server/kafka/sql sources; script/split/wasm transforms; file/http/kafka/drop sinks; json/raw/csv/avro/protobuf codecs | Anything beyond `registry` and `wasmhost` (for the wasm transform config) |
 | `internal/lang/celhost` | CEL predicate host: env binding, compile, cost-limited eval | Nothing internal (leaf). It does not know about pipelines |
 | `internal/lang/cesqlhost` | The CESQL edge dialect (official CloudEvents parser + the `data.*` rewrite) | Nothing internal (leaf) |
@@ -110,8 +112,9 @@ is enforced by Go imports — each "must not" below is checkable with
 | `internal/admin` | Admin REST + SSE + the embedded read-only UI + the security middleware (token, Host allowlist) | Business logic — everything delegates to `ops` |
 | `internal/obs` | OpenTelemetry: one MeterProvider with Prometheus + OTLP readers, the instrument set, span helpers | Nothing internal (leaf); callers pass in pipeline/node names |
 | `internal/explain` | Deterministic walkthroughs: symbolic and message-level traces, mermaid/ASCII topology | `engine` — explain runs compiled IR, never a live engine |
-| `internal/lsp` | The language server: minimal hand-written JSON-RPC 2.0, diagnostics from the real verify path, completion, hover | Execution — it validates documents through `ops`, never runs pipelines |
+| `internal/lsp` | The language server: minimal hand-written JSON-RPC 2.0, diagnostics from the real verify path (the document's directory is the relative-path base), completion, hover | Execution — it validates documents through `internal/verify`, never runs pipelines |
 | `internal/mcpserver` | The 14 MCP tools over stdio or Streamable HTTP (official Go SDK) | Business logic — thin shells over `ops` |
+| `internal/dlq` | The dead-letter strategy surface (candidate 05): where-filter compilation with the pipeline's constants, selection order (select before delete), the codec-carrying replay request | Transports — `ops` injects into a live engine, the CLI replay builds a local engine; both assemble the shared `Request` |
 | `internal/runtimecfg` | Deployment-level `kind: Runtime` config: `storage.*`, `admin.*`, `mcp.*`, `telemetry.*` keys | Pipeline concerns; it never loads pipeline files |
 | `internal/testkit` | Injection/capture/fault-injection primitives: `ManualSource`, `CaptureSink`, `FlakySink`, `StoreWrapper`, `RegisterFakeTransform` | Production behavior — nothing in `internal/` (outside tests) may import it |
 | `internal/testrun` | The §3.2 contract-test runner: suite YAML → in-process real-engine runs with capture sinks | Only the public engine/testkit surfaces; it is itself consumed by `ops` and the CLI `test` verb |
@@ -163,10 +166,12 @@ breaking any of them is a review blocker.
 Project-level invariants that live outside the engine:
 
 - **Verify-first for every write path.** `deploy`, the admin REST write
-  surface, the MCP `deploy` tool and `eventboat run` all load and build
-  through the same `config.LoadBytes` + `ir.Build` pipeline. `ops.Verify`
-  returns diagnostics; `ops.Deploy` *fails* when verification fails. There is
-  no bypass channel (`internal/ops/ops.go`).
+  surface, the MCP `deploy` tool and `eventboat run` all verify through the
+  same composition, `internal/verify` (load → build → judge). `ops.Verify`
+  returns the same diagnostic sequence and strict verdict for the same input;
+  `ops.Deploy` *fails* when verification fails. There is no bypass channel —
+  the LSP, jobs, testrun and the CLI enter the same composition
+  (`internal/verify`, candidate 05).
 - **The engine does not parse payloads.** Raw bytes plus a codec marker are
   the spooled truth (`internal/registry/registry.go`, `Message.Raw`); decoding
   and encoding are codec plugins. Replay stays compatible with codec upgrades

@@ -5,26 +5,23 @@ package ops
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/eventboat/eventboat/internal/config"
+	"github.com/eventboat/eventboat/internal/dlq"
 	"github.com/eventboat/eventboat/internal/engine"
-	"github.com/eventboat/eventboat/internal/explain"
 	"github.com/eventboat/eventboat/internal/ir"
 	"github.com/eventboat/eventboat/internal/jobs"
-	"github.com/eventboat/eventboat/internal/lang/celhost"
-	"github.com/eventboat/eventboat/internal/lang/starhost"
 	"github.com/eventboat/eventboat/internal/obs"
 	"github.com/eventboat/eventboat/internal/registry"
 	"github.com/eventboat/eventboat/internal/store"
 	"github.com/eventboat/eventboat/internal/testrun"
+	"github.com/eventboat/eventboat/internal/verify"
 )
 
 // Options configures the service.
@@ -77,7 +74,8 @@ type managed struct {
 	name    string
 	file    string
 	cfg     *config.Pipeline
-	kind    string // "continuous" | "job" | "batch"
+	pip     *ir.Pipeline // built IR of a continuous/batch instance (nil for job)
+	kind    string       // "continuous" | "job" | "batch"
 	eng     *engine.Engine
 	jobs    *jobs.Manager
 	cancel  context.CancelFunc
@@ -239,14 +237,13 @@ func (s *Service) emit(typ string, data any) {
 func (s *Service) Catalog() registry.Catalog { return s.reg.Catalog() }
 
 // Verify statically validates a pipeline configuration (content, not path).
-func (s *Service) Verify(configContent string) []config.Diagnostic {
-	lr := config.LoadBytes("submitted.yaml", []byte(configContent))
-	diags := append([]config.Diagnostic(nil), lr.Diagnostics...)
-	if lr.Pipeline != nil {
-		_, buildDiags := ir.Build(lr.Pipeline, s.reg, starhost.DefaultOptions(), nil)
-		diags = append(diags, buildDiags...)
-	}
-	return diags
+// It is the one verify composition (internal/verify): `eventboat verify`,
+// the MCP/Admin tools and the LSP all return the same diagnostic sequence
+// and strict verdict for the same input. A pure-text submission has no
+// filesystem home, so relative paths resolve against the process CWD
+// (baseDir "").
+func (s *Service) Verify(configContent string) *verify.Result {
+	return verify.Bytes("submitted.yaml", []byte(configContent), "", s.reg, verify.Options{})
 }
 
 // Test runs a contract suite in-process against its pipeline. Agents pass
@@ -282,42 +279,34 @@ func (s *Service) Test(suiteContent, pipelineContent string) (*testrun.Report, e
 	return testrun.RunFile(suitePath, s.reg)
 }
 
-// Explain renders the deterministic walkthrough of a configuration.
-func (s *Service) Explain(configContent, message string, topology bool) (string, error) {
-	lr := config.LoadBytes("submitted.yaml", []byte(configContent))
-	if lr.HasErrors() {
-		return "", fmt.Errorf("explain: config errors: %s", firstErrText(lr.Diagnostics))
-	}
-	pip, diags := ir.Build(lr.Pipeline, s.reg, starhost.DefaultOptions(), nil)
-	if pip == nil {
-		return "", fmt.Errorf("explain: %s", firstErrText(diags))
-	}
-	if topology {
-		return explain.TopologyMermaid(pip) + "\n\n" + explain.TopologyASCII(pip), nil
-	}
-	opts := explain.Options{}
-	if message != "" {
-		opts.Message = []byte(message)
-	}
-	return explain.Trace(pip, opts)
+// Explain renders the deterministic walkthrough of a configuration through
+// the one explain entry (ExplainContent).
+func (s *Service) Explain(configContent string, req ExplainRequest) (string, error) {
+	return ExplainContent(s.reg, configContent, "", req)
 }
 
-// Deploy verifies then swaps one pipeline: drain the old instance, start the
-// new one (§3.4 iron rule: no write path bypasses verification). The
+// Deploy verifies then swaps one pipeline: verify in memory once, write the
+// deployed file, then drain the old instance and start the new one (§3.4 iron
+// rule: no write path bypasses verification; no half-deployed state). The
 // per-pipeline lifecycle mutex serializes concurrent Deploys, so two of them
 // can no longer start two managers on one store.
+//
+// The deploy directory is the config's base directory for relative paths: the
+// deployed file lives there and jobs reload it per run, so wasm/grpc paths
+// must resolve the same at deploy time and at run time.
 func (s *Service) Deploy(ctx context.Context, configContent string) (map[string]any, error) {
-	if diags := s.Verify(configContent); hasErr(diags) {
-		return nil, fmt.Errorf("deploy rejected: verify failed:\n%s", diagLines(diags))
-	}
-	lr := config.LoadBytes("submitted.yaml", []byte(configContent))
-	cfg := lr.Pipeline
-
-	// Persist the deployed config (jobs reload it per run; restarts re-read it).
-	if err := os.MkdirAll(filepath.Join(s.opts.DataDir, "pipelines"), 0o755); err != nil {
+	deployDir := filepath.Join(s.opts.DataDir, "pipelines")
+	if err := os.MkdirAll(deployDir, 0o755); err != nil {
 		return nil, err
 	}
-	file := filepath.Join(s.opts.DataDir, "pipelines", cfg.Name+".yaml")
+	res := verify.Bytes("submitted.yaml", []byte(configContent), deployDir, s.reg, verify.Options{})
+	if res.Pipeline == nil {
+		return nil, fmt.Errorf("deploy rejected: verify failed:\n%s", res.Diagnostics.ErrorLines())
+	}
+	cfg := res.Config
+
+	// Persist the deployed config (jobs reload it per run; restarts re-read it).
+	file := filepath.Join(deployDir, cfg.Name+".yaml")
 	if err := os.WriteFile(file, []byte(configContent), 0o644); err != nil {
 		return nil, err
 	}
@@ -333,7 +322,7 @@ func (s *Service) Deploy(ctx context.Context, configContent string) (map[string]
 			return nil, fmt.Errorf("deploy: pipeline %q: the previous instance did not stop; refusing to start a replacement while its runs may still be executing", cfg.Name)
 		}
 	}
-	m, err := s.startManaged(ctx, cfg, file)
+	m, err := s.startManaged(ctx, cfg, res.Pipeline, file)
 	if err != nil {
 		// The old instance is stopped and no replacement exists: the
 		// pipeline is not deployed any more. Drop the entry instead of
@@ -383,12 +372,15 @@ func (s *Service) drop(name string, want *managed) {
 	s.mu.Unlock()
 }
 
-// startManaged builds, registers and starts one instance. The cross-process
-// store lease is acquired BEFORE the store opens and released by the
-// instance's goroutine before `done` closes: one writer per pipeline store,
-// across processes (candidate 08). The caller owns the per-pipeline
+// startManaged builds, registers and starts one instance from an already
+// verified configuration. pip is the IR built by the verify composition —
+// Deploy hands its single parse through, so a continuous pipeline is never
+// built twice (candidate 05); Resume passes the instance's retained IR. The
+// cross-process store lease is acquired BEFORE the store opens and released
+// by the instance's goroutine before `done` closes: one writer per pipeline
+// store, across processes (candidate 08). The caller owns the per-pipeline
 // lifecycle mutex.
-func (s *Service) startManaged(ctx context.Context, cfg *config.Pipeline, file string) (*managed, error) {
+func (s *Service) startManaged(ctx context.Context, cfg *config.Pipeline, pip *ir.Pipeline, file string) (*managed, error) {
 	lease, err := s.opts.Stores.Acquire(cfg.Name)
 	if err != nil {
 		return nil, fmt.Errorf("deploy: pipeline %q: %w; use the admin/MCP surface against the running process (the `trigger` tool for job runs, `dlq_replay` for dead letters) instead of starting a second engine on the same store", cfg.Name, err)
@@ -398,7 +390,7 @@ func (s *Service) startManaged(ctx context.Context, cfg *config.Pipeline, file s
 	// deployed pipeline. Values ride along; cancellation is the Service's
 	// business (shutdown/Stop).
 	runCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
-	m := &managed{name: cfg.Name, file: file, cfg: cfg, cancel: cancel, done: make(chan struct{}), started: s.opts.Clock(), status: stateRunning, lease: lease}
+	m := &managed{name: cfg.Name, file: file, cfg: cfg, pip: pip, cancel: cancel, done: make(chan struct{}), started: s.opts.Clock(), status: stateRunning, lease: lease}
 	if cfg.IsJob() {
 		m.kind = "job"
 		st, err := s.opts.Stores.Open(cfg.Name)
@@ -451,11 +443,17 @@ func (s *Service) startManaged(ctx context.Context, cfg *config.Pipeline, file s
 	if cfg.IsBatch() {
 		m.kind = "batch"
 	}
-	pip, diags := ir.Build(cfg, s.reg, starhost.DefaultOptions(), nil)
 	if pip == nil {
-		cancel()
-		m.releaseLease()
-		return nil, fmt.Errorf("deploy: %s", firstErrText(diags))
+		// Defensive: Resume of an instance that never retained an IR (only
+		// possible for hand-built managers) rebuilds it here.
+		built, diags := verify.Build(cfg, s.reg, verify.Options{})
+		if built == nil {
+			cancel()
+			m.releaseLease()
+			return nil, fmt.Errorf("deploy: %s", diags.FirstErrorText())
+		}
+		pip = built
+		m.pip = built
 	}
 	st, err := s.opts.Stores.Open(cfg.Name)
 	if err != nil {
@@ -784,7 +782,8 @@ func (s *Service) recordTail(node string, msgs []registry.Message, redact []reda
 }
 
 // DeadLetterQuery filters dead letters; where is a CEL predicate over
-// {payload, meta}.
+// {payload, meta}, compiled with the pipeline's constants (the same surface
+// the CLI replay uses).
 func (s *Service) DeadLetterQuery(pipeline, since, where string, limit int) ([]store.DeadLetter, error) {
 	m, err := s.of(pipeline)
 	if err != nil {
@@ -794,41 +793,19 @@ func (s *Service) DeadLetterQuery(pipeline, since, where string, limit int) ([]s
 	if err != nil {
 		return nil, err
 	}
-	sinceT := time.Time{}
-	if since != "" {
-		d, err := config.ParseDuration(since)
-		if err != nil {
-			return nil, fmt.Errorf("--since %q: %w", since, err)
-		}
-		sinceT = time.Now().Add(-d)
+	sinceT, err := dlq.Since(since, time.Now())
+	if err != nil {
+		return nil, err
 	}
 	dls, err := st.DeadLettersSince(pipeline, sinceT)
 	if err != nil {
 		return nil, err
 	}
-	if where != "" {
-		env, err := celhost.NewEnv(nil, nil)
-		if err != nil {
-			return nil, err
-		}
-		pred, err := env.Compile(where)
-		if err != nil {
-			return nil, fmt.Errorf("--where: %w", err)
-		}
-		var kept []store.DeadLetter
-		for _, dl := range dls {
-			var payload any
-			_ = json.Unmarshal(dl.Raw, &payload)
-			if ok, evalErr := pred.Eval(payload, dl.Meta); evalErr == nil && ok {
-				kept = append(kept, dl)
-			}
-		}
-		dls = kept
+	kept, err := dlq.FilterDeadLetters(dls, dlq.Filter{Where: where, Limit: limit}, m.cfg.Constants)
+	if err != nil {
+		return nil, err
 	}
-	if limit > 0 && len(dls) > limit {
-		dls = dls[:limit]
-	}
-	return redactDeadLetters(m.cfg, dls), nil
+	return redactDeadLetters(m.cfg, kept), nil
 }
 
 // redactDeadLetters masks telemetry.redact-matched values in dead letters
@@ -857,6 +834,8 @@ func redactDeadLetters(cfg *config.Pipeline, dls []store.DeadLetter) []store.Dea
 
 // DeadLetterReplay re-injects selected dead letters into the RUNNING
 // pipeline's engine at a target node (default: each letter's origin node).
+// Selection is the shared dlq contract; the injection message carries the
+// dead letter's codec (candidate 01).
 func (s *Service) DeadLetterReplay(pipeline string, ids []int64, at string) (int, error) {
 	m, err := s.of(pipeline)
 	if err != nil {
@@ -874,21 +853,13 @@ func (s *Service) DeadLetterReplay(pipeline string, ids []int64, at string) (int
 	if err != nil {
 		return 0, err
 	}
+	reqs, err := dlq.Select(dls, dlq.Filter{IDs: ids, At: at}, m.cfg.Constants)
+	if err != nil {
+		return 0, err
+	}
 	replayed := 0
-	for _, dl := range dls {
-		if len(ids) > 0 && !containsInt(ids, dl.ID) {
-			continue
-		}
-		node := dl.Node
-		if at != "" {
-			node = at
-		}
-		if _, err := m.eng.InjectReplay(node, registry.Message{
-			ID:    dl.MessageID,
-			Codec: dl.Codec,
-			Raw:   dl.Raw,
-			Meta:  dl.Meta,
-		}); err != nil {
+	for _, req := range reqs {
+		if _, err := m.eng.InjectReplay(req.Node, req.Message()); err != nil {
 			return replayed, err
 		}
 		replayed++
@@ -979,49 +950,9 @@ func (s *Service) Resume(ctx context.Context, pipeline string) error {
 	default:
 		return fmt.Errorf("pipeline %q is %s (terminal); deploy it again to restart", pipeline, m.state())
 	}
-	if _, err := s.startManaged(ctx, m.cfg, m.file); err != nil {
+	if _, err := s.startManaged(ctx, m.cfg, m.pip, m.file); err != nil {
 		return err
 	}
 	s.emit("status", pipeline)
 	return nil
-}
-
-func containsInt(list []int64, v int64) bool {
-	for _, x := range list {
-		if x == v {
-			return true
-		}
-	}
-	return false
-}
-
-func hasErr(diags []config.Diagnostic) bool {
-	for _, d := range diags {
-		if d.Severity == "error" {
-			return true
-		}
-	}
-	return false
-}
-
-func firstErrText(diags []config.Diagnostic) string {
-	for _, d := range diags {
-		if d.Severity == "error" {
-			return d.Error()
-		}
-	}
-	if len(diags) > 0 {
-		return diags[0].Error()
-	}
-	return "unknown"
-}
-
-func diagLines(diags []config.Diagnostic) string {
-	var b strings.Builder
-	for _, d := range diags {
-		if d.Severity == "error" {
-			fmt.Fprintf(&b, "  %s\n", d.Error())
-		}
-	}
-	return b.String()
 }

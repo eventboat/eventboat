@@ -15,10 +15,10 @@ import (
 	"github.com/eventboat/eventboat/internal/config"
 	"github.com/eventboat/eventboat/internal/engine"
 	"github.com/eventboat/eventboat/internal/ir"
-	"github.com/eventboat/eventboat/internal/lang/starhost"
 	"github.com/eventboat/eventboat/internal/registry"
 	"github.com/eventboat/eventboat/internal/store"
 	"github.com/eventboat/eventboat/internal/testkit"
+	"github.com/eventboat/eventboat/internal/verify"
 )
 
 // CaseResult is the outcome of one contract case.
@@ -147,14 +147,13 @@ func RunFile(testFile string, reg *registry.Registry) (*Report, error) {
 		return nil, fmt.Errorf("%s: %w", testFile, err)
 	}
 
-	lr := config.LoadFile(pipelinePath)
-	if lr.HasErrors() {
-		return nil, fmt.Errorf("%s: pipeline %s has verify errors:\n%s", testFile, pipelinePath, formatDiags(lr.Diagnostics))
+	// One verify composition (candidate 05): the suite runs only against a
+	// configuration the same path accepts everywhere else.
+	res := verify.File(pipelinePath, reg, verify.Options{})
+	if res.Pipeline == nil {
+		return nil, fmt.Errorf("%s: pipeline %s has verify errors:\n%s", testFile, pipelinePath, formatDiags(res.Diagnostics))
 	}
-	piplineIR, diags := ir.Build(lr.Pipeline, reg, starhost.DefaultOptions(), nil)
-	if hasErrDiags(diags) {
-		return nil, fmt.Errorf("%s: pipeline %s has verify errors:\n%s", testFile, pipelinePath, formatDiags(diags))
-	}
+	piplineIR := res.Pipeline
 
 	report := &Report{Suite: spec.Suite, Pipeline: pipelinePath}
 	for _, c := range spec.Cases {
@@ -438,7 +437,7 @@ func valueEqual(got, want any) bool {
 	return fmt.Sprintf("%v", got) == fmt.Sprintf("%v", want)
 }
 
-func formatDiags(diags []config.Diagnostic) string {
+func formatDiags(diags config.Diagnostics) string {
 	var b strings.Builder
 	for _, d := range diags {
 		fmt.Fprintf(&b, "  %s\n", d.Error())
@@ -447,13 +446,4 @@ func formatDiags(diags []config.Diagnostic) string {
 		}
 	}
 	return b.String()
-}
-
-func hasErrDiags(diags []config.Diagnostic) bool {
-	for _, d := range diags {
-		if d.Severity == "error" {
-			return true
-		}
-	}
-	return false
 }

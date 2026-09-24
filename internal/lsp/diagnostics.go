@@ -34,7 +34,7 @@ type lspPosition struct {
 // toLspDiagnostics maps engine diagnostics onto LSP ranges. Engine lines
 // are 1-based; LSP positions are 0-based. Column information does not exist
 // engine-side, so a diagnostic spans the whole line.
-func toLspDiagnostics(text string, diags []config.Diagnostic) []lspDiag {
+func toLspDiagnostics(text string, diags config.Diagnostics) []lspDiag {
 	lines := strings.Split(text, "\n")
 	out := make([]lspDiag, 0, len(diags))
 	for _, d := range diags {

@@ -64,7 +64,7 @@ func registerTestPlugins(t *testing.T, reg *registry.Registry) {
 func buildPipeline(t *testing.T, reg *registry.Registry, name, yamlText string) *ir.Pipeline {
 	t.Helper()
 	lr := config.LoadBytes(name+".yaml", []byte(yamlText))
-	if lr.HasErrors() {
+	if lr.Diagnostics.HasErrors() {
 		t.Fatal(lr.Diagnostics)
 	}
 	pip, diags := ir.Build(lr.Pipeline, reg, starhost.DefaultOptions(), nil)

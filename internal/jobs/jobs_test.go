@@ -165,7 +165,7 @@ func (h *jharness) sink(id string) *recordingSink {
 func (h *jharness) buildManager(st store.Store, clock func() time.Time) *Manager {
 	h.t.Helper()
 	lr := config.LoadFile(h.yamlPath)
-	if lr.HasErrors() {
+	if lr.Diagnostics.HasErrors() {
 		h.t.Fatalf("config: %+v", lr.Diagnostics)
 	}
 	if _, diags := ir.Build(lr.Pipeline, h.reg, starhost.DefaultOptions(), nil); irHasErr(diags) {
@@ -273,7 +273,7 @@ func TestJobKill9ResumeFromWatermark(t *testing.T) {
 	// Manager 1 with a wedging sink: every write after the second wedges —
 	// rows 0..1 commit, row 2 freezes mid-delivery (a process frozen mid-job).
 	lr := config.LoadFile(h.yamlPath)
-	if lr.HasErrors() {
+	if lr.Diagnostics.HasErrors() {
 		t.Fatal(lr.Diagnostics)
 	}
 	opts := Options{Clock: time.Now, NewRunID: counterRunID()}

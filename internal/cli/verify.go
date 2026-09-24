@@ -7,8 +7,7 @@ import (
 	"os"
 
 	"github.com/eventboat/eventboat/internal/config"
-	"github.com/eventboat/eventboat/internal/ir"
-	"github.com/eventboat/eventboat/internal/lang/starhost"
+	"github.com/eventboat/eventboat/internal/verify"
 )
 
 // verifyOutput is the --json shape of the verify command.
@@ -36,41 +35,27 @@ func cmdVerify(args []string, jsonOut bool) int {
 		return 2
 	}
 
-	lr := config.LoadFile(*configPath)
-	diags := append([]config.Diagnostic{}, lr.Diagnostics...)
-	if !lr.HasErrors() {
-		_, buildDiags := ir.Build(lr.Pipeline, reg, starhost.DefaultOptions(), nil)
-		diags = append(diags, buildDiags...)
-	}
-
-	ok := true
-	for i := range diags {
-		if diags[i].Severity == "error" || (*strict && diags[i].Severity == "warning") {
-			ok = false
-		}
-	}
+	// One composition (candidate 05): the CLI reports exactly what MCP,
+	// Admin and the LSP report for the same content; only the strict policy
+	// differs, and it is applied inside the composition.
+	res := verify.File(*configPath, reg, verify.Options{Strict: *strict})
+	diags := res.Diagnostics
 
 	if jsonOut {
-		out, _ := json.MarshalIndent(verifyOutput{OK: ok, File: *configPath, Diagnostics: diags}, "", "  ")
+		out, _ := json.MarshalIndent(verifyOutput{OK: res.OK, File: *configPath, Diagnostics: diags}, "", "  ")
 		fmt.Println(string(out))
-		return exitCode(ok)
+		return exitCode(res.OK)
 	}
 
-	errors, warnings := 0, 0
+	errors, warnings := len(diags.Errors()), len(diags.Warnings())
 	for _, d := range diags {
 		fmt.Println(d.Error())
 		if d.Hint != "" {
 			fmt.Printf("    hint: %s\n", d.Hint)
 		}
-		switch d.Severity {
-		case "error":
-			errors++
-		case "warning":
-			warnings++
-		}
 	}
 	fmt.Printf("%s: %d error(s), %d warning(s)\n", *configPath, errors, warnings)
-	if !ok {
+	if !res.OK {
 		if *strict && warnings > 0 {
 			fmt.Println("verify failed (--strict: warnings are errors)")
 		} else {

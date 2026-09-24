@@ -5,9 +5,14 @@
 //
 // Resolution order: explicit --runtime file, then ./eventboat.yaml, then
 // defaults; CLI flags override file values.
+//
+// The decode is typed and strict (candidate 06): unknown keys AND type errors
+// are diagnosed, so `data_dir: 123`, `enable: "yes"` and `sample_ratio: -1`
+// fail loudly instead of silently falling through to defaults.
 package runtimecfg
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"strings"
@@ -15,168 +20,172 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Config is the typed Runtime configuration (kind: Runtime).
+// Config is the typed Runtime configuration (kind: Runtime). APIVersion and
+// Kind are accepted document metadata; a mismatching value is an error.
 type Config struct {
-	Storage   Storage
-	Admin     Admin
-	MCP       MCP
-	Telemetry Telemetry
+	APIVersion string    `yaml:"apiVersion"`
+	Kind       string    `yaml:"kind"`
+	Storage    Storage   `yaml:"storage"`
+	Admin      Admin     `yaml:"admin"`
+	MCP        MCP       `yaml:"mcp"`
+	Telemetry  Telemetry `yaml:"telemetry"`
 }
 
 type Storage struct {
-	DataDir   string
-	Ephemeral bool
+	DataDir   string `yaml:"data_dir"`
+	Ephemeral bool   `yaml:"ephemeral"`
 	// SpoolRetention is how many spool rows stay behind the checkpoint
 	// (spool_retention): rows older than that are history and get deleted as
 	// the checkpoint advances, bounding SQLite disk and --ephemeral memory on
 	// long runs. 0 = engine default (10_000).
-	SpoolRetention int64
+	SpoolRetention int64 `yaml:"spool_retention"`
 }
 
 type Admin struct {
-	Listen string
-	Enable bool
+	Listen string `yaml:"listen"`
+	Enable bool   `yaml:"enable"`
 	// Token is the bearer token of the admin HTTP surface (empty = none;
 	// mandatory for non-loopback binds — see internal/admin.Security).
-	Token string
+	Token string `yaml:"token"`
 }
 
 type MCP struct {
-	Enable bool
+	Enable bool `yaml:"enable"`
 }
 
 type Telemetry struct {
-	OTLPEndpoint string
-	SampleRatio  float64
-	Prometheus   bool
+	OTLPEndpoint string  `yaml:"otlp_endpoint"`
+	SampleRatio  float64 `yaml:"sample_ratio"`
+	Prometheus   bool    `yaml:"prometheus"`
 }
 
-// Default returns the defaults used when no file exists.
+// Default returns the defaults used when no file exists and the base values
+// an existing file overlays.
 func Default() Config {
 	return Config{
-		Storage:   Storage{DataDir: "data", SpoolRetention: 10_000},
-		Admin:     Admin{Listen: "127.0.0.1:7788", Enable: true},
-		MCP:       MCP{Enable: true},
-		Telemetry: Telemetry{SampleRatio: 0.1, Prometheus: true},
+		APIVersion: "eventboat/v1",
+		Kind:       "Runtime",
+		Storage:    Storage{DataDir: "data", SpoolRetention: 10_000},
+		Admin:      Admin{Listen: "127.0.0.1:7788", Enable: true},
+		MCP:        MCP{Enable: true},
+		Telemetry:  Telemetry{SampleRatio: 0.1, Prometheus: true},
 	}
 }
 
 // Load resolves the runtime configuration. path may be empty (then
-// ./eventboat.yaml is tried, falling back to defaults). Unknown keys are
-// errors — the same strictness as pipeline configs.
+// ./eventboat.yaml is tried, falling back to defaults). Absent keys keep
+// their defaults; unknown keys and type errors are errors.
 func Load(path string) (Config, error) {
-	cfg := Default()
+	defaults := Default()
 	file := path
 	if file == "" {
 		if _, err := os.Stat("eventboat.yaml"); err == nil {
 			file = "eventboat.yaml"
 		} else {
-			return cfg, nil
+			return defaults, nil
 		}
 	}
 	raw, err := os.ReadFile(file)
 	if err != nil {
-		return cfg, fmt.Errorf("runtime config: %w", err)
+		return defaults, fmt.Errorf("runtime config: %w", err)
 	}
+
+	cfg := defaults
+	dec := yaml.NewDecoder(bytes.NewReader(raw))
+	dec.KnownFields(true)
+	if err := dec.Decode(&cfg); err != nil {
+		return defaults, fmt.Errorf("runtime config %s: %w", file, err)
+	}
+	// yaml.v3 coerces scalars into string/bool fields (`data_dir: 123` becomes
+	// "123", `enable: "yes"` becomes true); reject those coercions by checking
+	// the raw document's value types against the leaf schema.
 	var doc map[string]any
 	if err := yaml.Unmarshal(raw, &doc); err != nil {
-		return cfg, fmt.Errorf("runtime config %s: %w", file, err)
+		return defaults, fmt.Errorf("runtime config %s: %w", file, err)
 	}
-	if v, ok := doc["apiVersion"].(string); ok && v != "eventboat/v1" {
-		return cfg, fmt.Errorf("runtime config %s: apiVersion must be eventboat/v1", file)
+	if err := checkScalarTypes(file, doc); err != nil {
+		return defaults, err
 	}
-	if v, ok := doc["kind"].(string); ok && v != "Runtime" {
-		return cfg, fmt.Errorf("runtime config %s: kind must be Runtime", file)
+
+	if cfg.APIVersion != "eventboat/v1" {
+		return defaults, fmt.Errorf("runtime config %s: apiVersion must be eventboat/v1", file)
 	}
-	allowed := map[string]bool{"apiVersion": true, "kind": true, "storage": true, "admin": true, "mcp": true, "telemetry": true}
-	for k := range doc {
-		if !allowed[k] {
-			return cfg, fmt.Errorf("runtime config %s: unknown key %q (allowed: storage, admin, mcp, telemetry)", file, k)
-		}
+	if cfg.Kind != "Runtime" {
+		return defaults, fmt.Errorf("runtime config %s: kind must be Runtime", file)
 	}
-	if m, ok := doc["storage"].(map[string]any); ok {
-		for k := range m {
-			switch k {
-			case "data_dir", "ephemeral", "spool_retention":
-			default:
-				return cfg, fmt.Errorf("runtime config %s: unknown storage key %q", file, k)
-			}
-		}
-		if v, ok := m["data_dir"].(string); ok && v != "" {
-			cfg.Storage.DataDir = v
-		}
-		if v, ok := m["ephemeral"].(bool); ok {
-			cfg.Storage.Ephemeral = v
-		}
-		if v, ok := anyInt(m["spool_retention"]); ok {
-			if v < 0 {
-				return cfg, fmt.Errorf("runtime config %s: storage.spool_retention must be >= 0 (rows kept behind the checkpoint)", file)
-			}
-			cfg.Storage.SpoolRetention = v
-		}
+	// Empty values keep the default (the documented "unset" spelling of a
+	// scalar); a wrong TYPE was already rejected by the typed decode.
+	if cfg.Storage.DataDir == "" {
+		cfg.Storage.DataDir = defaults.Storage.DataDir
 	}
-	if m, ok := doc["admin"].(map[string]any); ok {
-		for k := range m {
-			switch k {
-			case "listen", "enable", "token":
-			default:
-				return cfg, fmt.Errorf("runtime config %s: unknown admin key %q", file, k)
-			}
-		}
-		if v, ok := m["listen"].(string); ok && v != "" {
-			cfg.Admin.Listen = v
-		}
-		if v, ok := m["enable"].(bool); ok {
-			cfg.Admin.Enable = v
-		}
-		if v, ok := m["token"].(string); ok {
-			cfg.Admin.Token = strings.TrimSpace(v)
-		}
+	if cfg.Storage.SpoolRetention < 0 {
+		return defaults, fmt.Errorf("runtime config %s: storage.spool_retention must be >= 0 (rows kept behind the checkpoint)", file)
 	}
-	if m, ok := doc["mcp"].(map[string]any); ok {
-		for k := range m {
-			switch k {
-			case "enable":
-			default:
-				return cfg, fmt.Errorf("runtime config %s: unknown mcp key %q", file, k)
-			}
-		}
-		if v, ok := m["enable"].(bool); ok {
-			cfg.MCP.Enable = v
-		}
+	if cfg.Admin.Listen == "" {
+		cfg.Admin.Listen = defaults.Admin.Listen
 	}
-	if m, ok := doc["telemetry"].(map[string]any); ok {
-		for k := range m {
-			switch k {
-			case "otlp_endpoint", "sample_ratio", "prometheus":
-			default:
-				return cfg, fmt.Errorf("runtime config %s: unknown telemetry key %q", file, k)
-			}
-		}
-		if v, ok := m["otlp_endpoint"].(string); ok {
-			cfg.Telemetry.OTLPEndpoint = strings.TrimSpace(v)
-		}
-		if v, ok := m["sample_ratio"].(float64); ok && v > 0 {
-			cfg.Telemetry.SampleRatio = v
-		}
-		if v, ok := m["prometheus"].(bool); ok {
-			cfg.Telemetry.Prometheus = v
-		}
+	cfg.Admin.Token = strings.TrimSpace(cfg.Admin.Token)
+	cfg.Telemetry.OTLPEndpoint = strings.TrimSpace(cfg.Telemetry.OTLPEndpoint)
+	if cfg.Telemetry.SampleRatio < 0 || cfg.Telemetry.SampleRatio > 1 {
+		return defaults, fmt.Errorf("runtime config %s: telemetry.sample_ratio must be a number in [0, 1], got %v", file, cfg.Telemetry.SampleRatio)
 	}
 	return cfg, nil
 }
 
-// anyInt reads a YAML scalar that yaml.v3 decoded as int (whole numbers) or
-// float64 (decimals) — `spool_retention: 2500` arrives as int, unlike the
-// ratio-style floats elsewhere in this file.
-func anyInt(v any) (int64, bool) {
-	switch n := v.(type) {
-	case int:
-		return int64(n), true
-	case int64:
-		return n, true
-	case float64:
-		return int64(n), true
+// scalarRules is the runtime config's leaf schema: dotted path → YAML value
+// kind. It exists because yaml.v3's decoder coerces scalar tags into string
+// and bool fields; the whole-document type check is what makes
+// `data_dir: 123` and `enable: "yes"` errors instead of silent defaults or
+// silent coercions (candidate 06).
+var scalarRules = []struct{ path, kind string }{
+	{"storage.data_dir", "string"},
+	{"storage.ephemeral", "bool"},
+	{"storage.spool_retention", "int"},
+	{"admin.listen", "string"},
+	{"admin.enable", "bool"},
+	{"admin.token", "string"},
+	{"mcp.enable", "bool"},
+	{"telemetry.otlp_endpoint", "string"},
+	{"telemetry.sample_ratio", "number"},
+	{"telemetry.prometheus", "bool"},
+}
+
+func checkScalarTypes(file string, doc map[string]any) error {
+	for _, rule := range scalarRules {
+		section, key, _ := strings.Cut(rule.path, ".")
+		sec, ok := doc[section].(map[string]any)
+		if !ok {
+			continue // absent, or a non-mapping already rejected by the typed decode
+		}
+		v, ok := sec[key]
+		if !ok {
+			continue
+		}
+		if !matchesKind(v, rule.kind) {
+			return fmt.Errorf("runtime config %s: %s must be a %s, got %v (%T)", file, rule.path, rule.kind, v, v)
+		}
 	}
-	return 0, false
+	return nil
+}
+
+func matchesKind(v any, kind string) bool {
+	switch kind {
+	case "string":
+		_, ok := v.(string)
+		return ok
+	case "bool":
+		_, ok := v.(bool)
+		return ok
+	case "int":
+		_, ok := v.(int)
+		return ok
+	case "number":
+		// yaml.v3 decodes whole numbers as int and decimals as float64.
+		switch v.(type) {
+		case int, int64, float64:
+			return true
+		}
+		return false
+	}
+	return false
 }

@@ -10,7 +10,6 @@ import (
 	"errors"
 	"fmt"
 	"math/rand/v2"
-	"path/filepath"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -116,21 +115,57 @@ const DefaultHighWatermark = 10_000
 // (SQLite) and memory (--ephemeral) on long runs.
 const DefaultSpoolRetention = 10_000
 
-// DefaultOptions returns production defaults.
-func DefaultOptions() Options {
-	return Options{
-		Clock:              time.Now,
-		NewID:              func() string { return uuid.NewString() },
-		BackoffBase:        100 * time.Millisecond,
-		DLBackoff:          500 * time.Millisecond,
-		HighWatermark:      DefaultHighWatermark,
-		ChannelSize:        128,
-		BatchFlush:         time.Second,
-		DefaultTimeout:     30 * time.Second,
-		DrainTimeout:       10 * time.Second,
-		WasmSlowCallWarnMs: 5000,
-		StarOptions:        starhost.DefaultOptions(),
+// DefaultOptions returns production defaults. It is `Options{}.withDefaults()`
+// — the ONE runtime normalization path New also applies, so a hand-built
+// Options{} cannot drift from the documented defaults (candidate 06).
+func DefaultOptions() Options { return Options{}.withDefaults() }
+
+// withDefaults fills every unset runtime knob with its production default:
+// zero (or negative, where zero is meaningless) means "unset", except
+// WasmSlowCallWarnMs where a negative value explicitly disables the watchdog.
+// The zero-value StarOptions carries MaxSteps 0, which starhost.Compile also
+// treats as "the documented default budget"; setting it here keeps the two
+// layers agreeing.
+func (o Options) withDefaults() Options {
+	if o.Clock == nil {
+		o.Clock = time.Now
 	}
+	if o.NewID == nil {
+		o.NewID = func() string { return uuid.NewString() }
+	}
+	if o.BackoffBase <= 0 {
+		o.BackoffBase = 100 * time.Millisecond
+	}
+	if o.DLBackoff <= 0 {
+		o.DLBackoff = 500 * time.Millisecond
+	}
+	if o.HighWatermark <= 0 {
+		o.HighWatermark = DefaultHighWatermark
+	}
+	if o.ChannelSize <= 0 {
+		o.ChannelSize = 128
+	}
+	if o.BatchFlush <= 0 {
+		o.BatchFlush = time.Second
+	}
+	if o.DefaultTimeout <= 0 {
+		o.DefaultTimeout = 30 * time.Second
+	}
+	if o.DrainTimeout <= 0 {
+		o.DrainTimeout = 10 * time.Second
+	}
+	if o.SpoolRetention <= 0 {
+		o.SpoolRetention = DefaultSpoolRetention
+	}
+	if o.WasmSlowCallWarnMs == 0 {
+		// Negative explicitly disables; zero keeps the default watchdog so a
+		// hand-built Options{} does not silently lose it (review-2026-09).
+		o.WasmSlowCallWarnMs = 5000
+	}
+	if o.StarOptions.MaxSteps == 0 {
+		o.StarOptions = starhost.DefaultOptions()
+	}
+	return o
 }
 
 // WithLimits applies the pipeline-level limits section on top of base options
@@ -311,47 +346,14 @@ type instance struct {
 }
 
 // New builds an engine: resolves plugins and codecs, allocates channels and
-// the commit tracker. Call Run to start it.
+// the commit tracker. Call Run to start it. Options are normalized through
+// the one withDefaults path.
 func New(p *ir.Pipeline, st Store, reg *registry.Registry, opts Options) (*Engine, error) {
-	if opts.Clock == nil {
-		opts.Clock = time.Now
-	}
-	if opts.NewID == nil {
-		opts.NewID = func() string { return uuid.New().String() }
-	}
-	if opts.BackoffBase <= 0 {
-		opts.BackoffBase = 100 * time.Millisecond
-	}
-	if opts.DLBackoff <= 0 {
-		opts.DLBackoff = 500 * time.Millisecond
-	}
-	if opts.HighWatermark <= 0 {
-		opts.HighWatermark = DefaultHighWatermark
-	}
-	if opts.ChannelSize <= 0 {
-		opts.ChannelSize = 128
-	}
-	if opts.BatchFlush <= 0 {
-		opts.BatchFlush = time.Second
-	}
-	if opts.DefaultTimeout <= 0 {
-		opts.DefaultTimeout = 30 * time.Second
-	}
-	if opts.DrainTimeout <= 0 {
-		opts.DrainTimeout = 10 * time.Second
-	}
-	if opts.SpoolRetention <= 0 {
-		opts.SpoolRetention = DefaultSpoolRetention
-	}
+	opts = opts.withDefaults()
 	if opts.DLQRetention <= 0 && p.Config != nil && p.Config.DLQ != nil {
 		// No non-zero default here by design: unset dlq.retention keeps dead
 		// letters forever (they are `replay` input, not garbage).
 		opts.DLQRetention = p.Config.DLQ.Retention
-	}
-	if opts.WasmSlowCallWarnMs == 0 {
-		// Negative explicitly disables; zero keeps the default watchdog so a
-		// hand-built Options{} does not silently lose it (review-2026-09).
-		opts.WasmSlowCallWarnMs = 5000
 	}
 
 	e := &Engine{
@@ -386,11 +388,8 @@ func New(p *ir.Pipeline, st Store, reg *registry.Registry, opts Options) (*Engin
 				return nil, fmt.Errorf("source %q: %w", name, err)
 			}
 			e.sources[name] = src
-			codecName := n.Config.Decoder
-			if codecName == "" {
-				codecName = "json"
-			}
-			if _, err := e.codec(codecName, reg); err != nil {
+			// The loader materialized the decoder (candidate 06).
+			if _, err := e.codec(n.Config.Decoder, reg); err != nil {
 				return nil, fmt.Errorf("source %q: %w", name, err)
 			}
 		case config.SectionSink:
@@ -409,11 +408,8 @@ func New(p *ir.Pipeline, st Store, reg *registry.Registry, opts Options) (*Engin
 				sink = opts.SinkWrapper(name, sink)
 			}
 			e.sinks[name] = sink
-			codecName := n.Config.Encoder
-			if codecName == "" {
-				codecName = "json"
-			}
-			if _, err := e.codec(codecName, reg); err != nil {
+			// The loader materialized the encoder (candidate 06).
+			if _, err := e.codec(n.Config.Encoder, reg); err != nil {
 				return nil, fmt.Errorf("sink %q: %w", name, err)
 			}
 			e.chans[name] = make(chan *instance, channelCapacity(opts.ChannelSize, n.In))
@@ -422,7 +418,7 @@ func New(p *ir.Pipeline, st Store, reg *registry.Registry, opts Options) (*Engin
 			// sinks (spec v1.19); Init hands the plugin its constants,
 			// parameters, node logger and the slow-call advisory threshold
 			// before workers start.
-			t, err := reg.NewTransform(n.Config.Plugin, n.Config.PluginConfig, filepath.Dir(p.Config.File))
+			t, err := reg.NewTransform(n.Config.Plugin, n.Config.PluginConfig, p.Config.BaseDir)
 			if err != nil {
 				return nil, fmt.Errorf("transform %q: %w", name, err)
 			}

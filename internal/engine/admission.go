@@ -151,12 +151,16 @@ func (a *admission) admit(ctx context.Context, req admitRequest) (int64, error) 
 		}
 		msg.Meta = meta
 		if req.mode == admitLive {
+			// A source node carries its materialized decoder; injection at
+			// an internal node has no decoder, so the injected bytes are
+			// json by contract (not a config default re-application).
 			codecName := e.IR.Nodes[req.node].Config.Decoder
 			if codecName == "" {
 				codecName = "json"
 			}
 			msg.Codec = codecName
 		} else if msg.Codec == "" {
+			// Legacy spool rows recorded before the codec column existed.
 			msg.Codec = "json"
 		}
 
@@ -173,7 +177,7 @@ func (a *admission) admit(ctx context.Context, req admitRequest) (int64, error) 
 			e.Opts.Obs.RecordMessageIn(e.IR.Config.Name, req.node)
 		}
 	} else if msg.Codec == "" {
-		// Replay: the spooled codec, json default.
+		// Replay: the spooled codec; a legacy row without one is json.
 		msg.Codec = "json"
 	}
 

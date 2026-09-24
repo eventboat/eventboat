@@ -120,7 +120,7 @@ mandatory token. JSON request bodies are capped at 8 MiB
 | GET | `/admin/status.json` | status snapshot of every deployed pipeline (mode, per-node list, in-flight, checkpoint, counters, msg/s, recent runs) |
 | GET | `/admin/jobs/{pipeline}?limit=` | job run history |
 | GET | `/admin/tail/{node}?n=` | recent sampled deliveries for one node |
-| GET | `/admin/dlq/{pipeline}?since=&where=` | dead-letter query (`since` duration, `where` CEL predicate over `{payload, meta}`); response is **redacted** |
+| GET | `/admin/dlq/{pipeline}?since=&where=` | dead-letter query (`since` duration, `where` CEL predicate over `{payload, meta}` compiled with the pipeline's constants); response is **redacted** |
 | GET | `/admin/catalog.json` | the plugin catalog with versions and schemas |
 | POST | `/admin/deploy` | body `{"config": <yaml>}`; verify-first, deploy rejected on any verify error |
 | POST | `/admin/trigger/{pipeline}` | body `{"parameters": {...}, "wait": bool}`; fires a job run |
@@ -130,7 +130,7 @@ mandatory token. JSON request bodies are capped at 8 MiB
 | POST | `/admin/resume/{pipeline}` | restart a paused pipeline |
 | GET | `/admin/sse` | Server-Sent Events: `deploy`/`job`/`status` events plus a full status snapshot every second |
 | GET | `/metrics` | Prometheus exposition |
-| GET/POST/DELETE | `/mcp` | MCP Streamable HTTP (when enabled) |
+| GET/POST/DELETE | `/mcp` | MCP Streamable HTTP — registered only when `mcp.enable` is true (candidate 06); the explicit `eventboat mcp --http` command always serves it |
 | GET | `/admin/` | the embedded read-only UI (`/admin` redirects) |
 
 The **admin UI** is a single embedded HTML page (`internal/admin/ui.go`):
@@ -141,7 +141,10 @@ prompt that verifies the token against `/admin/status.json` and keeps it in
 The same operations exist as **14 MCP tools** (`internal/mcpserver`):
 `catalog`, `verify`, `test`, `explain`, `status`, `jobs`, `tail`,
 `dlq_query`, `deploy`, `trigger`, `dlq_replay`, `drain`, `pause`, `resume` —
-over stdio (`eventboat mcp --stdio`) or HTTP (`--http`).
+over stdio (`eventboat mcp --stdio`) or HTTP (`--http`). `verify` returns the
+same composition the CLI runs (candidate 05: one diagnostic sequence, one
+strict verdict), and `explain` accepts `at` — the entry node behaves
+identically on CLI, MCP and Admin.
 
 ## Log tailing
 

@@ -12,7 +12,6 @@ import (
 
 	mcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/eventboat/eventboat/internal/config"
 	"github.com/eventboat/eventboat/internal/ops"
 )
 
@@ -29,18 +28,12 @@ func NewServer(svc *ops.Service, name, version string) *mcp.Server {
 		})
 
 	mcp.AddTool(server, &mcp.Tool{Name: "verify",
-		Description: "Statically validate a pipeline configuration (YAML text): schema, topology, CEL+Starlark compilation, job rules. Returns structured diagnostics."},
+		Description: "Statically validate a pipeline configuration (YAML text): schema, topology, CEL+Starlark compilation, job rules. Returns structured diagnostics — the same composition `eventboat verify` runs."},
 		func(ctx context.Context, req *mcp.CallToolRequest, in struct {
 			Config string `json:"config" jsonschema:"the full pipeline YAML text"`
 		}) (*mcp.CallToolResult, any, error) {
-			diags := svc.Verify(in.Config)
-			ok := true
-			for _, d := range diags {
-				if d.Severity == "error" {
-					ok = false
-				}
-			}
-			return textResult(map[string]any{"ok": ok, "diagnostics": diags}), any(nil), nil
+			res := svc.Verify(in.Config)
+			return textResult(map[string]any{"ok": res.OK, "diagnostics": res.Diagnostics}), any(nil), nil
 		})
 
 	mcp.AddTool(server, &mcp.Tool{Name: "test",
@@ -57,13 +50,18 @@ func NewServer(svc *ops.Service, name, version string) *mcp.Server {
 		})
 
 	mcp.AddTool(server, &mcp.Tool{Name: "explain",
-		Description: "Deterministic walkthrough of a pipeline configuration: symbolic by default, message-level when a sample JSON is given (scripts dry-run, CEL edges evaluated). topology=true renders mermaid+ASCII."},
+		Description: "Deterministic walkthrough of a pipeline configuration: symbolic by default, message-level when a sample JSON is given (scripts dry-run, CEL edges evaluated). topology=true renders mermaid+ASCII; at selects the message-level entry node (default: first source)."},
 		func(ctx context.Context, req *mcp.CallToolRequest, in struct {
 			Config   string `json:"config" jsonschema:"the full pipeline YAML text"`
 			Message  string `json:"message,omitempty" jsonschema:"sample message JSON for message-level evaluation"`
 			Topology bool   `json:"topology,omitempty" jsonschema:"render the DAG (mermaid + ASCII) instead of a trace"`
+			At       string `json:"at,omitempty" jsonschema:"entry node for the sample message (default: first source)"`
 		}) (*mcp.CallToolResult, any, error) {
-			out, err := svc.Explain(in.Config, in.Message, in.Topology)
+			out, err := svc.Explain(in.Config, ops.ExplainRequest{
+				Message:   []byte(in.Message),
+				EntryNode: in.At,
+				Topology:  in.Topology,
+			})
 			if err != nil {
 				return nil, nil, err
 			}
@@ -200,5 +198,3 @@ func textResult(v any) *mcp.CallToolResult {
 	}
 	return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: string(b)}}}
 }
-
-var _ = config.Diagnostic{} // keep the config import for doc symmetry

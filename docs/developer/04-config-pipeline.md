@@ -27,40 +27,64 @@ tool and the admin UI all render the same structs.
    (`run.mode: job`) — anywhere else it is a `cfg_scope_unknown` error. The
    optional marker `?` is only legal for plain environment variables.
 4. **Structural validation with whitelists**: top-level keys, `metadata.name`
-   validation, the `limits`/`run`/`parameters`/`hooks`/`telemetry`/`codecs`/`dlq`
+   validation (metadata is a strictly checked mapping: unknown keys and a
+   non-mapping value are errors), the `limits`/`run`/`parameters`/`hooks`/`telemetry`/`codecs`/`dlq`
    sections, the three node sections with their framework-field whitelists,
-   and finally manifest reads for every external (`grpc:`) node.
+   and finally manifest reads for every external (`grpc:`) node. The
+   whitelists, the top-level keys, the edge attributes, the reserved plugin
+   names and the node-level default constants all come from the single leaf
+   package `internal/framework` (candidate 06) — config, registry and the LSP
+   read one vocabulary, so a name like `grpc` or `version` cannot register as
+   a plugin that config would parse as a framework field.
 
 `metadata.name` is a conservative identifier (`cfg_name_invalid`): 1–64
 characters of `[a-zA-Z0-9._-]`, starting alphanumeric, no `..` (path
 traversal), and no Windows reserved device name (CON, PRN, AUX, NUL,
 COM1-9, LPT1-9) — the name becomes the deployed file name and the store key.
 
+`Pipeline.Order` is the YAML **document order** of node declarations
+(candidate 06), preserved from the node stream: jobs binds `cursor` to the
+first source in that order, explain picks its default entry node from it and
+the diagnostics iterate it, so a shuffled document still behaves like the one
+a human reads.
+
 ## The three-section topology
 
 `sources`, `transforms`, `sinks` — each node is `name: {plugin block, ...framework
 fields}`. `depends_on` edges join them. Sources and sinks are required; the
 transforms section is optional. Exact node-level whitelists
-(`internal/config/sections.go`):
+(`internal/framework`, read by `internal/config/sections.go`) —
 
 | Section | Allowed framework fields |
 |---|---|
-| `sources` | `decoder`, `grpc`, `version` (never `depends_on`) |
+| `sources` | `decoder` (default materialized to `json`), `grpc`, `version` (never `depends_on`) |
 | `transforms` | `depends_on`, `workers`, `version` |
-| `sinks` | `depends_on`, `encoder`, `workers`, `order_key`, `batch`, `grpc`, `version` |
+| `sinks` | `depends_on`, `encoder` (default `json`), `order_key`, `batch`, `grpc`, `version` |
 
-Everything else at node level must be exactly one plugin key. Edge
-attributes (`depends_on` object elements and `edge_defaults`): `when`, `route`,
+— everything else at node level must be exactly one plugin key. `workers` is
+transform-only: `sinks.workers` was accepted and ignored before and is now
+rejected with `cfg_sink_workers` (sink concurrency is engine-owned; implement
+or refuse). Edge attributes on a `depends_on` element: `when`, `route`,
 `buffer`, `delivery`, `required`. `when` accepts a string (CEL) or
 `{lang: cel|cesql, expr: "..."}`; `route` is sugar compiled to
 `meta.route == "<name>"` and is mutually exclusive with `when`.
+`edge_defaults` accepts only `delivery`, `required` and `buffer` — a global
+default predicate is a footgun and a default route is meaningless, so
+`when`/`route` there are `cfg_edge_defaults_field` errors (candidate 06).
+Pipeline-level defaults (decoder/encoder `json`, delivery `retries: 3` /
+`backoff: exponential`, `required: true`, buffer `max_events: 128`, workers 1)
+are **materialized into the typed config at load**: downstream layers read the
+typed field instead of re-applying a default (the `json` fallback used to be
+copied in ten places).
 
 ## Runtime configuration
 
 Deployment-level settings live in a separate `kind: Runtime` document
 (`internal/runtimecfg/runtimecfg.go`), resolved from `--runtime`, then
-`./eventboat.yaml`, then defaults; CLI flags override. Unknown keys are
-errors, the same strictness as pipelines.
+`./eventboat.yaml`, then defaults; CLI flags override. The decode is **typed
+and strict** (candidate 06): unknown keys AND type errors are errors
+(`data_dir: 123`, `enable: "yes"`, `sample_ratio: -1` used to fall through to
+the defaults), and `sample_ratio` must be in `[0, 1]` (`0` = tracing off).
 
 | Key | Default | Meaning |
 |---|---|---|
@@ -70,15 +94,20 @@ errors, the same strictness as pipelines.
 | `admin.listen` | `127.0.0.1:7788` | admin listener bind address |
 | `admin.enable` | `true` | serve the admin surface (config-dir daemon mode) |
 | `admin.token` | "" | bearer token (mandatory for non-loopback binds) |
-| `mcp.enable` | `true` | serve MCP at `/mcp` next to the admin surface |
+| `mcp.enable` | `true` | register `/mcp` next to the admin surface; `false` means the daemon does not serve MCP at all (the explicit `eventboat mcp --http` command always does) |
 | `telemetry.otlp_endpoint` | "" | OTLP/HTTP push endpoint (empty = off) |
 | `telemetry.sample_ratio` | `0.1` | trace sampler ratio |
 | `telemetry.prometheus` | `true` | serve Prometheus exposition at `/metrics` |
 
-## IR resolution
+## Verify and IR resolution
 
-`ir.Build(cfg, reg, starOpts, parameters)` (`internal/ir/ir.go`) compiles
-the loaded config into the runnable IR. Per node, in order:
+Production code builds pipelines only through `internal/verify` (candidate
+05): `verify.File`/`verify.Bytes` load, build and judge in one call and
+return a `Result` with the built `*ir.Pipeline`, the merged diagnostics and
+the strict verdict; `verify.LoadBytes` + `verify.Build` is the two-stage form
+for consumers with a middle step (jobs substitutes parameters between the
+stages). `ir.Build(cfg, reg, starOpts, parameters)` is the build stage it
+wraps. Per node, in order:
 
 1. **Plugin lookup** — the plugin key must resolve in the registry
    (`plugin_unknown`) or, for external nodes, match its manifest
@@ -116,6 +145,7 @@ Every diagnostic code that exists in the code, by emitting layer. Severity
 | `cfg_api_version` | error | `apiVersion` is not `eventboat/v1` | `apiVersion must be "eventboat/v1"` |
 | `cfg_kind` | error | `kind` is not `Pipeline` | `kind must be "Pipeline"` |
 | `cfg_metadata_name` | error | `metadata.name` missing/blank | `metadata.name is required` |
+| `cfg_metadata_type` | error | `metadata` is not a mapping | `metadata must be a mapping` |
 | `cfg_name_invalid` | error | name violates charset/`..`/reserved-name rules | `metadata.name "con" must be 1-64 characters of [a-zA-Z0-9._-]...` |
 | `cfg_env_unset` | error | `${VAR}` references an unset variable | `environment variable TOKEN is not set` |
 | `cfg_constant_unknown` | error | `${constants.x}` names an undeclared constant | `unknown constant "vip"` |
@@ -146,7 +176,7 @@ Every diagnostic code that exists in the code, by emitting layer. Severity
 | `cfg_parameters_decl` | error | any parameter-declaration rule: type mismatch, bad enum/pattern/min/max, default violating constraints, `required` + `default` |
 | `cfg_hooks_type` | error | `hooks` not a mapping |
 | `cfg_hooks_sink` | error | unknown hook name, or hook not exactly one inline sink block |
-| `cfg_unknown_field` | error | unknown field inside `limits`, `run`, `retention`, `dlq`, `parameters`, `grpc`, `batch`, edge attribute blocks, `when` objects, `buffer`, `delivery` |
+| `cfg_unknown_field` | error | unknown field inside `metadata`, `limits`, `run`, `retention`, `dlq`, `parameters`, `grpc`, `batch`, edge attribute blocks, `when` objects, `buffer`, `delivery` |
 
 ### Loader/sections: nodes and edges
 
@@ -157,6 +187,7 @@ Every diagnostic code that exists in the code, by emitting layer. Severity
 | `cfg_empty_section` | error | a section present but empty |
 | `cfg_node_type` | error | a node is not a mapping |
 | `cfg_source_with_depends_on` | error | a source declares `depends_on` (sources have no in-edges) |
+| `cfg_sink_workers` | error | a sink declares `workers` (not implemented; sink concurrency is engine-owned) |
 | `cfg_from_renamed` | error | node still uses the old `from` key, renamed to `depends_on` (migration diagnostic) |
 | `cfg_missing_plugin` | error | node has no plugin block |
 | `cfg_multiple_plugins` | error | node has more than one plugin block |
@@ -166,6 +197,7 @@ Every diagnostic code that exists in the code, by emitting layer. Severity
 | `cfg_when_type` | error | `when` empty, not a string/object, or `expr` empty |
 | `cfg_when_lang` | error | `when.lang` not `cel`/`cesql` |
 | `cfg_when_route_exclusive` | error | `when` and `route` on one edge |
+| `cfg_edge_defaults_field` | error | `edge_defaults` is not a mapping, or declares `when`/`route` (only `delivery`/`required`/`buffer` are allowed) |
 | `cfg_route_type` | error | `route` not a non-empty name |
 | `cfg_required_type` | error | `required` not a boolean |
 | `cfg_buffer_type` | error | `buffer` not a mapping; `type` not `memory` |

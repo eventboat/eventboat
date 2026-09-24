@@ -22,7 +22,7 @@ func testReg(t *testing.T) *registry.Registry {
 func build(t *testing.T, yamlText string) (*Pipeline, []config.Diagnostic) {
 	t.Helper()
 	lr := config.LoadBytes("p.yaml", []byte(yamlText))
-	if lr.HasErrors() {
+	if lr.Diagnostics.HasErrors() {
 		return nil, lr.Diagnostics
 	}
 	return Build(lr.Pipeline, testReg(t), starhost.DefaultOptions(), nil)

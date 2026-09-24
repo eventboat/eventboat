@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/eventboat/eventboat/internal/framework"
 )
 
 // Section identifies which of the three topology sections a node belongs to.
@@ -59,7 +61,13 @@ func itoa(n int) string {
 
 // Pipeline is the typed form of a pipeline configuration file.
 type Pipeline struct {
-	File          string
+	File string
+	// BaseDir is the directory relative paths resolve against: the pipeline
+	// file's directory for path-based loads, an explicit baseDir for
+	// content-based entries ("" = the process CWD — the documented rule for
+	// pure-text MCP/Admin submissions). It is the one authority the loader
+	// (grpc manifests) and the IR (wasm/codec paths) read.
+	BaseDir       string
 	Name          string
 	Constants     map[string]any
 	ConstantsUsed map[string]bool // constants referenced via ${constants.x} (pre-substitution truth)
@@ -74,7 +82,9 @@ type Pipeline struct {
 	Sources       map[string]*Node
 	Transforms    map[string]*Node
 	Sinks         map[string]*Node
-	// Order preserves a deterministic listing of all node names.
+	// Order is the YAML document order of node declarations (candidate 06):
+	// the loader fills it from the node stream, and jobs (cursor binding),
+	// explain (entry node) and diagnostics iterate it.
 	Order []string
 }
 
@@ -235,6 +245,27 @@ type EdgeAttrs struct {
 	Delivery *Delivery
 	Required *bool
 	Buffer   *BufferConfig
+}
+
+// MaterializeEdgeDefaults fills every unset pipeline-level edge default from
+// the framework constants (candidate 06): decoder/encoder, delivery, required
+// and buffer are resolved once at load, so the IR applies typed values
+// instead of re-expressing defaults. Idempotent — the loader calls it at load
+// and ir.Build calls it again so a hand-built Pipeline cannot produce nil
+// edge defaults.
+func (p *Pipeline) MaterializeEdgeDefaults() {
+	if p.EdgeDefaults.Delivery == nil {
+		p.EdgeDefaults.Delivery = &Delivery{Retries: framework.DeliveryRetriesDefault, Backoff: framework.DeliveryBackoffDefault}
+	} else if p.EdgeDefaults.Delivery.Backoff == "" {
+		p.EdgeDefaults.Delivery.Backoff = framework.DeliveryBackoffDefault
+	}
+	if p.EdgeDefaults.Required == nil {
+		required := true
+		p.EdgeDefaults.Required = &required
+	}
+	if p.EdgeDefaults.Buffer == nil {
+		p.EdgeDefaults.Buffer = &BufferConfig{Type: "memory", MaxEvents: framework.BufferMaxDefault}
+	}
 }
 
 // Delivery is the per-edge delivery policy.
