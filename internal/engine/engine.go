@@ -289,17 +289,17 @@ type Engine struct {
 	Opts    Options
 	Metrics Metrics
 
-	commit     *commitTracker
-	chans      map[string]chan *instance
-	sinks      map[string]registry.Sink
-	codecs     map[string]registry.Codec // resolved by codec name
+	commit *commitTracker
+	chans  map[string]chan *instance
+	sinks  map[string]registry.Sink
+	codecs map[string]registry.Codec // resolved by codec name
 	// codecMu guards the lazy codecs cache: source goroutines (entry
 	// decode), sink workers (encode) and operator replays/injections
 	// (dispatchInternal) resolve concurrently, and a foreign codec name — a
 	// replayed row whose codec the running config no longer declares — can
 	// be un-cached (adversarial review 2026-09-24: an unguarded map write
 	// here was a concurrent-map-write panic).
-	codecMu sync.Mutex
+	codecMu    sync.Mutex
 	sources    map[string]registry.Source
 	transforms map[string]registry.Transform
 
