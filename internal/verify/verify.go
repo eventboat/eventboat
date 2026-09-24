@@ -31,11 +31,18 @@ import (
 // Options tunes the composition. Strict is the --strict policy; Star carries
 // the Starlark sandbox options (zero value = the documented default budget);
 // Parameters are resolved job parameter values (nil for non-job pipelines
-// and for the declarative verify pass, which fills declared defaults).
+// and for the declarative verify pass, which fills declared defaults);
+// ForExplain selects the retaining instance lifecycle (candidate 09).
 type Options struct {
 	Strict     bool
 	Star       starhost.Options
 	Parameters map[string]any
+	// ForExplain retains explain-safe transform instances on the built
+	// pipeline so explain can dry-run them; the caller owns the pipeline and
+	// must call ir.Pipeline.Close when done. The default verify-only build
+	// closes every instance immediately — nothing outlives it, failure paths
+	// included.
+	ForExplain bool
 }
 
 // Result is the verdict of one composition: the typed configuration, the
@@ -61,8 +68,12 @@ func LoadBytes(name string, content []byte, baseDir string) *config.Result {
 
 // Build is the second stage of the two-stage form: it compiles the (possibly
 // parameter-substituted) typed configuration into the IR. It is the only
-// production build entry.
+// production build entry; Options.ForExplain selects the retaining instance
+// lifecycle.
 func Build(cfg *config.Pipeline, reg *registry.Registry, opts Options) (*ir.Pipeline, config.Diagnostics) {
+	if opts.ForExplain {
+		return ir.BuildForExplain(cfg, reg, opts.Star, opts.Parameters)
+	}
 	return ir.Build(cfg, reg, opts.Star, opts.Parameters)
 }
 

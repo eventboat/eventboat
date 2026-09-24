@@ -123,10 +123,28 @@ wraps. Per node, in order:
    ABI exports (`expr_wasm_compile`), sources/sinks run their typed build
    functions (cross-field rules JSON Schema cannot express live here).
 
-Transform instances declaring `explain-safe` are kept on the IR for explain
-dry-runs; others are closed immediately. Then: codec resolution
+Transform instances declaring `explain-safe` are retained on the IR for
+explain dry-runs — but only in the retaining build (`verify.Options.ForExplain`,
+used by the CLI/`ops` explain entries and `replay --dry-run`); the default
+verify-only build validates every instance and closes it immediately, failure
+paths included, so nothing outlives a verify. An explain caller owns the
+pipeline and closes the retained instances with `ir.Pipeline.Close` when the
+walkthrough is done. Others (wasm — explain never executes guest code) are
+always closed immediately. Then: codec resolution
 (`codec_unknown`, `codec_config`), order-key compilation, topological sort,
 job semantics, telemetry pattern checks and lint.
+
+`explain` renders the **resolved** semantics (candidate 09), never a
+per-plugin re-derivation: the sample message is decoded with the entry
+source's declared decoder (the same codec instance the engine resolves — a
+`raw`/csv source is not fed JSON), each edge predicate is evaluated once per
+walk, every inbound edge of a sink is rendered with its own delivery policy
+plus the engine's mixed-batch rule (max retries, max explicit timeout; the
+default timeout applies only when no edge in the batch sets one), and a
+`required: false` edge shows its terminal drop — the engine drops and commits
+the message instead of dead-lettering it. A wasm symbolic line shows the
+resolved per-invoke mode (`fast mode (no per-invoke kill switch)` when
+`timeout_ms` is unset).
 
 ## The diagnostics table
 

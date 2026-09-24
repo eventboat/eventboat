@@ -48,11 +48,12 @@ func cmdExplain(args []string, jsonOut bool) int {
 		fmt.Fprintf(os.Stderr, "explain: %v\n", err)
 		return 2
 	}
-	res := verify.File(*configPath, reg, verify.Options{})
+	res := verify.File(*configPath, reg, verify.Options{ForExplain: true})
 	if res.Pipeline == nil {
 		printDiagsStderr(res.Diagnostics)
 		return 1
 	}
+	defer func() { _ = res.Pipeline.Close() }()
 
 	req := ops.ExplainRequest{EntryNode: *entry, Topology: *topology}
 	if *message != "" {
@@ -132,12 +133,13 @@ func cmdReplay(args []string, jsonOut bool) int {
 		fmt.Fprintf(os.Stderr, "replay: %v\n", err)
 		return 2
 	}
-	res := verify.File(*configPath, reg, verify.Options{})
+	res := verify.File(*configPath, reg, verify.Options{ForExplain: true})
 	if res.Pipeline == nil {
 		printDiagsStderr(res.Diagnostics)
 		return 1
 	}
 	pip := res.Pipeline
+	defer func() { _ = pip.Close() }()
 	if pip.Config.IsJob() {
 		fmt.Fprintln(os.Stderr, "replay: replaying into a job pipeline re-runs its transforms; continuous-style reinjection is intended (job runs replay via --job)")
 	}

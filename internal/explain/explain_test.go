@@ -25,10 +25,14 @@ func buildPipeline(t *testing.T, yamlText string) *ir.Pipeline {
 	if lr.Diagnostics.HasErrors() {
 		t.Fatalf("config: %+v", lr.Diagnostics)
 	}
-	pip, diags := ir.Build(lr.Pipeline, reg, starhost.DefaultOptions(), nil)
+	// Explain's lifecycle: the retaining build keeps the explain-safe
+	// instances explain dry-runs; the caller closes the pipeline (candidate
+	// 09 — a verify-only build would close them immediately).
+	pip, diags := ir.BuildForExplain(lr.Pipeline, reg, starhost.DefaultOptions(), nil)
 	if pip == nil {
 		t.Fatalf("ir: %+v", diags)
 	}
+	t.Cleanup(func() { _ = pip.Close() })
 	return pip
 }
 

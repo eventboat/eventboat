@@ -450,6 +450,38 @@ hygiene findings.
   assertions, and the unknown-flavor generic-branch pin. Docs: 02-engine,
   03-plugins, 05-scripting, 06-observability, wasm.md.
 
+- **Explain renders resolved semantics (candidate 09)**: the walkthrough
+  claimed to match production but re-derived per-tier knowledge by plugin
+  name. `explain` now reads the resolutions production uses: a wasm node
+  without `timeout_ms` shows **fast mode (no per-invoke kill switch)** instead
+  of a fictional 1000 ms budget (`wasmhost.ResolveMode` is the one resolution
+  the compiler, the invoker and the renderer share), a sink renders **every**
+  inbound edge's delivery policy plus the engine's mixed-batch rule (max
+  retries and max explicit timeout; the default timeout applies only when no
+  edge in the batch sets one), a `required: false` edge shows its terminal
+  **drop** (the engine drops and commits) instead of always "dead letter",
+  the sample message is decoded with the entry source's **declared decoder**
+  (the same codec instance the engine resolves — a csv/raw source no longer
+  feeds JSON, and the `decoder %s` header claim is true), and each edge
+  predicate is evaluated exactly once per walk (it used to be evaluated twice,
+  so a stateful predicate could disagree with itself). Instance lifecycle is
+  split: the default verify-only build (`verify`, LSP, jobs, testrun) closes
+  every transform instance immediately — **including on failure paths**, so
+  the leak class is gone — while `verify.Options.ForExplain` retains the
+  explain-safe instances for dry-runs and the explain callers (CLI, MCP,
+  Admin, `replay --dry-run`) close the pipeline through the new
+  `ir.Pipeline.Close`. `wasmhost` caches compiled modules keyed by file
+  identity (path/size/mtime) plus the compile-affecting config bits (memory
+  cap, kill switch): a changed file or config recompiles, an unchanged one is
+  reused, so the LSP no longer recompiles a guest on every keystroke; the
+  cache is bounded (LRU) and reference-counts `Compiled`, so evicting an
+  entry a live invoker still uses is safe. New tests: the divergence set, a
+  comparison matrix that runs the same IR through the real engine
+  (testkit-driven) and requires the walkthrough's predictions to equal the
+  terminal states (when/route, zero-match filtering, optional drop, transform
+  dead letters, split expansion), the Init/Close lifecycle counters for both
+  build modes and the failure path, and the cache hit/invalidation/config
+  separation. Docs: wasm.md, 04-config-pipeline, 03-plugins.
 - **Admin security hardening**: the `?token=` query form is accepted on
   `/admin/sse` only (EventSource cannot set headers); every other endpoint is
   header-only, so a token leaked in a URL no longer unlocks the write

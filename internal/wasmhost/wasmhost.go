@@ -23,6 +23,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/tetratelabs/wazero"
@@ -32,6 +33,43 @@ import (
 
 // DefaultMaxMemoryPages caps guest memory when max_memory_pages is unset.
 const DefaultMaxMemoryPages = 512 // 32 MiB
+
+// Mode is the resolved per-invoke execution mode of one wasm node: Timeout 0
+// is fast mode (no per-invoke deadline and no kill switch — the documented
+// default), a positive value is the per-invoke wall-clock budget. Compile
+// (the runtime's kill-switch instrumentation), NewInvoker (the per-invoke
+// deadline) and explain (the rendered mode) all read this one resolution, so
+// the walkthrough can never disagree with the engine about which mode a node
+// runs in.
+type Mode struct {
+	Timeout time.Duration
+}
+
+// Fast reports fast mode: no deadline and no kill switch.
+func (m Mode) Fast() bool { return m.Timeout <= 0 }
+
+// ResolveMode derives the mode from the node configuration: nil and a
+// non-positive timeout_ms both resolve to fast mode (the schema's documented
+// default).
+func ResolveMode(cfg *Config) Mode {
+	if cfg == nil || cfg.TimeoutMs <= 0 {
+		return Mode{}
+	}
+	return Mode{Timeout: time.Duration(cfg.TimeoutMs) * time.Millisecond}
+}
+
+// resolvePages is the one memory-cap resolution Compile and the module cache
+// key share.
+func resolvePages(cfg *Config) uint32 {
+	pages := 0
+	if cfg != nil {
+		pages = cfg.MaxMemoryPages
+	}
+	if pages <= 0 {
+		pages = DefaultMaxMemoryPages
+	}
+	return uint32(pages)
+}
 
 // Kind classifies a host failure where it is created, so the plugin adapter
 // maps it onto a registry.FailureKind without matching error text.
@@ -80,25 +118,26 @@ type Config struct {
 // (M3-audit J2: the performance tier defaults to fast; verify warns on
 // unset; a runaway guest then wedges its worker until the pipeline
 // restarts, which the slow-call watchdog makes visible).
+//
+// Compile goes through the module cache (cache.go): repeated verifies of an
+// unchanged module (the LSP on every keystroke) reuse the compiled artifact,
+// a changed file or a changed compile-affecting config recompiles.
 func Compile(ctx context.Context, path string, cfg *Config) (*Compiled, error) {
+	key, err := cacheKeyFor(path, cfg)
+	if err != nil {
+		return nil, err
+	}
+	if c := cacheLookup(key); c != nil {
+		return c, nil
+	}
 	wasmBytes, err := os.ReadFile(path)
 	if err != nil {
 		return nil, kindError(KindCompile, "wasmhost: read module: %w", err)
 	}
-	pages := 0
-	timeout := 0
-	if cfg != nil {
-		pages = cfg.MaxMemoryPages
-		if cfg.TimeoutMs > 0 {
-			timeout = cfg.TimeoutMs
-		}
-	}
-	if pages <= 0 {
-		pages = DefaultMaxMemoryPages
-	}
+	pages := resolvePages(cfg)
 	rCfg := wazero.NewRuntimeConfig().
-		WithMemoryLimitPages(uint32(pages))
-	if timeout > 0 {
+		WithMemoryLimitPages(pages)
+	if !ResolveMode(cfg).Fast() {
 		rCfg = rCfg.WithCloseOnContextDone(true)
 	}
 	r := wazero.NewRuntimeWithConfig(ctx, rCfg)
@@ -119,17 +158,64 @@ func Compile(ctx context.Context, path string, cfg *Config) (*Compiled, error) {
 			return nil, kindError(KindCompile, "wasmhost: module %s does not export %q", path, name)
 		}
 	}
-	return &Compiled{runtime: r, module: compiled}, nil
+	c := &Compiled{runtime: r, module: compiled, refs: 1} // the caller's reference
+	cacheStore(key, c)
+	return c, nil
 }
 
-// Compiled is a shared, immutable compiled module.
+// Compiled is a shared, immutable compiled module. It is reference-counted:
+// the module cache holds one reference per entry and every Compile caller
+// holds one, so Close releases a reference and the wazero runtime is closed
+// exactly when the last one goes away (evicting a cache entry a live invoker
+// still uses is therefore safe).
 type Compiled struct {
 	runtime wazero.Runtime
 	module  wazero.CompiledModule
+
+	mu     sync.Mutex
+	refs   int
+	closed bool
 }
 
-// Close releases the runtime (after the last invoker).
+// retain registers one more user of the compiled module (the module cache).
+func (c *Compiled) retain() {
+	c.mu.Lock()
+	c.refs++
+	c.mu.Unlock()
+}
+
+// release drops the cache's reference (eviction or replacement); the runtime
+// closes when no caller holds one any more.
+func (c *Compiled) release() {
+	c.mu.Lock()
+	c.refs--
+	last := c.refs <= 0 && !c.closed
+	if last {
+		c.closed = true
+	}
+	c.mu.Unlock()
+	if last {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_ = c.runtime.Close(ctx)
+	}
+}
+
+// Close releases this caller's reference (after the last invoker). Idempotent
+// and safe to call after a cache eviction.
 func (c *Compiled) Close(ctx context.Context) error {
+	c.mu.Lock()
+	if c.closed || c.refs == 0 {
+		c.mu.Unlock()
+		return nil
+	}
+	c.refs--
+	if c.refs > 0 {
+		c.mu.Unlock()
+		return nil
+	}
+	c.closed = true
+	c.mu.Unlock()
 	return c.runtime.Close(ctx)
 }
 
@@ -140,13 +226,10 @@ func (c *Compiled) Close(ctx context.Context) error {
 // One Invoker belongs to one worker goroutine; concurrent Invokes on the
 // same Invoker are not allowed (wazero modules are not goroutine-safe, R4).
 func (c *Compiled) NewInvoker(cfg *Config, logf func(string, ...any), slowCallWarnMs int) *Invoker {
-	timeoutMs := 0 // fast mode unless a positive budget is set
+	mode := ResolveMode(cfg)
 	entry := "transform"
 	allowLog := false
 	if cfg != nil {
-		if cfg.TimeoutMs > 0 {
-			timeoutMs = cfg.TimeoutMs
-		}
 		if cfg.Entrypoint != "" {
 			entry = cfg.Entrypoint
 		}
@@ -159,7 +242,7 @@ func (c *Compiled) NewInvoker(cfg *Config, logf func(string, ...any), slowCallWa
 	return &Invoker{
 		compiled:       c,
 		entrypoint:     entry,
-		timeout:        time.Duration(timeoutMs) * time.Millisecond,
+		timeout:        mode.Timeout,
 		slowCallWarnMs: slowCallWarnMs,
 		logf:           logf,
 		allowLog:       allowLog,

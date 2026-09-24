@@ -77,12 +77,20 @@ type Node struct {
 	In  []Edge
 
 	// Transform holds the verify-time instance of the node's transform
-	// plugin when it declares the "explain-safe" capability (script, split):
-	// explain dry-runs it on scratch messages. Instances that are not
-	// explain-safe (wasm — explain must not execute guest code) are closed
-	// right after validation; the engine always instantiates its own.
+	// plugin when it declares the "explain-safe" capability (script, split)
+	// AND the build ran in the retaining mode (BuildForExplain): explain
+	// dry-runs it on scratch messages and closes it through Pipeline.Close.
+	// A verify-only build closes every instance immediately (nothing
+	// outlives the build, failure paths included), and instances that are
+	// not explain-safe (wasm — explain must not execute guest code) are
+	// always closed right after validation; the engine always instantiates
+	// its own.
 	Transform registry.Transform
-	OrderKey  *celhost.Predicate // sinks
+	// ExplainSafe records the plugin's declared capability, whether or not
+	// the build retained an instance: explain uses it to tell "not retained
+	// by a verify-only build" apart from "this plugin is not explain-safe".
+	ExplainSafe bool
+	OrderKey    *celhost.Predicate // sinks
 }
 
 // Pipeline is the compiled, ready-to-run form.
@@ -99,16 +107,69 @@ type Pipeline struct {
 	// decoder/encoder referencing a declared name resolve to these; bare
 	// registered names still instantiate through the registry (engine-side).
 	Codecs map[string]registry.Codec
+	// resolvedCodecs caches the instances the build created for bare
+	// registered decoder/encoder names, so consumers (explain's sample
+	// decode) read the same resolution the engine performs.
+	resolvedCodecs map[string]registry.Codec
+}
+
+// Codec resolves the codec instance for a decoder/encoder name: a declared
+// name resolves to the pre-instantiated declaration, a bare registered name
+// to the instance the build validated and kept. The engine performs the same
+// resolution at run time; explain decodes its sample message with it.
+func (p *Pipeline) Codec(name string) (registry.Codec, bool) {
+	if c, ok := p.Codecs[name]; ok {
+		return c, true
+	}
+	c, ok := p.resolvedCodecs[name]
+	return c, ok
+}
+
+// Close releases the transform instances a BuildForExplain build retained
+// (the explain-safe ones). A verify-only pipeline has nothing to release, so
+// Close is a no-op there; it is idempotent in both modes. Explain callers own
+// the pipeline and must call it when done.
+func (p *Pipeline) Close() error {
+	if p == nil {
+		return nil
+	}
+	var errs []error
+	for _, name := range p.Order {
+		n := p.Nodes[name]
+		if n == nil || n.Transform == nil {
+			continue
+		}
+		if err := n.Transform.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("transform %q: %w", name, err))
+		}
+		n.Transform = nil
+	}
+	return errors.Join(errs...)
 }
 
 // Build compiles a configuration into the static IR, producing diagnostics
 // for every verify finding (schema, topology, expression and script errors,
-// plus lint warnings).
+// plus lint warnings). It is the verify-only lifecycle: transform instances
+// are validated and closed immediately, so nothing outlives the build — use
+// BuildForExplain when the caller wants explain dry-runs.
 //
 // parameters carries resolved parameter values for job pipelines (verify
 // passes the declared defaults; the jobs runner passes trigger-time
 // actuals). A nil map means no parameters.
 func Build(cfg *config.Pipeline, reg *registry.Registry, starOpts starhost.Options, parameters map[string]any) (*Pipeline, []config.Diagnostic) {
+	return buildPipeline(cfg, reg, starOpts, parameters, false)
+}
+
+// BuildForExplain is Build in the retaining mode: explain-safe transform
+// instances stay on the returned pipeline for explain's dry-runs and the
+// caller MUST call Pipeline.Close when done. A build that fails returns a nil
+// pipeline and closes the instances it had retained, so error paths leak
+// nothing in either mode.
+func BuildForExplain(cfg *config.Pipeline, reg *registry.Registry, starOpts starhost.Options, parameters map[string]any) (*Pipeline, []config.Diagnostic) {
+	return buildPipeline(cfg, reg, starOpts, parameters, true)
+}
+
+func buildPipeline(cfg *config.Pipeline, reg *registry.Registry, starOpts starhost.Options, parameters map[string]any, retain bool) (*Pipeline, []config.Diagnostic) {
 	var diags config.Diagnostics
 	file := cfg.File
 	add := func(d config.Diagnostic) { diags = append(diags, d) }
@@ -134,6 +195,7 @@ func Build(cfg *config.Pipeline, reg *registry.Registry, starOpts starhost.Optio
 		Parameters:       parameters,
 		FrozenParameters: starhost.FreezeConstants(parameters),
 		StarOptions:      starOpts,
+		resolvedCodecs:   map[string]registry.Codec{},
 	}
 
 	// Materialize nodes.
@@ -320,17 +382,30 @@ func Build(cfg *config.Pipeline, reg *registry.Registry, starOpts starhost.Optio
 				t, err := reg.NewTransform(n.Config.Plugin, n.Config.PluginConfig, cfg.BaseDir)
 				if err != nil {
 					addFactoryDiags(file, n, err, add)
-				} else if hasCap(meta.Capabilities, "explain-safe") {
-					// Init binds constants/parameters so explain can dry-run
-					// the instance; the engine instantiates its own.
-					if ierr := t.Init(&registry.TransformEnv{Constants: p.Constants, Parameters: p.Parameters}); ierr != nil {
+				} else {
+					explainSafe := hasCap(meta.Capabilities, "explain-safe")
+					n.ExplainSafe = explainSafe
+					var ierr error
+					if explainSafe {
+						// Init binds constants/parameters so explain can
+						// dry-run the instance; the engine instantiates its
+						// own. Init failures are verify diagnostics in every
+						// mode.
+						ierr = t.Init(&registry.TransformEnv{Constants: p.Constants, Parameters: p.Parameters})
+					}
+					switch {
+					case ierr != nil:
 						addFactoryDiags(file, n, ierr, add)
 						_ = t.Close()
-					} else {
+					case retain && explainSafe:
 						n.Transform = t
+					default:
+						// Verify-only (or not explain-safe): the instance has
+						// done its job (validation) and is closed immediately
+						// — nothing outlives the build, failure paths
+						// included (candidate 09).
+						_ = t.Close()
 					}
-				} else {
-					_ = t.Close()
 				}
 			}
 			// Builtin lint (M3-audit J2): the wasm plugin runs guests without
@@ -409,6 +484,11 @@ func Build(cfg *config.Pipeline, reg *registry.Registry, starOpts starhost.Optio
 
 	if !diags.HasErrors() {
 		return p, diags
+	}
+	if retain {
+		// A failed build returns no pipeline: release whatever the retaining
+		// mode had kept so the error path leaks nothing.
+		_ = p.Close()
 	}
 	return nil, diags
 }
@@ -992,21 +1072,29 @@ func lint(p *Pipeline, file string, add func(config.Diagnostic)) {
 
 // resolveCodec validates the codec a decoder/encoder references: declared
 // names resolve to the pre-instantiated p.Codecs; bare names must be
-// registered codecs whose factory accepts an empty configuration. A
-// returned error means "not found" (the caller reports codec_unknown);
-// configuration failures surface here as codec_config.
+// registered codecs whose factory accepts an empty configuration, and the
+// instance is kept on the pipeline so consumers (explain's sample decode)
+// read the same resolution the engine performs. A returned error means "not
+// found" (the caller reports codec_unknown); configuration failures surface
+// here as codec_config.
 func resolveCodec(p *Pipeline, reg *registry.Registry, name, file string, n *Node, add func(config.Diagnostic)) error {
 	if _, ok := p.Codecs[name]; ok {
+		return nil
+	}
+	if _, ok := p.resolvedCodecs[name]; ok {
 		return nil
 	}
 	if _, ok := reg.LookupCodec(name); !ok {
 		return fmt.Errorf("unknown codec %q", name)
 	}
-	if _, err := reg.NewCodec(name, nil, p.Config.BaseDir); err != nil {
+	c, err := reg.NewCodec(name, nil, p.Config.BaseDir)
+	if err != nil {
 		add(config.Diagnostic{Severity: "error", Code: "codec_config", File: file, Line: n.Config.Line,
 			Message: fmt.Sprintf("codec %q: %v", name, err),
 			Hint:    "codecs that need configuration (csv/avro/protobuf) must be declared under `codecs:` and referenced by name"})
+		return nil
 	}
+	p.resolvedCodecs[name] = c
 	return nil
 }
 

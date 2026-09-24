@@ -243,7 +243,13 @@ type Transform interface {
   becomes the dead-letter class, but no per-flavor instrument exists for it.
 - Declare the `"explain-safe"` capability (script, split) if `explain` may
   dry-run your transform on scratch messages; wasm deliberately does not
-  (explain never executes guest code).
+  (explain never executes guest code). The instance lifecycle is the build's
+  choice: a verify-only build (`verify`, LSP, jobs, testrun) calls `Init` for
+  validation and closes the instance immediately — failure paths included —
+  while an explain build (`verify.Options.ForExplain`) retains it and closes
+  it through `ir.Pipeline.Close` when the walkthrough is done. Explain-safe
+  plugins must therefore tolerate `Init`/`Close` once per build and a
+  `Close` after any validation outcome; the pipeline's `Close` is idempotent.
 
 ## Error classification across plugin boundaries
 

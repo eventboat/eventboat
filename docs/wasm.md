@@ -68,9 +68,15 @@ transforms:
   discarded. Nothing else is exposed. `allow: [log]` routes the guest's
   stdout/stderr into the engine log. There is no network, no host call API.
 - **Verify compiles the module** (existence + required exports) at gate 1;
-  a broken module is a verify error, not a first-message failure. `explain`
-  does not dry-run the guest — downstream conditions are shown against the
-  pre-transform payload.
+  a broken module is a verify error, not a first-message failure. Compiled
+  modules are cached by file identity (path/size/mtime) plus the
+  compile-affecting config bits (memory cap, kill switch), so repeated
+  verifies — the LSP on every keystroke — reuse an unchanged guest and only a
+  changed file or config recompiles. `explain` does not dry-run the guest —
+  downstream conditions are shown against the pre-transform payload — and
+  its symbolic trace renders the resolved per-invoke mode (fast mode when
+  `timeout_ms` is unset, the budget when it is set) from the same resolution
+  the adapter uses, never a re-derived number.
 
 ## Guest ABI
 

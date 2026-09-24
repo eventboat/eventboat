@@ -11,10 +11,12 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/eventboat/eventboat/internal/config"
 	"github.com/eventboat/eventboat/internal/ir"
 	"github.com/eventboat/eventboat/internal/registry"
+	"github.com/eventboat/eventboat/internal/wasmhost"
 )
 
 // Options tunes the walkthrough.
@@ -52,8 +54,17 @@ func Trace(pip *ir.Pipeline, opts Options) (string, error) {
 	}
 
 	var decoded any
-	if err := json.Unmarshal(opts.Message, &decoded); err != nil {
-		return "", fmt.Errorf("explain: sample message is not JSON: %w", err)
+	// Decode the sample with the source's declared decoder — the loader
+	// materialized the default (candidate 06) and the build resolved the
+	// instance the engine would use, so the header's `decoder %s` claim is
+	// true and a csv/raw/declared source is not silently fed JSON.
+	codec, ok := pip.Codec(node.Config.Decoder)
+	if !ok {
+		return "", fmt.Errorf("explain: decoder %q of source %q is not resolvable", node.Config.Decoder, entry)
+	}
+	decoded, err := codec.Decode(opts.Message)
+	if err != nil {
+		return "", fmt.Errorf("explain: sample message is not %s: %w", node.Config.Decoder, err)
 	}
 	meta := map[string]any{
 		"message_id":   "explain",
@@ -105,37 +116,49 @@ func walk(pip *ir.Pipeline, node *ir.Node, payload any, meta map[string]any, b *
 		}
 		payload, meta = outs[0].Decoded, outs[0].Meta
 	} else if node.Section == config.SectionTransform {
-		// Not explain-safe (wasm — explain must not execute guest code; any
-		// third-party plugin that skips the capability): say so instead of
-		// silently evaluating downstream edges, which would read as
-		// post-transform output. The payload passes through unchanged
-		// (documented, docs/wasm.md).
-		if node.Config.Plugin == "wasm" {
+		// Not dry-run (wasm — explain must not execute guest code; any
+		// third-party plugin that skips the capability; or an explain-safe
+		// instance a verify-only build closed): say so instead of silently
+		// evaluating downstream edges, which would read as post-transform
+		// output. The payload passes through unchanged (documented,
+		// docs/wasm.md).
+		switch {
+		case node.Config.Plugin == "wasm":
 			fmt.Fprintf(b, "%s: transform.wasm (module %s, entrypoint %s) — guest not dry-run; downstream sees the pre-transform payload\n",
 				node.Name, wasmModule(node), wasmEntry(node))
-		} else {
+		case node.ExplainSafe:
+			fmt.Fprintf(b, "%s: %s — explain-safe instance not retained (verify-only build); downstream sees the pre-transform payload\n",
+				node.Name, transformLabel(node))
+		default:
 			fmt.Fprintf(b, "%s: %s — plugin not dry-run (not explain-safe); downstream sees the pre-transform payload\n",
 				node.Name, transformLabel(node))
 		}
 	}
 
 	matched := 0
+	// Each edge's predicate is evaluated exactly once per walk; the recursion
+	// below reuses these results (candidate 09: it used to re-evaluate).
+	evals := make([]edgeEval, 0, len(node.Out))
 	for i := range node.Out {
 		edge := &node.Out[i]
-		mark := "✗ no match"
-		if edge.When == nil {
-			mark = "always"
-			matched++
-		} else {
+		passed := edge.When == nil
+		mark := "always"
+		if edge.When != nil {
 			ok, evalErr := edge.When.Eval(payload, meta)
 			switch {
 			case evalErr != nil:
 				mark = fmt.Sprintf("✗ evaluation error (counts as not-passed): %s", evalErr.Error())
 			case ok:
 				mark = "✓ MATCH"
-				matched++
+			default:
+				mark = "✗ no match"
 			}
+			passed = evalErr == nil && ok
 		}
+		if passed {
+			matched++
+		}
+		evals = append(evals, edgeEval{edge: edge, passed: passed})
 		fmt.Fprintf(b, "  %s → %s", node.Name, edge.To)
 		if edge.WhenSource != "" {
 			fmt.Fprintf(b, "  when %s", edge.WhenSource)
@@ -148,15 +171,11 @@ func walk(pip *ir.Pipeline, node *ir.Node, payload any, meta map[string]any, b *
 		fmt.Fprintf(b, "  (zero matching edges: the message commits as filtered — eventboat_fanout_no_match_total)\n")
 	}
 	// Recurse into matched downstream nodes (sinks described, not executed).
-	for i := range node.Out {
-		edge := &node.Out[i]
-		if edge.When != nil {
-			ok, evalErr := edge.When.Eval(payload, meta)
-			if evalErr != nil || !ok {
-				continue
-			}
+	for _, ev := range evals {
+		if !ev.passed {
+			continue
 		}
-		next := pip.Nodes[edge.To]
+		next := pip.Nodes[ev.edge.To]
 		switch next.Section {
 		case config.SectionSink:
 			describeSink(next, b)
@@ -166,6 +185,16 @@ func walk(pip *ir.Pipeline, node *ir.Node, payload any, meta map[string]any, b *
 	}
 }
 
+// edgeEval is one edge's cached predicate verdict for the current payload.
+type edgeEval struct {
+	edge   *ir.Edge
+	passed bool
+}
+
+// describeSink renders one sink's resolved delivery semantics (candidate 09):
+// every inbound edge's policy (never just the first one), the engine's batch
+// aggregation rule for mixed batches, and the terminal consequence — a dead
+// letter for required edges, a drop for required: false edges.
 func describeSink(node *ir.Node, b *strings.Builder) {
 	detail := ""
 	if node.Config.Batch != nil {
@@ -175,8 +204,30 @@ func describeSink(node *ir.Node, b *strings.Builder) {
 		}
 	}
 	fmt.Fprintf(b, "  %s: sink %s (encoder %s%s)\n", node.Name, node.Config.Plugin, encoderOf(node), detail)
-	fmt.Fprintf(b, "    delivery: retries=%d backoff=%s → commits on ack; exhausted → dead letter\n",
-		sinkEdgeRetries(node), sinkEdgeBackoff(node))
+	fmt.Fprintf(b, "    delivery: commits on ack; per in-edge policy:\n")
+	for i := range node.In {
+		e := &node.In[i]
+		when := ""
+		if e.WhenSource != "" {
+			when = fmt.Sprintf(" (when %s)", e.WhenSource)
+		}
+		terminal := "exhausted → dead letter"
+		if !e.Required {
+			terminal = "exhausted → dropped (required: false; the engine drops and commits)"
+		}
+		fmt.Fprintf(b, "      %s%s: retries=%d backoff=%s timeout=%s required=%t → %s\n",
+			e.From, when, e.Retries, e.Backoff, timeoutLabel(e.TimeoutMs), e.Required, terminal)
+	}
+	fmt.Fprintf(b, "    batch rule: a mixed batch takes the strictest retries and explicit timeout (max of each; the default timeout applies when no edge in the batch sets one)\n")
+}
+
+// timeoutLabel renders one edge's per-write timeout; 0 means the engine's
+// runtime default (Options.DefaultTimeout), not a number explain may invent.
+func timeoutLabel(ms int) string {
+	if ms > 0 {
+		return fmt.Sprintf("%dms", ms)
+	}
+	return "default"
 }
 
 func symbolic(pip *ir.Pipeline, b *strings.Builder) error {
@@ -193,8 +244,8 @@ func symbolic(pip *ir.Pipeline, b *strings.Builder) error {
 			case node.Config.Plugin == "split":
 				fmt.Fprintf(b, "%s: transform.split (array payload → one message per element)\n", name)
 			case node.Config.Plugin == "wasm":
-				fmt.Fprintf(b, "%s: transform.wasm (module %s, entrypoint %s, budget %dms)\n",
-					name, wasmModule(node), wasmEntry(node), wasmBudget(node))
+				fmt.Fprintf(b, "%s: transform.wasm (module %s, entrypoint %s, %s)\n",
+					name, wasmModule(node), wasmEntry(node), wasmModeLabel(node))
 			default:
 				fmt.Fprintf(b, "%s: transform.%s\n", name, node.Config.Plugin)
 			}
@@ -263,41 +314,32 @@ func wasmEntry(n *ir.Node) string {
 	return "transform"
 }
 
-func wasmBudget(n *ir.Node) int {
-	switch v := wasmCfgMap(n)["timeout_ms"].(type) {
-	case int:
-		if v > 0 {
-			return v
-		}
-	case int64:
-		if v > 0 {
-			return int(v)
-		}
-	case float64:
-		if v > 0 && v == float64(int(v)) {
-			return int(v)
+// wasmMode resolves the per-invoke execution mode of a wasm node exactly the
+// way the plugin adapter does (wasmhost.ResolveMode): fast mode when
+// timeout_ms is unset, the budget when it is set. Explain renders this
+// resolution instead of re-deriving a number.
+func wasmMode(n *ir.Node) wasmhost.Mode {
+	var cfg wasmhost.Config
+	if m := wasmCfgMap(n); m != nil {
+		if raw, err := json.Marshal(m); err == nil {
+			_ = json.Unmarshal(raw, &cfg)
 		}
 	}
-	return 1000
+	return wasmhost.ResolveMode(&cfg)
+}
+
+// wasmModeLabel renders the resolved mode for the symbolic trace.
+func wasmModeLabel(n *ir.Node) string {
+	mode := wasmMode(n)
+	if mode.Fast() {
+		return "fast mode (no per-invoke kill switch)"
+	}
+	return fmt.Sprintf("budget %dms", mode.Timeout/time.Millisecond)
 }
 
 // encoderOf returns the sink's encoder; materialized by the loader
 // (candidate 06).
 func encoderOf(n *ir.Node) string { return n.Config.Encoder }
-
-func sinkEdgeRetries(node *ir.Node) int {
-	for _, e := range node.In {
-		return e.Retries
-	}
-	return 3
-}
-
-func sinkEdgeBackoff(node *ir.Node) string {
-	for _, e := range node.In {
-		return e.Backoff
-	}
-	return "exponential"
-}
 
 func countStatements(src string) int {
 	n := 0

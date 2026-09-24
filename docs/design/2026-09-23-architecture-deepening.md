@@ -2,7 +2,7 @@
 
 | 状态 Status | 日期 Date | 关联 Links |
 |---|---|---|
-| Reviewed — design agreed, implementation not started | 2026-09-23 | `CONTEXT.md` (domain vocabulary) · `CHANGELOG.md` (per-candidate entries land at implementation time) |
+| Implemented (stages S1–S7) — all eight candidates landed | 2026-09-23 | `CONTEXT.md` (domain vocabulary) · `CHANGELOG.md` (per-candidate entries) |
 
 This document is the design of record for the architecture review held on
 2026-09-23. It covers eight deepening candidates (the ninth was absorbed),
@@ -39,7 +39,7 @@ explicitly confirmed.
 | 06 | One framework vocabulary — whitelist, order, defaults | Worth exploring | Implemented (stage S5) |
 | 07 | Typed failure kinds across the transform seam | Worth exploring | Implemented (stage S6) |
 | 08 | The jobs manager owns run admission and terminal transitions | Worth exploring | Implemented (stage S4) |
-| 09 | Explain renders resolved semantics | Speculative | Design agreed |
+| 09 | Explain renders resolved semantics | Speculative | Implemented (stage S7) |
 
 Out of scope by decision (see §7): dropping `Source.Commit` entirely, the
 source-lock contract as the fix for re-entrancy, full CLI delegation to

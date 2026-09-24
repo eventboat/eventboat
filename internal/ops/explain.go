@@ -37,7 +37,10 @@ func (r *ExplainResult) Text() string {
 // ExplainPipeline renders one already-verified pipeline — the single
 // Service-free explain entry (candidate 05). Rendering semantics stay in
 // internal/explain (candidate 09 owns them); this function owns only the
-// entry-node/topology shape shared by CLI, MCP and Admin.
+// entry-node/topology shape shared by CLI, MCP and Admin. The caller owns the
+// pipeline's instance lifecycle: explain dry-runs the explain-safe instances
+// a verify ForExplain build retained, so that caller must Close the pipeline
+// when done.
 func ExplainPipeline(pip *ir.Pipeline, req ExplainRequest) (*ExplainResult, error) {
 	if req.Topology {
 		return &ExplainResult{Mermaid: explain.TopologyMermaid(pip), ASCII: explain.TopologyASCII(pip)}, nil
@@ -54,13 +57,16 @@ func ExplainPipeline(pip *ir.Pipeline, req ExplainRequest) (*ExplainResult, erro
 }
 
 // ExplainContent is the content-based entry used by MCP/Admin: verify first
-// (the one composition), then render. A failing verify travels as the
-// explain error — the same reason text every surface reports.
+// (the one composition, in the retaining ForExplain lifecycle), then render,
+// then close the pipeline — explain owns both the build and its instances.
+// A failing verify travels as the explain error — the same reason text every
+// surface reports.
 func ExplainContent(reg *registry.Registry, content, baseDir string, req ExplainRequest) (string, error) {
-	res := verify.Bytes("submitted.yaml", []byte(content), baseDir, reg, verify.Options{})
+	res := verify.Bytes("submitted.yaml", []byte(content), baseDir, reg, verify.Options{ForExplain: true})
 	if res.Pipeline == nil {
 		return "", fmt.Errorf("explain: config errors: %s", res.Diagnostics.FirstErrorText())
 	}
+	defer func() { _ = res.Pipeline.Close() }()
 	out, err := ExplainPipeline(res.Pipeline, req)
 	if err != nil {
 		return "", err
