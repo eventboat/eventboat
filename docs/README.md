@@ -42,6 +42,7 @@ decision is revisited, add the successor document to its `Links` row.
 | Date | Title | Status | Summary |
 |---|---|---|---|
 | 2026-09-23 | [Architecture deepening program](design/2026-09-23-architecture-deepening.md) | Implemented (S1–S7) | Eight deepening candidates from the 2026-09-23 review: engine admission/replay, run outcomes, store ownership, verify path, framework vocabulary, failure kinds, jobs lifecycle, explain — with decisions, rationale, staged plans and acceptance tests. |
+| 2026-09-24 | [Log collection mode — VictoriaLogs, file-tail hardening, tuning surface](design/2026-09-24-log-collection.md) | Draft | One-selection log collection for a file-based (host + container) estate: a batched VictoriaLogs sink, group-commit spool writes, file-source rotation/glob/multiline hardening, deployment shapes, and the performance tuning surface with sizing rules and guardrails. |
 
 The domain vocabulary these documents rely on lives in
 [`CONTEXT.md`](../CONTEXT.md) at the repo root.
