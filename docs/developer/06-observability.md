@@ -132,7 +132,9 @@ mandatory token. JSON request bodies are capped at 8 MiB
 | POST | `/admin/drain/{pipeline}` | stop sources, wait for in-flight commit; stays deployed |
 | POST | `/admin/pause/{pipeline}` | stop the instance (resume from persisted states) |
 | POST | `/admin/resume/{pipeline}` | restart a paused pipeline |
-| GET | `/admin/sse` | Server-Sent Events: `deploy`/`job`/`status` events plus a full status snapshot every second |
+| GET | `/admin/sse` | Server-Sent Events: `deploy`/`job`/`status` events plus a full status snapshot every second (one payload shape per event type: `status` always carries the snapshot) |
+| GET | `/live` | liveness: 200 `ok` while the process serves; token-exempt for kubelet probes |
+| GET | `/ready` | readiness: 200 `ready`, 503 `stopping` once shutdown began; token-exempt for kubelet probes |
 | GET | `/metrics` | Prometheus exposition |
 | GET/POST/DELETE | `/mcp` | MCP Streamable HTTP — registered only when `mcp.enable` is true (candidate 06); the explicit `eventboat mcp --http` command always serves it |
 | GET | `/admin/` | the embedded read-only UI (`/admin` redirects) |

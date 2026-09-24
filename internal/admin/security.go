@@ -102,7 +102,7 @@ func (s Security) Middleware(next http.Handler) http.Handler {
 			http.Error(w, "host not allowed", http.StatusForbidden)
 			return
 		}
-		if s.Token != "" && !s.authorized(r) {
+		if s.Token != "" && !isHealthPath(r.URL.Path) && !s.authorized(r) {
 			w.Header().Set("WWW-Authenticate", `Bearer realm="eventboat admin"`)
 			w.WriteHeader(http.StatusUnauthorized)
 			if strings.Contains(r.Header.Get("Accept"), "text/html") {
@@ -114,6 +114,14 @@ func (s Security) Middleware(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// isHealthPath reports the token-exempt health endpoints: /live and /ready
+// return fixed strings with no data, and a kubelet probe cannot carry a
+// bearer token sourced from a Secret. The Host allowlist still applies to
+// them (and wildcard binds, the usual in-cluster shape, carry none).
+func isHealthPath(path string) bool {
+	return path == "/live" || path == "/ready"
 }
 
 // authorized accepts the token via `Authorization: Bearer <token>` (what

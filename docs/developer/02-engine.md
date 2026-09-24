@@ -250,7 +250,10 @@ regressing:
   their run and refuse with a message pointing at the admin/MCP surface when
   they cannot (a second engine on the same spool would race the checkpoint).
   On a target without a file-lock implementation the run refuses loudly
-  instead of silently skipping the single-writer guarantee.
+  instead of silently skipping the single-writer guarantee. The lock is an
+  advisory lock: the filesystem must honor it (local disk or a block-backed
+  volume); on NFS/RWX it may not protect across nodes, so keep the k8s
+  deployment on `Recreate` with one replica.
   The lock is a sidecar so SQLite's own locking is untouched, and the file is
   never deleted — an unlocked leftover is expected and harmless.
 

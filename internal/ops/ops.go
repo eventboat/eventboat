@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/eventboat/eventboat/internal/config"
@@ -64,6 +65,10 @@ type Service struct {
 
 	subMu sync.Mutex
 	subs  map[chan Event]struct{}
+
+	// stopped flips when Stop begins, so /ready answers 503 while the
+	// service drains instead of leaving a terminating pod in rotation.
+	stopped atomic.Bool
 }
 
 // managed is one deployed pipeline: either a continuous engine or a job
@@ -518,7 +523,12 @@ func (s *Service) watchEngineCompletion(m *managed, eng *engine.Engine, runDone 
 	} else {
 		m.advance(stateRunning, stateCompleted)
 	}
-	s.emit("status", m.name)
+	// The status transition event carries the same snapshot shape as the
+	// SSE ticker's periodic event: one event type, one payload type — the
+	// UI's render(JSON.parse(e.data)) handles both (adversarial review
+	// follow-up 2026-09-24: a bare pipeline name here made the UI render a
+	// string as a table).
+	s.emit("status", s.Status())
 }
 
 // shutdown stops one instance and reports whether it fully stopped. runCtx
@@ -560,6 +570,7 @@ func (s *Service) of(name string) (*managed, error) {
 
 // Stop shuts everything down (process exit).
 func (s *Service) Stop() {
+	s.stopped.Store(true)
 	s.mu.Lock()
 	ms := make([]*managed, 0, len(s.pipelines))
 	for _, m := range s.pipelines {
@@ -570,6 +581,12 @@ func (s *Service) Stop() {
 		m.shutdown()
 	}
 }
+
+// Ready reports whether the service is still serving: false once Stop has
+// begun, so the /ready endpoint drains the pod before the process exits.
+// Pipeline-level failures are visible in the status snapshot, not here — a
+// failed pipeline is not a reason to restart the process.
+func (s *Service) Ready() bool { return !s.stopped.Load() }
 
 // Status snapshots every deployed pipeline (rates are deltas over the last
 // snapshot window).
@@ -897,7 +914,7 @@ func (s *Service) Drain(pipeline string) error {
 	if err := m.transition(stateDrained); err != nil {
 		return err
 	}
-	s.emit("status", pipeline)
+	s.emit("status", s.Status())
 	return nil
 }
 
@@ -924,7 +941,7 @@ func (s *Service) Pause(pipeline string) error {
 	if err := m.transition(statePaused); err != nil {
 		return err
 	}
-	s.emit("status", pipeline)
+	s.emit("status", s.Status())
 	return nil
 }
 
@@ -953,6 +970,6 @@ func (s *Service) Resume(ctx context.Context, pipeline string) error {
 	if _, err := s.startManaged(ctx, m.cfg, m.pip, m.file); err != nil {
 		return err
 	}
-	s.emit("status", pipeline)
+	s.emit("status", s.Status())
 	return nil
 }

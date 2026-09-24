@@ -81,6 +81,20 @@ hygiene findings.
   run, unbounded) — verify now warns, with `--strict` escalating to an
   error, exactly mirroring the `wasm_no_kill_switch` warning/strict
   contract.
+- **`/live` and `/ready` health endpoints**: the k8s manifest and docs had
+  referenced them since the operator trim, but the mux served neither — the
+  shipped example put the pod in a probe-failure restart loop. `/live` is
+  the process (200 `ok`), `/ready` flips to 503 once shutdown begins so a
+  terminating pod drains first; both are exempt from the bearer token (a
+  kubelet probe cannot carry a Secret) while the Host allowlist still
+  applies. The example manifest gains the Runtime config that makes the
+  listener reachable in-cluster (wildcard bind + token from a Secret).
+- **SIGHUP reload** (`run --config-dir`): re-scans the mounted directory and
+  deploys the new or changed pipeline files (a file whose bytes match the
+  deployed copy is skipped, so a reload is not a drain-and-swap of
+  everything); removals need a restart. Unix-only — Windows cannot deliver
+  SIGHUP. The k8s rollout docs now describe the semantics instead of
+  merely naming the signal.
 
 ### Fixed
 
@@ -165,6 +179,11 @@ hygiene findings.
 
 ### Changed
 
+- **The SSE `status` event has one payload shape (rethink follow-up
+  2026-09-24)**: the transition events (pause/drain/resume/engine
+  completion) carried a bare pipeline name while the periodic ticker carried
+  the full snapshot, so the read-only UI rendered the string as a table.
+  Both now carry the `[]PipelineStatus` snapshot.
 - **One owner for the durable store of a pipeline (candidate 04)**: where a
   pipeline's store lives and how long its handle lives now belong to one
   module, `store.Owner` (`internal/store/owner.go`), and every entry point

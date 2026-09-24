@@ -5,9 +5,11 @@
 #
 #   kubectl apply -f deployment.yaml
 #
-# Reload: POST /admin/deploy with the new config (verify-first), or
+# Reload: POST /admin/deploy with the new config (verify-first),
 # `kubectl rollout restart deployment/eventboat` (pods restart, sources
-# resume from their committed watermarks — at-least-once holds).
+# resume from their committed watermarks — at-least-once holds), or SIGHUP
+# (re-scan the mounted directory and deploy new/changed files; removals
+# need a restart).
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -25,7 +27,7 @@ spec:
       containers:
         - name: eventboat
           image: ghcr.io/eventboat/eventboat:main   # published from this repo (.github/workflows/docker.yml); pin a semver tag in production
-          args: ["run", "--config-dir", "/pipelines"]
+          args: ["run", "--config-dir", "/pipelines", "--runtime", "/runtime/eventboat.yaml"]
           securityContext:
             runAsNonRoot: true   # image USER is distroless nonroot (65532)
             fsGroup: 65532       # emptyDir/PVC writability for the SQLite spool
@@ -33,14 +35,19 @@ spec:
             - {name: admin, containerPort: 7788}
           env:
             - {name: KAFKA_BROKERS, value: "kafka:9092"}   # ${VAR} substitution targets
+            # A non-loopback admin bind refuses to start without a token:
+            #   kubectl create secret generic eventboat-admin-token --from-literal=token=$(openssl rand -hex 32)
+            - name: EVENTBOAT_ADMIN_TOKEN
+              valueFrom: {secretKeyRef: {name: eventboat-admin-token, key: token}}
           volumeMounts:
             - {name: pipelines, mountPath: /pipelines, readOnly: true}
+            - {name: runtime, mountPath: /runtime, readOnly: true}
             - {name: data, mountPath: /data}
           livenessProbe:
             httpGet: {path: /live, port: admin}
             initialDelaySeconds: 5
           readinessProbe:
-            httpGet: {path: /ready, port: admin}   # spool health + pipeline readiness
+            httpGet: {path: /ready, port: admin}   # 503 while shutting down; token-exempt like /live
             initialDelaySeconds: 5
           resources:
             requests: {cpu: 100m, memory: 128Mi}
@@ -49,12 +56,29 @@ spec:
         - name: pipelines
           configMap:
             name: eventboat-pipelines   # create with: kubectl create configmap eventboat-pipelines --from-file=pipelines/
+        - name: runtime
+          configMap:
+            name: eventboat-runtime
         - name: data
           emptyDir: {}                  # swap for a PersistentVolumeClaim to survive rescheduling
 ---
 # The admin surface (REST + SSE + read-only UI) is bound to 127.0.0.1 by
-# default. To use the probes and deploy API from the cluster network, set
-# an explicit listener in a kind: Runtime config mounted alongside AND a
-# token (admin.token, or EVENTBOAT_ADMIN_TOKEN from a Secret) — non-
-# loopback binds refuse to start without one, and every request then
-# needs Authorization: Bearer <token> (docs/k8s.md).
+# default. The Runtime config below sets the in-cluster listener; the token
+# comes from the Secret (non-loopback binds refuse to start without one).
+# Every request then needs Authorization: Bearer <token> — except the
+# token-exempt health probes /live and /ready, which return fixed strings
+# and no data (docs/k8s.md).
+# Runtime configuration: data dir, the wildcard admin listener (probes reach
+# the pod IP; a wildcard bind skips the Host allowlist), MCP and telemetry.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: eventboat-runtime
+data:
+  eventboat.yaml: |
+    apiVersion: eventboat/v1
+    kind: Runtime
+    storage: {data_dir: /data}
+    admin: {listen: 0.0.0.0:7788}
+    mcp: {enable: true}
+    telemetry: {prometheus: true}

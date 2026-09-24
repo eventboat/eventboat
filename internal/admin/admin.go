@@ -27,7 +27,8 @@ const maxBodyBytes = 8 << 20
 // Handler builds the admin mux (also serves /metrics when metricsHandler is
 // non-nil, and MCP at /mcp when mcpHandler is non-nil). The whole surface —
 // including those two — sits behind sec.Middleware, so a configured token
-// guards every endpoint.
+// guards every endpoint except the token-exempt /live and /ready health
+// probes (a kubelet probe cannot carry a Secret; both return fixed strings).
 func Handler(svc *ops.Service, metricsHandler http.Handler, mcpHandler http.Handler, sec Security) http.Handler {
 	mux := http.NewServeMux()
 
@@ -180,6 +181,24 @@ func Handler(svc *ops.Service, metricsHandler http.Handler, mcpHandler http.Hand
 				fl.Flush()
 			}
 		}
+	})
+
+	// Health endpoints for the k8s probes (docs/k8s.md): /live is the
+	// process, /ready flips to 503 once the service stops so a terminating
+	// pod drains from the load balancer first. Both are exempt from the
+	// bearer token in sec.Middleware and return fixed strings with no data;
+	// the Host allowlist still applies.
+	mux.HandleFunc("GET /live", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		_, _ = io.WriteString(w, "ok\n")
+	})
+	mux.HandleFunc("GET /ready", func(w http.ResponseWriter, r *http.Request) {
+		if !svc.Ready() {
+			http.Error(w, "stopping\n", http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		_, _ = io.WriteString(w, "ready\n")
 	})
 
 	if metricsHandler != nil {

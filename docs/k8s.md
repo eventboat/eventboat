@@ -15,24 +15,33 @@ ready manifest. The essentials:
   per-pipeline state; two active instances over one spool volume is
   meaningless. Single-active per pipeline group is the v3 HA model (§6.7);
   rescheduling relies on at-least-once recovery, not multi-active sharing.
-- **Probes.** `/live` for the process, `/ready` for spool health and
-  pipeline readiness (the same endpoints the Runtime config exposes).
+- **Probes.** `/live` for the process, `/ready` for readiness (503 while the
+  service drains). Both return fixed strings with no data and are exempt from
+  the bearer token — a kubelet probe cannot carry a Secret — while the Host
+  allowlist still applies (wildcard binds, the usual in-cluster shape, carry
+  none).
 - **Config rollout.** Mount the pipeline directory from a ConfigMap, then
   either POST the new config to `/admin/deploy` (it verifies first and
-  refuses invalid configs — the no-bypass rule) or restart the pod
-  (`kubectl rollout restart`); sources resume from committed watermarks,
-  so the gap is covered at-least-once.
+  refuses invalid configs — the no-bypass rule), send **SIGHUP** (the daemon
+  re-scans the directory and deploys the new or changed files; a file whose
+  bytes match the deployed copy is skipped, and removals need a restart), or
+  restart the pod (`kubectl rollout restart`); sources resume from committed
+  watermarks, so the gap is covered at-least-once.
 - **State.** `emptyDir` disappears with the pod — fine for at-least-once
   sources with committed offsets (Kafka groups), but attach a
   PersistentVolumeClaim when the spool/dead-letter history must survive
-  rescheduling (the common case for job pipelines with watermarks).
+  rescheduling (the common case for job pipelines with watermarks). The
+  single-writer lease relies on the filesystem honoring advisory locks: use
+  local disk or a block-backed PVC; on NFS/RWX the lock may not protect
+  across nodes, so keep `Recreate` and one replica.
 - **Admin surface.** Binds 127.0.0.1 by default (`kind: Runtime` config
   changes the listener). It authenticates with a bearer token
   (`--admin-token` / `EVENTBOAT_ADMIN_TOKEN` / `admin.token` in the Runtime
   config): with a token set, every request — including `/admin/deploy` —
-  needs `Authorization: Bearer <token>`. Non-loopback listens (the usual
-  in-cluster shape) **refuse to start without a token**; keep the token out
-  of the ConfigMap (an env var from a Secret fits the resolution order).
+  needs `Authorization: Bearer <token>`, except the token-exempt `/live`
+  and `/ready` probes. Non-loopback listens (the usual in-cluster shape)
+  **refuse to start without a token**; keep the token out of the ConfigMap
+  (an env var from a Secret fits the resolution order).
 
 ## Why no Operator (recorded trim, M4 review R14)
 

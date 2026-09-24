@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"flag"
@@ -15,6 +16,7 @@ import (
 	mcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/eventboat/eventboat/internal/admin"
+	"github.com/eventboat/eventboat/internal/config"
 	"github.com/eventboat/eventboat/internal/mcpserver"
 	"github.com/eventboat/eventboat/internal/obs"
 	"github.com/eventboat/eventboat/internal/ops"
@@ -184,6 +186,53 @@ func deployDir(ctx context.Context, svc *ops.Service, dir string) error {
 	return nil
 }
 
+// reloadDir is the SIGHUP path (docs/k8s.md): it re-scans the directory and
+// deploys the new or changed pipeline files, skipping any file whose bytes
+// already match the deployed copy at <dataDir>/pipelines/<name>.yaml — a
+// reload is not a drain-and-swap of everything. Removals are not reconciled
+// (a pipeline dropped from the directory stays deployed until a restart;
+// documented). One bad file does not abort the others: the rest are
+// attempted and the first error is returned with the deployed count.
+func reloadDir(ctx context.Context, svc *ops.Service, dir, dataDir string) (int, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return 0, err
+	}
+	deployed, firstErr := 0, error(nil)
+	keep := func(err error) {
+		if firstErr == nil {
+			firstErr = err
+		}
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		switch strings.ToLower(filepath.Ext(e.Name())) {
+		case ".yaml", ".yml":
+		default:
+			continue
+		}
+		path := filepath.Join(dir, e.Name())
+		content, err := os.ReadFile(path)
+		if err != nil {
+			keep(err)
+			continue
+		}
+		if lr := config.LoadBytes(e.Name(), content); lr.Pipeline != nil && lr.Pipeline.Name != "" {
+			if prev, err := os.ReadFile(filepath.Join(dataDir, "pipelines", lr.Pipeline.Name+".yaml")); err == nil && bytes.Equal(prev, content) {
+				continue // unchanged
+			}
+		}
+		if _, err := svc.Deploy(ctx, string(content)); err != nil {
+			keep(fmt.Errorf("%s: %w", path, err))
+			continue
+		}
+		deployed++
+	}
+	return deployed, firstErr
+}
+
 // cmdRunDir runs a config directory: continuous pipelines under engines,
 // job pipelines under their managers, plus the admin surface when enabled.
 func cmdRunDir(args []string, jsonOut bool) int {
@@ -239,6 +288,27 @@ func cmdRunDir(args []string, jsonOut bool) int {
 		return 1
 	}
 	defer svc.Stop()
+
+	// SIGHUP reload (docs/k8s.md): re-scan the directory and deploy the new
+	// or changed files (removals need a restart). Unix-only — Windows cannot
+	// deliver SIGHUP, so the handler is dormant there.
+	hup := make(chan os.Signal, 1)
+	signal.Notify(hup, syscall.SIGHUP)
+	defer signal.Stop(hup)
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-hup:
+				n, err := reloadDir(ctx, svc, *configDir, rt.Storage.DataDir)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "run: reload: %v\n", err)
+				}
+				fmt.Printf("eventboat: reloaded %d pipeline(s) from %s\n", n, *configDir)
+			}
+		}
+	}()
 
 	statuses, _ := json.Marshal(svc.Status())
 	if jsonOut {
