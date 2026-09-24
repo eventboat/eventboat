@@ -68,10 +68,10 @@ func TestRedactJSONPassthroughNonJSON(t *testing.T) {
 // never altered.
 func TestTailWrapperAppliesRedaction(t *testing.T) {
 	svc := New(Options{
-		DataDir:  t.TempDir(),
-		Reg:      registry.New(),
-		StoreFor: func(pipeline string) (store.Store, error) { return store.NewMemory(), nil },
-		Clock:    time.Now,
+		DataDir: t.TempDir(),
+		Reg:     registry.New(),
+		Stores:  store.NewMemoryOwner(),
+		Clock:   time.Now,
 	})
 	t.Cleanup(svc.Stop)
 
@@ -111,12 +111,13 @@ func TestDeadLetterQueryAppliesRedaction(t *testing.T) {
 	if err := testkit.RegisterFakePull(reg); err != nil {
 		t.Fatal(err)
 	}
-	stores := map[string]store.Store{"redact-dlq": store.NewMemory()}
+	owner := store.NewMemoryOwner()
+	t.Cleanup(func() { _ = owner.Close() })
 	svc := New(Options{
-		DataDir:  t.TempDir(),
-		Reg:      reg,
-		StoreFor: func(pipeline string) (store.Store, error) { return stores[pipeline], nil },
-		Clock:    time.Now,
+		DataDir: t.TempDir(),
+		Reg:     reg,
+		Stores:  owner,
+		Clock:   time.Now,
 	})
 	t.Cleanup(svc.Stop)
 
@@ -137,7 +138,7 @@ sinks:
 `); err != nil {
 		t.Fatal(err)
 	}
-	st, err := svc.opts.StoreFor("redact-dlq")
+	st, err := owner.Open("redact-dlq")
 	if err != nil {
 		t.Fatal(err)
 	}

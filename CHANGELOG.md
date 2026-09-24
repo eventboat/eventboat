@@ -130,8 +130,51 @@ hygiene findings.
   verified (5 messages fan through `stamp` onto `output/audit.jsonl`).
   linear, branching and codecs have the same gap and are still
   contract-test-only.
+- **`--ephemeral` surfaces now share one store, and the in-memory store
+  actually substitutes for SQLite (candidate 04)**: `--ephemeral` returned a
+  fresh memory store per provider call, so the daemon's engine wrote to one
+  store while `Status`/`Jobs`/`dlq_query` read another and saw nothing (the
+  memory owner now caches one store per pipeline). The in-memory store's
+  spool ignored the pipeline argument its comment claimed to honor (SQLite
+  keys on `pipeline`), so multi-pipeline stores leaked rows across
+  pipelines; the spool is now pipeline-scoped with store-global sequences,
+  `JobRuns` sorts by `started_at`/`run_id` like SQLite's `ORDER BY`,
+  `RunnableJobRuns` matches its `started_at` order, and a duplicate run id is
+  rejected like the `run_id` primary key. A new conformance suite runs the
+  same operation sequence against SQLite (temp file) and memory and requires
+  identical results, including multi-pipeline isolation. Persisted timestamps
+  move to a fixed-width RFC3339 layout: `RFC3339Nano` omits a zero fraction,
+  so `"…T12:00:00Z"` sorts AFTER `"…T12:00:00.5Z"` lexicographically while it
+  is earlier in time — the `DeadLettersSince`/retention cutoffs and the
+  run-history ordering silently misordered rows that differ only in
+  sub-second precision.
 
 ### Changed
+
+- **One owner for the durable store of a pipeline (candidate 04)**: where a
+  pipeline's store lives and how long its handle lives now belong to one
+  module, `store.Owner` (`internal/store/owner.go`), and every entry point
+  opens through it. The canonical layout is
+  `<data-dir>/stores/<sanitized pipeline>.db` for the daemon and the one-shot
+  verbs alike — a run history written by `trigger` is the one `jobs list` and
+  the daemon's `Status` read — and the old `eventboat.db` /
+  `stores/pipeline.db` layouts are retired without migration (beta ruling:
+  the old files are simply no longer read). The owner caches one handle per
+  pipeline per process and closes them all on `Close` (idempotent); it also
+  exposes `Path` — stage 08's cross-process lease locks exactly that file.
+  `ops.Options.StoreFor` is deleted together with its default factory (the
+  `stores/pipeline.db` layout ignored the pipeline argument); the service now
+  takes an injectable `store.Provider` (`ops.Options.Stores`) and `New`
+  refuses a missing provider instead of silently falling back to a layout.
+  The 23-method `Store` interface is split into facets — `SpoolStore`
+  (spool/checkpoint/source states), `DeadLetterStore`, `JobRunStore`, with
+  the combined `Store` kept for consumers that span concerns — pinned by
+  compile-time assertions for both implementations; `engine.New` now depends
+  on the spool + dead-letter facets and `jobs.New` on run history plus the
+  engine's facets, so neither can reach the handle lifetime. The
+  file-name rules (`Sanitize`, `WindowsReservedName`) move to the shared leaf
+  `internal/fsname`, imported by the loader's `metadata.name` validation and
+  the store owner alike — one reserved-name list, no copies.
 
 - **One run outcome for every runner (candidate 02: `Engine.Wait` /
   `Outcome`)**: every runner re-derived the terminal state around

@@ -103,7 +103,8 @@ is enforced by Go imports — each "must not" below is checkable with
 | `internal/lang/starhost` | The Starlark sandbox host: compile, frozen constants, lazy COW message bindings, step budget, backtraces | Nothing internal (leaf) |
 | `internal/wasmhost` | wazero runtime host: wasip1 reactor compile, per-invoke budgets, guest ABI check, invokers | Nothing internal (leaf). `registry/builtin` adapts it |
 | `internal/rpcplugin` | Out-of-process gRPC source/sink plugins: spawn, JSON handshake, auth metadata, restart supervision | `ir`/`engine`. It adapts `config.GrpcConfig` + `pkg/pluginproto` into registry-shaped sources/sinks |
-| `internal/store` | The durable spine: spool, checkpoint, source states, dead letters, job history — SQLite (`modernc.org/sqlite`) and an in-memory implementation | Parsing or execution. It persists `registry.Message` but never interprets payloads |
+| `internal/fsname` | The shared file-name rules: `Sanitize` (conservative base-name charset) and `WindowsReservedName` — used by config's `metadata.name` validation and the store owner's layout | Nothing internal — a leaf. One reserved-name list, no copies |
+| `internal/store` | The durable spine, split into facets — `SpoolStore` (spool/checkpoint/source states), `DeadLetterStore`, `JobRunStore`, combined as `Store` — backed by SQLite (`modernc.org/sqlite`) and an in-memory implementation, plus the `Owner` that decides where a pipeline's store lives (`<data-dir>/stores/<sanitized name>.db`) and owns its handle lifetime (one cached handle per pipeline, closed together; memory owner for tests/`--ephemeral`) | Parsing or execution. It persists `registry.Message` but never interprets payloads |
 | `internal/jobs` | Job pipelines: cron scheduling, catchup, overlap, run lifecycle, typed parameters (`cursor`/`now`), hooks, run history | Being a *caller* of the engine only — it must not reimplement admission or commit logic |
 | `internal/ops` | The operations service: verify/test/explain/deploy/status/jobs/trigger/tail/dlq_query/dlq_replay/drain/pause/resume. The single implementation behind MCP and Admin REST | HTTP or protocol concerns. `admin`/`mcpserver`/CLI are thin shells over it |
 | `internal/admin` | Admin REST + SSE + the embedded read-only UI + the security middleware (token, Host allowlist) | Business logic — everything delegates to `ops` |
@@ -211,6 +212,16 @@ on a failed run, the daemon to `completed`/`failed` (see
 [Observability & operations](06-observability.md)). A source failure stops
 the engine in every mode; restart resumes from the source watermarks
 (duplicate delivery, never loss).
+
+Every entry point opens the pipeline's store through one `store.Owner`
+(`internal/store/owner.go`, candidate 04): the canonical file is
+`<data-dir>/stores/<sanitized name>.db` for the one-shot verbs and the daemon
+alike, one handle per pipeline per process, closed on shutdown. `--ephemeral`
+substitutes a cached in-memory owner, so all surfaces of one process see the
+same data. The old `eventboat.db` / `stores/pipeline.db` layouts are retired
+without migration (beta ruling). Modules depend on the store facets they use
+— `engine.New` takes the spool + dead-letter facets, `jobs.New` run history
+plus the engine's facets, `ops` the combined `Store`.
 
 ## Where to read next
 

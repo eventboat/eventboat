@@ -30,7 +30,7 @@ type sourceCommitter struct {
 	pipeline string
 	node     string
 	src      registry.Source
-	store    store.Store
+	store    store.SpoolStore
 	timeout  time.Duration
 
 	mu        sync.Mutex
@@ -41,7 +41,7 @@ type sourceCommitter struct {
 	done chan struct{} // closed when the worker goroutine exits
 }
 
-func newSourceCommitter(pipeline, node string, src registry.Source, st store.Store, timeout time.Duration) *sourceCommitter {
+func newSourceCommitter(pipeline, node string, src registry.Source, st store.SpoolStore, timeout time.Duration) *sourceCommitter {
 	return &sourceCommitter{
 		pipeline: pipeline,
 		node:     node,

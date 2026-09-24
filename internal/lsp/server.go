@@ -11,6 +11,7 @@ import (
 	"github.com/eventboat/eventboat/internal/ops"
 	"github.com/eventboat/eventboat/internal/registry"
 	"github.com/eventboat/eventboat/internal/registry/builtin"
+	"github.com/eventboat/eventboat/internal/store"
 )
 
 // Server is the Eventboat language server. One instance serves one stdio
@@ -34,8 +35,12 @@ func NewServer() (*Server, error) {
 		return nil, err
 	}
 	return &Server{
-		reg:  reg,
-		svc:  ops.New(ops.Options{Reg: reg}),
+		reg: reg,
+		// The LSP only ever calls Verify — a pure function of config text —
+		// but ops requires a store provider (candidate 04 deleted the default
+		// factory). A memory owner satisfies the contract without touching
+		// disk; no handle is ever opened, so there is nothing to close.
+		svc:  ops.New(ops.Options{Reg: reg, Stores: store.NewMemoryOwner()}),
 		docs: map[string]string{},
 	}, nil
 }

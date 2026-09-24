@@ -415,8 +415,8 @@ func TestSQLiteSpoolRetention(t *testing.T) {
 // exerciseDLQRetention covers the dlq.retention sweep on both backends: rows
 // strictly before the cutoff vanish, rows at or after it stay, other
 // pipelines are untouched, and a later sweep is a clean no-op. The
-// strictly-before comparison keeps SQLite's RFC3339Nano text comparison and
-// the in-memory time comparison in agreement.
+// strictly-before comparison keeps SQLite's fixed-width timestamp text
+// comparison and the in-memory time comparison in agreement.
 func exerciseDLQRetention(t *testing.T, st Store) {
 	t.Helper()
 	defer func() { _ = st.Close() }()

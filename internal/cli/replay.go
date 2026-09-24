@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -20,6 +19,7 @@ import (
 	"github.com/eventboat/eventboat/internal/lang/celhost"
 	"github.com/eventboat/eventboat/internal/lang/starhost"
 	"github.com/eventboat/eventboat/internal/registry"
+	"github.com/eventboat/eventboat/internal/runtimecfg"
 	"github.com/eventboat/eventboat/internal/store"
 )
 
@@ -158,24 +158,15 @@ func cmdReplay(args []string, jsonOut bool) int {
 		meta  map[string]any
 	}
 	var items []item
-	var st store.Store
 	var dlIDs []int64
 
-	if *ephemeral {
-		st = store.NewMemory()
-	} else {
-		if err := os.MkdirAll(*dataDir, 0o755); err != nil {
-			fmt.Fprintf(os.Stderr, "replay: data dir: %v\n", err)
-			return 2
-		}
-		sqlite, err := store.OpenSQLite(filepath.Join(*dataDir, "eventboat.db"))
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "replay: open store: %v\n", err)
-			return 2
-		}
-		st = sqlite
+	owner := newStoreOwner(runtimecfg.Storage{DataDir: *dataDir, Ephemeral: *ephemeral})
+	defer func() { _ = owner.Close() }()
+	st, err := owner.Open(pip.Config.Name)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "replay: open store: %v\n", err)
+		return 2
 	}
-	defer func() { _ = st.Close() }()
 
 	switch {
 	case *dlq || *jobRun != "":

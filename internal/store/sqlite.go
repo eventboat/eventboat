@@ -85,6 +85,18 @@ CREATE TABLE IF NOT EXISTS job_run (
 );
 `
 
+// timeLayout is the fixed-width RFC3339 formatter for every persisted
+// timestamp. RFC3339Nano omits trailing zeros in the fraction, so
+// "…T12:00:00Z" sorts AFTER "…T12:00:00.5Z" lexicographically while it is
+// EARLIER in time — every range query (DeadLettersSince,
+// DeleteDeadLettersBefore, DeleteJobRunsBefore) and ORDER BY (JobRuns,
+// RunnableJobRuns) would silently misorder rows that differ only in
+// sub-second precision. Padding the fraction to nine digits makes the text
+// order equal the time order; the layout stays RFC3339-parsable (UTC "Z").
+// The fix is forward-only: rows written by earlier versions keep their old
+// text and are compared as-is (beta ruling: no migration).
+const timeLayout = "2006-01-02T15:04:05.000000000Z"
+
 // indexSchema runs after column migrations: idx_dlq_run references
 // dead_letter.job_run_id, which only exists once an M1 database has been
 // migrated (M2 review R6).
@@ -181,7 +193,7 @@ func (s *SQLite) AppendSpool(pipeline string, msg registry.Message, ingestTime t
 		`INSERT INTO spool (pipeline, message_id, codec, raw, meta, cursor, src_name, src_seq, ingest_time)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		pipeline, msg.ID, msg.Codec, msg.Raw, string(marshalMeta(msg.Meta)), msg.Cursor, msg.SrcName, msg.SrcSeq,
-		ingestTime.UTC().Format(time.RFC3339Nano))
+		ingestTime.UTC().Format(timeLayout))
 	if err != nil {
 		return 0, fmt.Errorf("store: append spool: %w", err)
 	}
@@ -267,7 +279,7 @@ func (s *SQLite) SetCheckpoint(pipeline string, seq int64) error {
 	_, err := s.db.Exec(
 		`INSERT INTO checkpoint (pipeline, spool_seq, updated_at) VALUES (?, ?, ?)
 		 ON CONFLICT(pipeline) DO UPDATE SET spool_seq = excluded.spool_seq, updated_at = excluded.updated_at`,
-		pipeline, seq, time.Now().UTC().Format(time.RFC3339Nano))
+		pipeline, seq, time.Now().UTC().Format(timeLayout))
 	if err != nil {
 		return fmt.Errorf("store: checkpoint: %w", err)
 	}
@@ -290,7 +302,7 @@ func (s *SQLite) SetSourceState(pipeline, source string, state []byte, srcSeq in
 	_, err := s.db.Exec(
 		`INSERT INTO source_state (pipeline, source, state, src_seq, updated_at) VALUES (?, ?, ?, ?, ?)
 		 ON CONFLICT(pipeline, source) DO UPDATE SET state = excluded.state, src_seq = excluded.src_seq, updated_at = excluded.updated_at`,
-		pipeline, source, state, srcSeq, time.Now().UTC().Format(time.RFC3339Nano))
+		pipeline, source, state, srcSeq, time.Now().UTC().Format(timeLayout))
 	if err != nil {
 		return fmt.Errorf("store: source state: %w", err)
 	}
@@ -324,7 +336,7 @@ func (s *SQLite) WriteDeadLetter(dl DeadLetter) error {
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		dl.Pipeline, dl.MessageID, dl.RunID, dl.Node, dl.Edge, dl.Reason, dl.Backtrace,
 		dl.Raw, dl.Codec, string(marshalMeta(dl.Meta)), dl.Cursor, dl.SrcName, dl.SrcSeq,
-		createdAt.UTC().Format(time.RFC3339Nano))
+		createdAt.UTC().Format(timeLayout))
 	if err != nil {
 		return fmt.Errorf("store: dead letter: %w", err)
 	}
@@ -372,7 +384,7 @@ func (s *SQLite) DeadLettersSince(pipeline string, since time.Time) ([]DeadLette
 	}
 	return s.scanDeadLetters(
 		`SELECT `+dlqColumns+` FROM dead_letter WHERE pipeline = ? AND created_at >= ? ORDER BY id DESC`,
-		pipeline, since.UTC().Format(time.RFC3339Nano))
+		pipeline, since.UTC().Format(timeLayout))
 }
 
 func (s *SQLite) DeadLettersForRun(pipeline, runID string) ([]DeadLetter, error) {
@@ -410,11 +422,11 @@ const dlqRetentionBatch = 10_000
 
 // DeleteDeadLettersBefore removes the pipeline's dead letters created before
 // cutoff (dlq.retention sweep), batch after batch until none remain, and
-// returns the total. created_at is RFC3339Nano UTC text compared
-// lexicographically — the same sub-second caveat as DeadLettersSince and
-// DeleteJobRunsBefore, kept consistent rather than re-stored here.
+// returns the total. created_at is fixed-width RFC3339 UTC text compared
+// lexicographically (timeLayout) — the text order equals the time order, the
+// same comparison the in-memory implementation makes with time.Time.
 func (s *SQLite) DeleteDeadLettersBefore(pipeline string, cutoff time.Time) (int64, error) {
-	cutoffText := cutoff.UTC().Format(time.RFC3339Nano)
+	cutoffText := cutoff.UTC().Format(timeLayout)
 	var total int64
 	for {
 		res, err := s.db.Exec(
@@ -446,7 +458,7 @@ func (s *SQLite) UpdateJobRun(jr JobRun) error {
 }
 
 func (s *SQLite) upsertJobRun(jr JobRun, insert bool) error {
-	now := time.Now().UTC().Format(time.RFC3339Nano)
+	now := time.Now().UTC().Format(timeLayout)
 	params, err := marshalParams(jr.Parameters)
 	if err != nil {
 		return fmt.Errorf("store: job run %s: %w", jr.RunID, err)
@@ -480,11 +492,14 @@ func (s *SQLite) upsertJobRun(jr JobRun, insert bool) error {
 	return nil
 }
 
+// fmtTime formats a persisted job-run timestamp; a zero time becomes the
+// empty string so the NOT NULL DEFAULT columns stay meaningful (an empty
+// ended_at means not finished).
 func fmtTime(t time.Time) string {
 	if t.IsZero() {
 		return ""
 	}
-	return t.UTC().Format(time.RFC3339Nano)
+	return t.UTC().Format(timeLayout)
 }
 
 func marshalParams(m map[string]any) (string, error) {
@@ -612,7 +627,7 @@ func (s *SQLite) LastScheduledFor(pipeline string) (string, error) {
 func (s *SQLite) DeleteJobRunsBefore(pipeline string, cutoff time.Time) (int64, error) {
 	res, err := s.db.Exec(
 		`DELETE FROM job_run WHERE pipeline = ? AND ended_at != '' AND ended_at < ? AND status NOT IN ('pending','running','committing')`,
-		pipeline, cutoff.UTC().Format(time.RFC3339Nano))
+		pipeline, cutoff.UTC().Format(timeLayout))
 	if err != nil {
 		return 0, fmt.Errorf("store: job run retention: %w", err)
 	}

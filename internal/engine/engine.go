@@ -237,10 +237,19 @@ type Metrics struct {
 	SpoolFailures  atomic.Int64
 }
 
+// Store is the persistence surface the engine depends on (candidate 04
+// facet split): the spool/checkpoint/source-state facet plus dead letters.
+// Job run history is deliberately not part of the engine's contract — the
+// engine neither reads nor writes run records.
+type Store interface {
+	store.SpoolStore
+	store.DeadLetterStore
+}
+
 // Engine runs one pipeline against one store.
 type Engine struct {
 	IR      *ir.Pipeline
-	Store   store.Store
+	Store   Store
 	Reg     *registry.Registry
 	Opts    Options
 	Metrics Metrics
@@ -303,7 +312,7 @@ type instance struct {
 
 // New builds an engine: resolves plugins and codecs, allocates channels and
 // the commit tracker. Call Run to start it.
-func New(p *ir.Pipeline, st store.Store, reg *registry.Registry, opts Options) (*Engine, error) {
+func New(p *ir.Pipeline, st Store, reg *registry.Registry, opts Options) (*Engine, error) {
 	if opts.Clock == nil {
 		opts.Clock = time.Now
 	}

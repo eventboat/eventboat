@@ -29,11 +29,13 @@ func newService(t *testing.T) *ops.Service {
 	if err := testkit.RegisterFakePull(reg); err != nil {
 		t.Fatal(err)
 	}
+	owner := store.NewMemoryOwner()
+	t.Cleanup(func() { _ = owner.Close() })
 	return ops.New(ops.Options{
-		DataDir:  t.TempDir(),
-		Reg:      reg,
-		StoreFor: func(pipeline string) (store.Store, error) { return store.NewMemory(), nil },
-		Clock:    func() time.Time { return time.Now() },
+		DataDir: t.TempDir(),
+		Reg:     reg,
+		Stores:  owner,
+		Clock:   func() time.Time { return time.Now() },
 	})
 }
 
@@ -331,9 +333,9 @@ func TestAdminDeployRejectsTraversalName(t *testing.T) {
 		t.Fatal(err)
 	}
 	svc := ops.New(ops.Options{
-		DataDir:  dir,
-		Reg:      reg,
-		StoreFor: func(pipeline string) (store.Store, error) { return store.NewMemory(), nil },
+		DataDir: dir,
+		Reg:     reg,
+		Stores:  store.NewMemoryOwner(),
 	})
 	t.Cleanup(svc.Stop)
 	h := Handler(svc, nil, nil, Security{Listen: "127.0.0.1:7788"})

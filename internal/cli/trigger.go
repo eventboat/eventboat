@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"strconv"
 	"syscall"
 
@@ -16,6 +15,7 @@ import (
 	"github.com/eventboat/eventboat/internal/ir"
 	"github.com/eventboat/eventboat/internal/jobs"
 	"github.com/eventboat/eventboat/internal/lang/starhost"
+	"github.com/eventboat/eventboat/internal/runtimecfg"
 	"github.com/eventboat/eventboat/internal/store"
 )
 
@@ -68,22 +68,13 @@ func cmdTrigger(args []string, jsonOut bool) int {
 		return 1
 	}
 
-	var st store.Store
-	if *ephemeral {
-		st = store.NewMemory()
-	} else {
-		if err := os.MkdirAll(*dataDir, 0o755); err != nil {
-			fmt.Fprintf(os.Stderr, "trigger: data dir: %v\n", err)
-			return 2
-		}
-		sqlite, err := store.OpenSQLite(filepath.Join(*dataDir, "eventboat.db"))
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "trigger: open store: %v\n", err)
-			return 2
-		}
-		st = sqlite
+	owner := newStoreOwner(runtimecfg.Storage{DataDir: *dataDir, Ephemeral: *ephemeral})
+	defer func() { _ = owner.Close() }()
+	st, err := owner.Open(lr.Pipeline.Name)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "trigger: open store: %v\n", err)
+		return 2
 	}
-	defer func() { _ = st.Close() }()
 
 	opts := jobs.Options{}
 	opts.EngineOptions = engine.DefaultOptions().WithLimits(lr.Pipeline.Limits)
@@ -204,12 +195,13 @@ func cmdJobs(args []string, jsonOut bool) int {
 	}
 	name := lr.Pipeline.Name
 
-	st, err := store.OpenSQLite(filepath.Join(dataDir, "eventboat.db"))
+	owner := store.NewOwner(dataDir)
+	defer func() { _ = owner.Close() }()
+	st, err := owner.Open(name)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "jobs: open store: %v\n", err)
 		return 2
 	}
-	defer func() { _ = st.Close() }()
 
 	switch sub {
 	case "list":

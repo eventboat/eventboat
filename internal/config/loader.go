@@ -10,6 +10,8 @@ import (
 	"strings"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/eventboat/eventboat/internal/fsname"
 )
 
 // Result carries the outcome of loading one configuration file.
@@ -31,44 +33,24 @@ func (r *Result) HasErrors() bool {
 var envPattern = regexp.MustCompile(`\$\{(\??)([A-Za-z_][A-Za-z0-9_.]*)\}`)
 
 // namePattern is the metadata.name contract. The name flows into file paths
-// (<data-dir>/pipelines/<name>.yaml) and store keys, so it is a conservative
+// (<data-dir>/pipelines/<name>.yaml) and the store owner's per-pipeline
+// database (<data-dir>/stores/<name>.db), so it is a conservative
 // identifier: alphanumerics plus . _ -, starting with a letter or digit, no
 // ".." substring (path traversal defense), no Windows reserved device name
-// (WindowsReservedName — CON.yaml would target the console, not a file) and
-// capped at 64 characters. The loader is the single gate — every consumer
-// (CLI, LSP, MCP tools, Admin REST) loads through it before a name reaches
-// the filesystem.
+// (fsname.WindowsReservedName — CON.yaml would target the console, not a
+// file) and capped at 64 characters. The loader is the single gate — every
+// consumer (CLI, LSP, MCP tools, Admin REST) loads through it before a name
+// reaches the filesystem.
 var namePattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]*$`)
 
 const maxNameLen = 64
 
-// WindowsReservedName reports whether name collides with a Windows reserved
-// device name (CON, PRN, AUX, NUL, COM1-9, LPT1-9): Windows resolves such
-// file names to the devices themselves, so os.WriteFile silently writes the
-// device instead of creating a file. Names derived from user input end up as
-// file base names here — the deployed pipeline (<name>.yaml) and the per-
-// pipeline store file (cmd/eventboat's name sanitizer + ".db") — so both
-// gate on this check. Case-insensitive on the name's first dot-component
-// (the would-be base stem): "con" and "con.yaml" are reserved, while
-// "console" and "acon" are ordinary names.
-func WindowsReservedName(name string) bool {
-	stem := name
-	if i := strings.IndexByte(name, '.'); i >= 0 {
-		stem = name[:i]
-	}
-	switch strings.ToUpper(stem) {
-	case "CON", "PRN", "AUX", "NUL",
-		"COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
-		"LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9":
-		return true
-	}
-	return false
-}
-
-// validName reports whether a pipeline name satisfies namePattern.
+// validName reports whether a pipeline name satisfies namePattern. The
+// reserved-device-name rule is shared with the store owner through the leaf
+// package internal/fsname: one list, two callers.
 func validName(name string) bool {
 	return len(name) <= maxNameLen && !strings.Contains(name, "..") &&
-		namePattern.MatchString(name) && !WindowsReservedName(name)
+		namePattern.MatchString(name) && !fsname.WindowsReservedName(name)
 }
 
 // LoadFile reads and parses a pipeline configuration file.

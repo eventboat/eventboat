@@ -69,9 +69,11 @@ func (j JobRun) Runnable() bool {
 	return j.Status == JobPending || j.Status == JobRunning || j.Status == JobCommitting
 }
 
-// Store is the persistence surface used by the engine. All methods must be
-// safe for concurrent use by engine internals.
-type Store interface {
+// SpoolStore is the durable inbound spine: the append-only spool, the
+// checkpoint and per-source commit states (candidate 04 facet split). The
+// engine depends on this facet plus DeadLetterStore; nothing outside the
+// persistence layer needs the other facets to exist.
+type SpoolStore interface {
 	// AppendSpool durably records an inbound message and returns its spool
 	// sequence. A message must not become visible to the DAG before this
 	// succeeds (invariant 1).
@@ -104,7 +106,10 @@ type Store interface {
 
 	// SourceState reads a source's commit state and frontier.
 	SourceState(pipeline, source string) (state []byte, srcSeq int64, err error)
+}
 
+// DeadLetterStore is the durable dead-letter surface.
+type DeadLetterStore interface {
 	// WriteDeadLetter durably records a dead letter. Failure here must block
 	// commit (invariant 4), never drop the message.
 	WriteDeadLetter(dl DeadLetter) error
@@ -130,9 +135,10 @@ type Store interface {
 	// from replay for good. The delete is batched so a first sweep over a
 	// large backlog stays a series of bounded transactions.
 	DeleteDeadLettersBefore(pipeline string, cutoff time.Time) (int64, error)
+}
 
-	// --- job run history (§5.8) ---
-
+// JobRunStore is the job run history surface (§5.8).
+type JobRunStore interface {
 	// CreateJobRun inserts a run record.
 	CreateJobRun(jr JobRun) error
 
@@ -160,6 +166,16 @@ type Store interface {
 	// DeleteJobRunsBefore deletes finished runs ended before cutoff and
 	// returns how many were removed (retention).
 	DeleteJobRunsBefore(pipeline string, cutoff time.Time) (int64, error)
+}
+
+// Store is the combined persistence surface (all three facets plus Close),
+// kept for consumers that genuinely span concerns — ops reads run history
+// and dead letters, and tests wrap the whole thing. All methods must be safe
+// for concurrent use.
+type Store interface {
+	SpoolStore
+	DeadLetterStore
+	JobRunStore
 
 	Close() error
 }
@@ -168,6 +184,7 @@ type Store interface {
 
 type memRow struct {
 	seq        int64
+	pipeline   string
 	msg        registry.Message
 	ingestTime time.Time
 }
@@ -189,9 +206,11 @@ type memSrcState struct {
 	srcSeq int64
 }
 
-// NewMemory returns an in-memory store for tests and --ephemeral runs. It is
-// not bound to a pipeline: like the SQLite implementation, every method keys
-// off the pipeline argument passed to it.
+// NewMemory returns an in-memory store for tests and --ephemeral runs. Like
+// the SQLite implementation, every method keys off the pipeline argument
+// passed to it: one store can hold several pipelines and each one's spool,
+// checkpoint, source states, dead letters and job runs stay isolated
+// (candidate 04 conformance).
 func NewMemory() Store {
 	return &memStore{
 		checkpoints: map[string]int64{},
@@ -207,28 +226,35 @@ func (s *memStore) AppendSpool(pipeline string, msg registry.Message, ingestTime
 	}
 	s.nextSeq++
 	seq := s.nextSeq
-	s.spool = append(s.spool, memRow{seq: seq, msg: msg, ingestTime: ingestTime})
+	s.spool = append(s.spool, memRow{seq: seq, pipeline: pipeline, msg: msg, ingestTime: ingestTime})
 	return seq, nil
 }
 
-// spoolWindow locks out the page [afterSeq, afterSeq+limit] as a copy, so
-// callbacks run without the store lock and without materializing rows on
-// either side of the window (the old full-spool copy per page made replay
-// O(N^2)). more reports whether a row beyond the window exists.
-func (s *memStore) spoolWindow(afterSeq int64, limit int) (rows []memRow, more bool) {
-	start := sort.Search(len(s.spool), func(i int) bool { return s.spool[i].seq > afterSeq })
-	end := start + limit
-	if end > len(s.spool) {
-		end = len(s.spool)
-	} else if end < len(s.spool) {
-		more = true
+// spoolWindow locks out the page [afterSeq, afterSeq+limit] of ONE pipeline
+// as a copy, so callbacks run without the store lock and without
+// materializing rows on either side of the window (the old full-spool copy
+// per page made replay O(N^2)). more reports whether the page was full —
+// the same conservative contract as SQLite's LIMIT probe (a full page means
+// the caller makes one more, possibly empty, call). Sequences stay
+// store-global (SQLite AUTOINCREMENT parity), so the window skips other
+// pipelines' rows.
+func (s *memStore) spoolWindow(pipeline string, afterSeq int64, limit int) (rows []memRow, more bool) {
+	if limit <= 0 {
+		return nil, false
 	}
-	return append([]memRow(nil), s.spool[start:end]...), more
+	start := sort.Search(len(s.spool), func(i int) bool { return s.spool[i].seq > afterSeq })
+	rows = make([]memRow, 0, limit)
+	for i := start; i < len(s.spool) && len(rows) < limit; i++ {
+		if s.spool[i].pipeline == pipeline {
+			rows = append(rows, s.spool[i])
+		}
+	}
+	return rows, len(rows) == limit
 }
 
 func (s *memStore) ReplayFrom(pipeline string, afterSeq int64, fn func(int64, registry.Message, time.Time) error) error {
 	s.mu.Lock()
-	rows, _ := s.spoolWindow(afterSeq, len(s.spool))
+	rows, _ := s.spoolWindow(pipeline, afterSeq, len(s.spool))
 	s.mu.Unlock()
 	for _, r := range rows {
 		if err := fn(r.seq, r.msg, r.ingestTime); err != nil {
@@ -243,7 +269,7 @@ func (s *memStore) ReplayPage(pipeline string, afterSeq int64, limit int, fn fun
 		limit = 500
 	}
 	s.mu.Lock()
-	rows, more := s.spoolWindow(afterSeq, limit)
+	rows, more := s.spoolWindow(pipeline, afterSeq, limit)
 	s.mu.Unlock()
 	last := afterSeq
 	for _, r := range rows {
@@ -255,17 +281,23 @@ func (s *memStore) ReplayPage(pipeline string, afterSeq int64, limit int, fn fun
 	return last, more, nil
 }
 
-// DeleteSpoolThrough drops the sorted prefix at or below through, zeroing it
-// so the trimmed rows (payloads included) are reclaimable.
+// DeleteSpoolThrough drops this pipeline's rows at or below through,
+// allocating a fresh slice so the trimmed rows (payloads included) are
+// reclaimable.
 func (s *memStore) DeleteSpoolThrough(pipeline string, through int64) (int64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	cut := sort.Search(len(s.spool), func(i int) bool { return s.spool[i].seq > through })
-	for i := 0; i < cut; i++ {
-		s.spool[i] = memRow{}
+	kept := make([]memRow, 0, len(s.spool))
+	var removed int64
+	for _, r := range s.spool {
+		if r.pipeline == pipeline && r.seq <= through {
+			removed++
+			continue
+		}
+		kept = append(kept, r)
 	}
-	s.spool = s.spool[cut:]
-	return int64(cut), nil
+	s.spool = kept
+	return removed, nil
 }
 
 func (s *memStore) SetCheckpoint(pipeline string, seq int64) error {
@@ -371,9 +403,9 @@ func (s *memStore) DeleteDeadLetters(pipeline string, ids []int64) (int64, error
 }
 
 // DeleteDeadLettersBefore drops the pipeline's dead letters created strictly
-// before cutoff, zeroing dropped entries so their payloads are reclaimable
-// (same hygiene as DeleteSpoolThrough). WriteDeadLetter stamps every row, so
-// the zero-time case cannot occur.
+// before cutoff, allocating a fresh slice so the dropped rows (payloads
+// included) are reclaimable (same hygiene as DeleteSpoolThrough).
+// WriteDeadLetter stamps every row, so the zero-time case cannot occur.
 func (s *memStore) DeleteDeadLettersBefore(pipeline string, cutoff time.Time) (int64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -395,6 +427,13 @@ func (s *memStore) DeleteDeadLettersBefore(pipeline string, cutoff time.Time) (i
 func (s *memStore) CreateJobRun(jr JobRun) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// run_id is the PRIMARY KEY in SQLite, so a duplicate insert fails there;
+	// the in-memory implementation must fail the same way (conformance).
+	for _, existing := range s.jobRuns {
+		if existing.RunID == jr.RunID {
+			return fmt.Errorf("store: job run %s: UNIQUE constraint failed: job_run.run_id", jr.RunID)
+		}
+	}
 	if jr.UpdatedAt.IsZero() {
 		jr.UpdatedAt = time.Now()
 	}
@@ -434,10 +473,21 @@ func (s *memStore) JobRuns(pipeline string, limit int) ([]JobRun, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var out []JobRun
-	for i := len(s.jobRuns) - 1; i >= 0 && len(out) < limit; i-- {
-		if s.jobRuns[i].Pipeline == pipeline {
-			out = append(out, s.jobRuns[i])
+	for _, jr := range s.jobRuns {
+		if jr.Pipeline == pipeline {
+			out = append(out, jr)
 		}
+	}
+	// SQLite orders by started_at DESC, run_id DESC; the in-memory
+	// implementation must be observably identical (conformance).
+	sort.Slice(out, func(i, j int) bool {
+		if !out[i].StartedAt.Equal(out[j].StartedAt) {
+			return out[i].StartedAt.After(out[j].StartedAt)
+		}
+		return out[i].RunID > out[j].RunID
+	})
+	if len(out) > limit {
+		out = out[:limit]
 	}
 	return out, nil
 }
@@ -446,11 +496,13 @@ func (s *memStore) RunnableJobRuns(pipeline string) ([]JobRun, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var out []JobRun
-	for i := len(s.jobRuns) - 1; i >= 0; i-- {
-		if s.jobRuns[i].Pipeline == pipeline && s.jobRuns[i].Runnable() {
-			out = append(out, s.jobRuns[i])
+	for _, jr := range s.jobRuns {
+		if jr.Pipeline == pipeline && jr.Runnable() {
+			out = append(out, jr)
 		}
 	}
+	// SQLite orders by started_at ASC (conformance).
+	sort.Slice(out, func(i, j int) bool { return out[i].StartedAt.Before(out[j].StartedAt) })
 	return out, nil
 }
 
@@ -524,3 +576,18 @@ func unmarshalMeta(b []byte) map[string]any {
 	}
 	return m
 }
+
+// Both implementations must satisfy every facet and the combined Store
+// (candidate 04 acceptance): the facet split may not leave a backend short,
+// and the conformance suite exercises the shared behavior behind it.
+var (
+	_ SpoolStore      = (*SQLite)(nil)
+	_ DeadLetterStore = (*SQLite)(nil)
+	_ JobRunStore     = (*SQLite)(nil)
+	_ Store           = (*SQLite)(nil)
+
+	_ SpoolStore      = (*memStore)(nil)
+	_ DeadLetterStore = (*memStore)(nil)
+	_ JobRunStore     = (*memStore)(nil)
+	_ Store           = (*memStore)(nil)
+)

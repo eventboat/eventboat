@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"syscall"
 
 	"github.com/eventboat/eventboat/internal/config"
@@ -61,10 +60,8 @@ func cmdRun(args []string, jsonOut bool) int {
 		}
 	}
 
-	// Job pipelines run under the jobs manager (scheduler + admission + run
-	// history, §5.8); continuous pipelines run the plain engine. Telemetry
-	// follows the Runtime config (OTLP push; the Prometheus exposition needs
-	// the daemon surface: run --config-dir / mcp --http).
+	// Telemetry follows the Runtime config (OTLP push; the Prometheus
+	// exposition needs the daemon surface: run --config-dir / mcp --http).
 	rt, err := runtimecfg.Load(*runtimeFile)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "run: %v\n", err)
@@ -87,25 +84,22 @@ func cmdRun(args []string, jsonOut bool) int {
 	}
 	defer func() { _ = observer.Shutdown(context.Background()) }()
 
-	if pip.Config.IsJob() {
-		return runJobPipeline(*configPath, pip, reg, rt.Storage, jsonOut, observer)
+	// One store owner per process, from the runtime storage config: the
+	// canonical per-pipeline file under <data-dir>/stores/ (or the cached
+	// in-memory owner under --ephemeral). The pipeline is loaded before the
+	// store opens, so a one-shot run reads the SAME file the daemon uses.
+	owner := newStoreOwner(rt.Storage)
+	defer func() { _ = owner.Close() }()
+	st, err := owner.Open(pip.Config.Name)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "run: open store: %v\n", err)
+		return 2
 	}
 
-	var st store.Store
-	if *ephemeral {
-		st = store.NewMemory()
-	} else {
-		if err := os.MkdirAll(*dataDir, 0o755); err != nil {
-			fmt.Fprintf(os.Stderr, "run: data dir: %v\n", err)
-			return 2
-		}
-		dbPath := filepath.Join(*dataDir, "eventboat.db")
-		sqlite, err := store.OpenSQLite(dbPath)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "run: open store: %v\n", err)
-			return 2
-		}
-		st = sqlite
+	// Job pipelines run under the jobs manager (scheduler + admission + run
+	// history, §5.8); continuous pipelines run the plain engine.
+	if pip.Config.IsJob() {
+		return runJobPipeline(*configPath, pip, reg, st, rt.Storage, storeDesc(owner, rt.Storage.Ephemeral, pip.Config.Name), jsonOut, observer)
 	}
 
 	engOpts := engine.DefaultOptions().WithLimits(pip.Config.Limits)
@@ -121,7 +115,7 @@ func cmdRun(args []string, jsonOut bool) int {
 	defer cancel()
 
 	if !jsonOut {
-		fmt.Printf("eventboat: running pipeline %q (store: %s)\n", pip.Config.Name, storeLabel(*ephemeral, *dataDir))
+		fmt.Printf("eventboat: running pipeline %q (store: %s)\n", pip.Config.Name, storeDesc(owner, rt.Storage.Ephemeral, pip.Config.Name))
 	}
 	runErr := make(chan error, 1)
 	go func() { runErr <- eng.Run(ctx) }()
@@ -155,7 +149,6 @@ func cmdRun(args []string, jsonOut bool) int {
 
 	if pip.Config.IsBatch() {
 		code := finishBatchRun(eng, ctx, cancel, runErr, sigStatus)
-		_ = st.Close()
 		if !jsonOut {
 			fmt.Println("eventboat: stopped")
 		}
@@ -168,7 +161,6 @@ func cmdRun(args []string, jsonOut bool) int {
 	// (completed → 0).
 	outcome := eng.Wait(ctx, runErr, engine.WaitOptions{})
 	sigStatus()
-	_ = st.Close()
 	if outcome.Status == engine.RunFailed {
 		reportRunFailure(outcome)
 	}
@@ -222,34 +214,12 @@ func reportRunFailure(o engine.Outcome) {
 	}
 }
 
-func storeLabel(ephemeral bool, dataDir string) string {
-	if ephemeral {
-		return "ephemeral (in-memory)"
-	}
-	return dataDir + string(os.PathSeparator) + "eventboat.db (SQLite, WAL)"
-}
-
 // runJobPipeline executes a job pipeline under the jobs manager until the
 // context is canceled: crash recovery of in-flight runs, catchup for missed
-// schedule ticks, then the cron scheduler (§5.8).
-func runJobPipeline(configPath string, pip *ir.Pipeline, reg *registry.Registry, storage runtimecfg.Storage, jsonOut bool, observer *obs.Obs) int {
-	var st store.Store
-	if storage.Ephemeral {
-		st = store.NewMemory()
-	} else {
-		if err := os.MkdirAll(storage.DataDir, 0o755); err != nil {
-			fmt.Fprintf(os.Stderr, "run: data dir: %v\n", err)
-			return 2
-		}
-		sqlite, err := store.OpenSQLite(filepath.Join(storage.DataDir, "eventboat.db"))
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "run: open store: %v\n", err)
-			return 2
-		}
-		st = sqlite
-	}
-	defer func() { _ = st.Close() }()
-
+// schedule ticks, then the cron scheduler (§5.8). The store handle comes from
+// the caller's owner (same file as every other entry point); the caller owns
+// its lifetime.
+func runJobPipeline(configPath string, pip *ir.Pipeline, reg *registry.Registry, st store.Store, storage runtimecfg.Storage, storePath string, jsonOut bool, observer *obs.Obs) int {
 	opts := jobs.Options{}
 	opts.EngineOptions = engine.DefaultOptions().WithLimits(pip.Config.Limits)
 	opts.EngineOptions.Obs = observer
@@ -272,7 +242,7 @@ func runJobPipeline(configPath string, pip *ir.Pipeline, reg *registry.Registry,
 			schedule = "manual/trigger only"
 		}
 		fmt.Printf("eventboat: job pipeline %q (schedule: %s, overlap: %s, store: %s)\n",
-			pip.Config.Name, schedule, pip.Config.Run.Overlap, storeLabel(storage.Ephemeral, storage.DataDir))
+			pip.Config.Name, schedule, pip.Config.Run.Overlap, storePath)
 	}
 	<-ctx.Done()
 	m.Stop()

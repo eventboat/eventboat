@@ -75,12 +75,11 @@ sinks:
 		t.Fatal(err)
 	}
 
-	// Seed the store with two dead letters at node t (the transform).
+	// Seed the store with two dead letters at node t (the transform). The
+	// canonical per-pipeline file is what the replay verb will open.
 	dataDir := filepath.Join(dir, "data")
-	if err := os.MkdirAll(dataDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	st, err := store.OpenSQLite(filepath.Join(dataDir, "eventboat.db"))
+	owner := store.NewOwner(dataDir)
+	st, err := owner.Open("replayme")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +95,7 @@ sinks:
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.Close(); err != nil {
+	if err := owner.Close(); err != nil { // release the file before the subprocess
 		t.Fatal(err)
 	}
 
@@ -106,7 +105,6 @@ sinks:
 	if !strings.Contains(out, `"replayed":1`) {
 		t.Fatalf("replay output: %s", out)
 	}
-
 	// The sink file holds exactly the filtered message, transformed, with the
 	// replay stamps.
 	data, err := os.ReadFile(filepath.Join(dir, "out.jsonl"))
@@ -126,11 +124,12 @@ sinks:
 	}
 
 	// The replayed dead letter is gone; the filtered one remains.
-	st2, err := store.OpenSQLite(filepath.Join(dataDir, "eventboat.db"))
+	owner2 := store.NewOwner(dataDir)
+	defer func() { _ = owner2.Close() }()
+	st2, err := owner2.Open("replayme")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = st2.Close() }()
 	dls, err := st2.DeadLetters("replayme")
 	if err != nil || len(dls) != 1 || dls[0].MessageID != "skip-1" {
 		t.Fatalf("dead letters after --delete: %+v (%v)", dls, err)

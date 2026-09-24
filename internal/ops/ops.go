@@ -31,9 +31,11 @@ import (
 type Options struct {
 	DataDir string // deployed pipeline files live under <DataDir>/pipelines
 	Reg     *registry.Registry
-	// StoreFor returns the durable store for one pipeline (shared SQLite by
-	// default; tests may inject per-pipeline memory stores).
-	StoreFor func(pipeline string) (store.Store, error)
+	// Stores is the process-wide store provider (candidate 04): the entry
+	// point builds one owner (store.NewOwner / store.NewMemoryOwner) and
+	// passes it here, so every surface shares one handle per pipeline. There
+	// is no default factory — layout and handle lifetime belong to the owner.
+	Stores store.Provider
 	// SpoolRetention bounds spool rows behind the checkpoint
 	// (storage.spool_retention; 0 = the engine default) — passed through to
 	// every managed engine.
@@ -114,14 +116,12 @@ type TailEntry struct {
 
 // New builds the service.
 func New(opts Options) *Service {
-	if opts.StoreFor == nil {
-		opts.StoreFor = func(pipeline string) (store.Store, error) {
-			dir := filepath.Join(opts.DataDir, "stores")
-			if err := os.MkdirAll(dir, 0o755); err != nil {
-				return nil, err
-			}
-			return store.OpenSQLite(filepath.Join(dir, "pipeline.db"))
-		}
+	if opts.Stores == nil {
+		// No default factory by ruling (candidate 04): the canonical layout
+		// and the handle lifetime belong to one owner, built by the entry
+		// point. A missing provider is a programming error, not a runtime
+		// condition.
+		panic("ops: Options.Stores is required (build a store.Owner or a memory owner)")
 	}
 	if opts.Clock == nil {
 		opts.Clock = time.Now
@@ -275,7 +275,7 @@ func (s *Service) startManaged(ctx context.Context, cfg *config.Pipeline, file s
 	m := &managed{name: cfg.Name, file: file, cfg: cfg, cancel: cancel, done: make(chan struct{}), started: s.opts.Clock(), status: "running"}
 	if cfg.IsJob() {
 		m.kind = "job"
-		st, err := s.opts.StoreFor(cfg.Name)
+		st, err := s.opts.Stores.Open(cfg.Name)
 		if err != nil {
 			cancel()
 			return nil, err
@@ -311,7 +311,7 @@ func (s *Service) startManaged(ctx context.Context, cfg *config.Pipeline, file s
 			cancel()
 			return nil, fmt.Errorf("deploy: %s", firstErrText(diags))
 		}
-		st, err := s.opts.StoreFor(cfg.Name)
+		st, err := s.opts.Stores.Open(cfg.Name)
 		if err != nil {
 			cancel()
 			return nil, err
@@ -510,7 +510,7 @@ func (s *Service) Status() []PipelineStatus {
 }
 
 func (s *Service) jobsRuns(name string, limit int) ([]store.JobRun, error) {
-	st, err := s.opts.StoreFor(name)
+	st, err := s.opts.Stores.Open(name)
 	if err != nil {
 		return nil, err
 	}
@@ -619,7 +619,7 @@ func (s *Service) DeadLetterQuery(pipeline, since, where string, limit int) ([]s
 	if err != nil {
 		return nil, err
 	}
-	st, err := s.opts.StoreFor(pipeline)
+	st, err := s.opts.Stores.Open(pipeline)
 	if err != nil {
 		return nil, err
 	}
@@ -695,7 +695,7 @@ func (s *Service) DeadLetterReplay(pipeline string, ids []int64, at string) (int
 		// Job pipelines: re-run their dead letters as a fresh manual run.
 		return 0, fmt.Errorf("pipeline %q runs in job mode; replay its runs via a manual trigger or `eventboat replay --job`", pipeline)
 	}
-	st, err := s.opts.StoreFor(pipeline)
+	st, err := s.opts.Stores.Open(pipeline)
 	if err != nil {
 		return 0, err
 	}

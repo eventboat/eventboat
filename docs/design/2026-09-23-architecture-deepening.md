@@ -34,7 +34,7 @@ explicitly confirmed.
 |---|---|---|---|
 | 01 | Start the consumers before replaying (absorbs 03) | Strong | Implemented (stage S1) |
 | 02 | One outcome for every runner | Strong | Implemented (stage S2) |
-| 04 | One owner for the durable store of a pipeline | Strong | Design agreed |
+| 04 | One owner for the durable store of a pipeline | Strong | Implemented (stage S3) |
 | 05 | One verify-first path — the CLI stops re-implementing ops | Strong | Design agreed |
 | 06 | One framework vocabulary — whitelist, order, defaults | Worth exploring | Design agreed |
 | 07 | Typed failure kinds across the transform seam | Worth exploring | Design agreed |

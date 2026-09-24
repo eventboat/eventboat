@@ -43,9 +43,9 @@ func TestBatchStatusFromOutcome(t *testing.T) {
 		t.Fatal(err)
 	}
 	svc := New(Options{
-		DataDir:  dir,
-		Reg:      reg,
-		StoreFor: func(string) (store.Store, error) { return store.NewMemory(), nil },
+		DataDir: dir,
+		Reg:     reg,
+		Stores:  store.NewMemoryOwner(),
 	})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

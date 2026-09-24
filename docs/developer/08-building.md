@@ -59,15 +59,25 @@ docker run --rm -v "$PWD/examples/linear:/work" -w /work eventboat:dev \
 
 ## Development data layout
 
-Where `run` puts things on disk (all under `--data-dir`, default `data`;
-`--ephemeral` replaces the SQLite store with an in-memory one):
+Where the entry points put things on disk (all under `--data-dir`, default
+`data`; `--ephemeral` replaces the SQLite store with a cached in-memory one):
 
 | Path | Written by | Contents |
 |---|---|---|
-| `data/stores/pipeline.db` | `ops.New`'s default store factory | the shared SQLite store: spool, checkpoint, source states, dead letters, job history |
+| `data/stores/<name>.db` | every entry point via `store.Owner` | one SQLite store per pipeline: spool, checkpoint, source states, dead letters, job history |
 | `data/pipelines/<name>.yaml` | `ops.Deploy` | the deployed config — persisted verbatim, reloaded on restart and per job run |
 
-The per-pipeline name is the store key namespace, which is why
+The canonical layout is `data/stores/<sanitized pipeline>.db` (candidate 04):
+the one-shot verbs (`trigger`, `replay`, `jobs`, `run --config`) and the
+daemon (`run --config-dir`, `mcp --http`) all open the SAME per-pipeline
+file, so a run history written by `trigger` is the one `jobs list` and the
+daemon's `Status` read. The name is sanitized to a conservative charset and
+checked against the Windows reserved device names (`internal/fsname`, the
+same rules the loader applies). The pre-candidate-04 layouts —
+`data/eventboat.db` and `data/stores/pipeline.db` — are retired without
+migration (beta ruling): the old files are simply no longer read.
+
+The per-pipeline name is the store file namespace, which is why
 `metadata.name` is validated so strictly (`cfg_name_invalid`).
 
 ## Regenerating protocol code

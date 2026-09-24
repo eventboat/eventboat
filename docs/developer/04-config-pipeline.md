@@ -64,7 +64,7 @@ errors, the same strictness as pipelines.
 
 | Key | Default | Meaning |
 |---|---|---|
-| `storage.data_dir` | `data` | SQLite storage directory |
+| `storage.data_dir` | `data` | SQLite storage directory; each pipeline's store is `<dir>/stores/<sanitized name>.db` (candidate 04) |
 | `storage.ephemeral` | `false` | in-memory store, nothing persists |
 | `storage.spool_retention` | `10000` | spool rows kept behind the checkpoint |
 | `admin.listen` | `127.0.0.1:7788` | admin listener bind address |

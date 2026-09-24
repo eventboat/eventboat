@@ -15,7 +15,6 @@ import (
 	mcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/eventboat/eventboat/internal/admin"
-	"github.com/eventboat/eventboat/internal/config"
 	"github.com/eventboat/eventboat/internal/mcpserver"
 	"github.com/eventboat/eventboat/internal/obs"
 	"github.com/eventboat/eventboat/internal/ops"
@@ -74,7 +73,9 @@ func cmdMCP(args []string, jsonOut bool) int {
 		return 2
 	}
 
-	svc, metricsHandler, obsShutdown := newOpsService(reg, rt)
+	owner := newStoreOwner(rt.Storage)
+	defer func() { _ = owner.Close() }()
+	svc, metricsHandler, obsShutdown := newOpsService(reg, rt, owner)
 	defer func() { _ = obsShutdown(context.Background()) }()
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
@@ -110,7 +111,9 @@ func cmdMCP(args []string, jsonOut bool) int {
 
 // newOpsService builds the ops service from the runtime config (including
 // the telemetry stack; metricsHandler serves /metrics when Prometheus is on).
-func newOpsService(reg *registry.Registry, rt runtimecfg.Config) (svc *ops.Service, metricsHandler http.Handler, shutdown func(context.Context) error) {
+// The caller owns the store owner and closes it on shutdown — after the
+// service stopped, so the engines' final writes land first.
+func newOpsService(reg *registry.Registry, rt runtimecfg.Config, owner *store.Owner) (svc *ops.Service, metricsHandler http.Handler, shutdown func(context.Context) error) {
 	dir := rt.Storage.DataDir
 	observer, err := obs.Setup(context.Background(), obs.Config{
 		OTLPEndpoint: rt.Telemetry.OTLPEndpoint,
@@ -125,40 +128,12 @@ func newOpsService(reg *registry.Registry, rt runtimecfg.Config) (svc *ops.Servi
 		DataDir:        dir,
 		Reg:            reg,
 		SpoolRetention: rt.Storage.SpoolRetention,
-		StoreFor: func(pipeline string) (store.Store, error) {
-			if rt.Storage.Ephemeral {
-				return store.NewMemory(), nil
-			}
-			sdir := filepath.Join(dir, "stores")
-			if err := os.MkdirAll(sdir, 0o755); err != nil {
-				return nil, err
-			}
-			name := sanitize(pipeline)
-			// sanitize keeps [A-Za-z0-9_-], which can still spell a Windows
-			// reserved device name — CON.db targets the console, not a file
-			// (the same check the loader's name validation applies, shared
-			// from internal/config).
-			if config.WindowsReservedName(name) {
-				return nil, fmt.Errorf("pipeline %q: store name %q is a Windows reserved device name", pipeline, name)
-			}
-			return store.OpenSQLite(filepath.Join(sdir, name+".db"))
-		},
+		Stores:         owner,
 	})
 	if observer != nil {
 		return svc, observer.Handler(), observer.Shutdown
 	}
 	return svc, nil, func(context.Context) error { return nil }
-}
-
-func sanitize(name string) string {
-	return strings.Map(func(r rune) rune {
-		switch {
-		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_':
-			return r
-		default:
-			return '_'
-		}
-	}, name)
 }
 
 // resolveAdminToken picks the admin bearer token, most explicit first: the
@@ -239,7 +214,9 @@ func cmdRunDir(args []string, jsonOut bool) int {
 		fmt.Fprintf(os.Stderr, "run: %v\n", err)
 		return 2
 	}
-	svc, metricsHandler, obsShutdown := newOpsService(reg, rt)
+	owner := newStoreOwner(rt.Storage)
+	defer func() { _ = owner.Close() }()
+	svc, metricsHandler, obsShutdown := newOpsService(reg, rt, owner)
 	defer func() { _ = obsShutdown(context.Background()) }()
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()

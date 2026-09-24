@@ -337,3 +337,8 @@ func (w *StoreWrapper) DeleteJobRunsBefore(pipeline string, cutoff time.Time) (i
 }
 
 func (w *StoreWrapper) Close() error { return w.Inner.Close() }
+
+// Candidate 04: the fault-injection wrapper still satisfies the combined
+// store interface (all three facets plus Close), so tests can put it wherever
+// the real store goes.
+var _ store.Store = (*StoreWrapper)(nil)

@@ -56,12 +56,22 @@ func (o Options) runID() string {
 	return uuid.New().String()
 }
 
+// Store is the persistence surface the manager depends on (candidate 04
+// facet split): run history plus the engine's facets, because every run
+// builds an engine over the same store. The manager itself never touches the
+// spool, checkpoint or dead-letter methods — those belong to the per-run
+// engines it constructs.
+type Store interface {
+	store.JobRunStore
+	engine.Store
+}
+
 // Manager runs one job pipeline: scheduling, admission and run lifecycle.
 type Manager struct {
 	cfg  *config.Pipeline // verified configuration (metadata, run, parameters, hooks, limits)
 	file string           // pipeline file (re-loaded per run for substitution)
 	reg  *registry.Registry
-	st   store.Store
+	st   Store
 	opts Options
 
 	mu      sync.Mutex
@@ -84,7 +94,7 @@ type runningRun struct {
 }
 
 // New builds a Manager for one verified job pipeline.
-func New(cfg *config.Pipeline, file string, st store.Store, reg *registry.Registry, opts Options) (*Manager, error) {
+func New(cfg *config.Pipeline, file string, st Store, reg *registry.Registry, opts Options) (*Manager, error) {
 	if !cfg.IsJob() {
 		return nil, fmt.Errorf("jobs: pipeline %q is not a job pipeline (run.mode: job required)", cfg.Name)
 	}
