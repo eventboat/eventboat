@@ -1,0 +1,47 @@
+suite: collector
+pipeline: ../pipeline.yaml
+cases:
+  - name: json-event-is-stamped-and-shipped
+    inject:
+      at: logs
+      messages:
+        - fixtures/app.json
+    expect:
+      capture:
+        at: victorialogs
+        count: 1
+        messages:
+          - payload.host: web-01
+            payload.app: nginx
+            payload.ts: "2026-09-24T10:00:00Z"
+            payload.level: info
+            payload.msg: GET /health 200
+            payload.status: 200
+  - name: missing-timestamp-is-backfilled-from-ingest-time
+    inject:
+      at: logs
+      messages:
+        - fixtures/app-no-ts.json
+    expect:
+      capture:
+        at: victorialogs
+        count: 1
+        messages:
+          # The contract clock is fixed at 2026-09-03T12:00:00Z, which is what
+          # meta.ingest_time carries into the backfilled payload.ts.
+          - payload.host: web-01
+            payload.app: nginx
+            payload.ts: "2026-09-03T12:00:00Z"
+            payload.level: warn
+            payload.latency_ms: 812
+  - name: malformed-json-dead-letters
+    inject:
+      at: logs
+      raw: "{not json"
+    expect:
+      dlq:
+        count: 1
+        reason_contains: decode
+      capture:
+        at: victorialogs
+        count: 0

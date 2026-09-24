@@ -95,6 +95,26 @@ hygiene findings.
   everything); removals need a restart. Unix-only — Windows cannot deliver
   SIGHUP. The k8s rollout docs now describe the semantics instead of
   merely naming the signal.
+- **`victorialogs` sink — batch log ingest** (log-collection design
+  2026-09-24 §2.1): one `Sink.Write` call is exactly one
+  `POST <url>/insert/jsonline` whose body is the batch's encoded JSON, one
+  object per line (`Content-Type: application/stream+json`) — the generic
+  `http` sink POSTs per message, which cannot carry a busy host's log rate.
+  `stream_fields`, `time_field`, `msg_field` and `extra_fields` become query
+  parameters only when set; `gzip`, `max_idle_conns`, `timeout_ms` and the
+  `account_id`/`project_id` tenant headers cover the rest of the VL tuning
+  surface. Error mapping follows VL's semantics: 2xx is committed (VL skips
+  unparseable lines server-side and still answers 200 — the reason the body
+  must be codec-encoded JSON), 4xx is permanent (the edge policy exhausts and
+  the batch dead-letters; no new engine error type), 5xx/network/timeout are
+  transient and the blocked write is what drives engine backpressure. Ships
+  with the `examples/collector` pipeline and contract suite, a DaemonSet
+  template (`hostPath` state so the file-offset watermark survives pod
+  restarts) and a systemd/logrotate template, and `docs/collector.md`. An
+  env-gated integration test (`internal/inttests/victorialogs`,
+  `EVENTBOAT_VICTORIALOGS_URL`; CI job `victorialogs-integration`) drives a
+  real file through the engine into a live VictoriaLogs and queries the rows
+  back, covering the decode dead letter and the gzip body.
 
 ### Fixed
 

@@ -2,7 +2,7 @@
 
 | 状态 Status | 日期 Date | 关联 Links |
 |---|---|---|
-| Draft — design of record, not implemented | 2026-09-24 | [Architecture deepening](../design/2026-09-23-architecture-deepening.md) (batch-flush direction, §R-B1) · [`competitor-research.md`](../../competitor-research.md) §4 (Fluentd / Fluent Bit) · [Kubernetes deployment](../k8s.md) · [`scripts/bench-gate.sh`](../../scripts/bench-gate.sh) |
+| Draft — P0 implemented | 2026-09-24 | [Architecture deepening](../design/2026-09-23-architecture-deepening.md) (batch-flush direction, §R-B1) · [`competitor-research.md`](../../competitor-research.md) §4 (Fluentd / Fluent Bit) · [Kubernetes deployment](../k8s.md) · [`scripts/bench-gate.sh`](../../scripts/bench-gate.sh) |
 
 This document is the design of record for using Eventboat as the log
 collector in a file-based collection scenario — host files and container logs,
@@ -76,7 +76,7 @@ object per line.
 |---|---|---|
 | `url` | — | base URL; the sink appends `/insert/jsonline` |
 | `stream_fields` | — | `_stream_fields` (recommended: `host,app` plus `namespace,pod` in k8s) |
-| `time_field` | `_time` | `_time_field` (comma-separated list allowed) |
+| `time_field` | unset (VL's `_time`) | `_time_field` (comma-separated list allowed); unset omits the parameter so VictoriaLogs applies its own default |
 | `msg_field` | — | `_msg_field` |
 | `extra_fields` | — | `_extra_fields` |
 | `gzip` | `false` | `Content-Encoding: gzip` |

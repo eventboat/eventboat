@@ -1,0 +1,2 @@
+{"ts": "2026-09-24T10:00:00Z", "level": "info", "msg": "GET /health 200", "status": 200}
+{"ts": "2026-09-24T10:00:01Z", "level": "error", "msg": "upstream timed out", "status": 504, "took_ms": 30012}

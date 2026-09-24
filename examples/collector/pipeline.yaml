@@ -1,0 +1,47 @@
+# Log collection: tail one JSON-lines file, stamp host/app onto every event,
+# backfill a missing timestamp, ship batches to VictoriaLogs
+# (docs/collector.md; design: docs/design/2026-09-24-log-collection.md §2.1).
+#
+# Run from this directory (file paths resolve against the process working
+# directory, not the config file's location):
+#
+#   eventboat verify --config pipeline.yaml
+#   eventboat run --config pipeline.yaml --data-dir ./data
+#
+# --data-dir overrides eventboat.yaml in this directory, which points the
+# state at the production path (/var/lib/eventboat).
+#
+# In production the constants come from the deployment (per-host ConfigMap or
+# ${VAR} substitution); logs/app.jsonl ships two sample lines.
+apiVersion: eventboat/v1
+kind: Pipeline
+metadata: {name: collector}
+
+constants:
+  host: web-01
+  app: nginx
+
+sources:
+  logs:
+    decoder: json
+    file:
+      path: logs/app.jsonl
+
+transforms:
+  stamp:
+    depends_on: [logs]
+    script: |
+      payload.host = constants.host
+      payload.app = constants.app
+      if "ts" not in payload:
+          payload.ts = meta.ingest_time
+
+sinks:
+  victorialogs:
+    depends_on: [stamp]
+    encoder: json
+    batch: {size: 500, timeout_ms: 2000}
+    victorialogs:
+      url: http://127.0.0.1:9428     # /insert/jsonline is appended by the sink
+      stream_fields: host,app
+      time_field: ts

@@ -75,6 +75,34 @@ jobs:
         env:
           EVENTBOAT_KAFKA_TEST: "1"
 
+  # Real VictoriaLogs ingestion (log-collection design 2026-09-24 §4 P0): the
+  # batch JSONL path with _stream_fields/_time_field, the decode dead letter
+  # and the gzip body against a live server (a plain docker run, no
+  # testcontainers). Env-gated; the plain test job above runs this package as
+  # a skip.
+  victorialogs-integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+          cache: true
+      - name: Start VictoriaLogs
+        run: |
+          docker run -d --name victorialogs -p 9428:9428 \
+            victoriametrics/victoria-logs:v1.52.0 -storageDataPath=/tmp/vl
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:9428/health; then break; fi
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:9428/health
+      - name: VictoriaLogs integration (real server)
+        run: go test ./internal/inttests/victorialogs/ -v -timeout 3m
+        env:
+          EVENTBOAT_VICTORIALOGS_URL: http://127.0.0.1:9428
+
   # Benchmark job (M3 §4.6 discipline: reproducible numbers). The three
   # gate-relevant benchmarks carry LOOSE thresholds (an order-of-magnitude
   # guard against algorithmic regressions, not a noise gate — runner

@@ -1,0 +1,26 @@
+# Runtime configuration (kind: Runtime) for a collector node — the VM/bare
+# metal counterpart of the ConfigMap in k8s-daemonset.yaml (docs/collector.md).
+# Point `run --runtime` at this file; the pipeline itself lives in
+# pipeline.yaml next to it.
+apiVersion: eventboat/v1
+kind: Runtime
+
+storage:
+  # SQLite spool, dead letters and file-source watermarks. Local disk, never a
+  # network filesystem: the single-writer lease is an advisory lock.
+  data_dir: /var/lib/eventboat
+  # Crash-replay window: spool rows kept behind the checkpoint. Raise it when
+  # a restart has to replay more than the default (design §2.6.2).
+  spool_retention: 10000
+
+telemetry:
+  prometheus: true    # /metrics: sink batch latency, backpressure, DLQ, VL 4xx/5xx
+  sample_ratio: 0     # per-message traces stay off at collection rates
+
+admin:
+  # Health probes (/live, /ready), status and verify-first reload. A
+  # non-loopback bind refuses to start without a token (EVENTBOAT_ADMIN_TOKEN).
+  listen: 0.0.0.0:7788
+
+mcp:
+  enable: false       # a collector node is not an agent-facing server

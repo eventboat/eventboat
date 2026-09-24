@@ -1,0 +1,51 @@
+# Eventboat log collector as a systemd service (VM / bare-metal shape).
+#
+# Install:
+#   useradd --system --home-dir /var/lib/eventboat --create-home eventboat
+#   install -Dm644 eventboat-collector.service /etc/systemd/system/eventboat-collector.service
+#   install -Dm644 ../eventboat.yaml /etc/eventboat/eventboat.yaml
+#   install -Dm644 ../pipeline.yaml /etc/eventboat/pipelines/pipeline.yaml
+#   systemctl daemon-reload && systemctl enable --now eventboat-collector
+#
+# logrotate guidance (create vs copytruncate, retention): README.md next to
+# this file.
+[Unit]
+Description=Eventboat log collector (files -> VictoriaLogs)
+Documentation=https://github.com/eventboat/eventboat/blob/main/docs/collector.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=eventboat
+Group=eventboat
+WorkingDirectory=/etc/eventboat
+ExecStart=/usr/local/bin/eventboat run \
+    --config-dir /etc/eventboat/pipelines \
+    --runtime /etc/eventboat/eventboat.yaml
+
+# SIGTERM drains workers and sources and flushes the spool; a restart resumes
+# from the committed file offsets (at-least-once).
+KillSignal=SIGTERM
+TimeoutStopSec=30
+Restart=on-failure
+RestartSec=2
+
+# SQLite spool + file offsets (storage.data_dir in eventboat.yaml).
+# StateDirectory creates /var/lib/eventboat owned by the service user, so no
+# manual chown is needed.
+StateDirectory=eventboat
+StateDirectoryMode=0750
+
+# Admin/health listener. A non-loopback bind needs EVENTBOAT_ADMIN_TOKEN and
+# refuses to start without one; keep the secret in an env file, not here.
+EnvironmentFile=-/etc/eventboat/eventboat.env
+
+# The service only reads the log tree and writes its own state.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,135 @@
+# Eventboat as a log-collection DaemonSet: one collector pod per node tailing
+# that node's log files and shipping batches to VictoriaLogs
+# (docs/collector.md; design: docs/design/2026-09-24-log-collection.md §2.5).
+#
+#   kubectl create secret generic eventboat-admin-token --from-literal=token=$(openssl rand -hex 32)
+#   mkdir -p /var/lib/eventboat && chown 65532 /var/lib/eventboat   # on every node
+#   kubectl apply -f k8s-daemonset.yaml
+#
+# There is no `replicas` field: DaemonSet semantics are one pod per node, and
+# each node's collector owns its own on-disk state (spool + file offsets).
+# That is the single-active model — pods are independent, never sharing a
+# spool (docs/k8s.md; the single-writer lease needs local disk).
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: eventboat-collector
+  labels: {app: eventboat-collector}
+spec:
+  selector:
+    matchLabels: {app: eventboat-collector}
+  template:
+    metadata:
+      labels: {app: eventboat-collector}
+    spec:
+      containers:
+        - name: eventboat
+          image: ghcr.io/eventboat/eventboat:main   # pin a semver tag in production
+          args: ["run", "--config-dir", "/pipelines", "--runtime", "/runtime/eventboat.yaml"]
+          securityContext:
+            runAsNonRoot: true   # image USER is distroless nonroot (65532)
+            # fsGroup does NOT chown hostPath volumes: prepare
+            # /var/lib/eventboat on the node as shown above (or in a
+            # privileged init container adding `chown 65532 /state`).
+            fsGroup: 65532
+          ports:
+            - {name: admin, containerPort: 7788}
+          env:
+            # Per-node identity: pod HOSTNAME would be the pod name, which is
+            # useless in a log stream — the node name is the `host` constant.
+            - {name: HOSTNAME, valueFrom: {fieldRef: {fieldPath: spec.nodeName}}}
+            - {name: APP, value: nginx}   # ${VAR} substitution targets
+            # Non-loopback admin binds refuse to start without a token; the
+            # probes below are token-exempt.
+            - name: EVENTBOAT_ADMIN_TOKEN
+              valueFrom: {secretKeyRef: {name: eventboat-admin-token, key: token}}
+          volumeMounts:
+            - {name: logs, mountPath: /var/log, readOnly: true}
+            - {name: state, mountPath: /var/lib/eventboat}
+            - {name: pipelines, mountPath: /pipelines, readOnly: true}
+            - {name: runtime, mountPath: /runtime, readOnly: true}
+          livenessProbe:
+            httpGet: {path: /live, port: admin}
+            initialDelaySeconds: 5
+          readinessProbe:
+            httpGet: {path: /ready, port: admin}   # 503 while shutting down
+            initialDelaySeconds: 5
+          resources:
+            requests: {cpu: 200m, memory: 128Mi}
+            limits: {memory: 512Mi}
+      volumes:
+        # The host log tree, read-only: the collector must never write it.
+        - name: logs
+          hostPath: {path: /var/log, type: Directory}
+        # NOT emptyDir: the file source's byte-offset watermark lives in the
+        # SQLite spool here. An emptyDir disappears with the pod, so a restart
+        # would re-read (or skip past) unread lines — the offsets must survive
+        # pod restarts, and a hostPath keeps them on the node. Never put this
+        # on a network filesystem: the single-writer lease is an advisory lock
+        # (docs/k8s.md).
+        - name: state
+          hostPath: {path: /var/lib/eventboat, type: DirectoryOrCreate}
+        - name: pipelines
+          configMap: {name: eventboat-pipelines}
+        - name: runtime
+          configMap: {name: eventboat-runtime}
+---
+# The collection pipeline. In production, create this from a file instead of
+# inlining it (the pipeline is the thing you version per environment):
+#
+#   kubectl create configmap eventboat-pipelines --from-file=pipeline.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: eventboat-pipelines
+data:
+  pipeline.yaml: |
+    apiVersion: eventboat/v1
+    kind: Pipeline
+    metadata: {name: collector}
+    constants:
+      host: "${HOSTNAME}"     # the node name, injected by the DaemonSet
+      app: "${APP}"
+    sources:
+      logs:
+        decoder: json
+        # One file per source today; glob support arrives with the
+        # file-source v2 work (design §2.3). Point this at the workload's
+        # JSON-lines log on the node.
+        file: {path: /var/log/app/app.jsonl}
+    transforms:
+      stamp:
+        depends_on: [logs]
+        script: |
+          payload.host = constants.host
+          payload.app = constants.app
+          if "ts" not in payload:
+              payload.ts = meta.ingest_time
+    sinks:
+      victorialogs:
+        depends_on: [stamp]
+        encoder: json
+        batch: {size: 500, timeout_ms: 2000}
+        victorialogs:
+          url: http://victoria-logs.monitoring.svc:9428   # /insert/jsonline appended
+          stream_fields: host,app
+          time_field: ts
+---
+# Runtime config: mirrors examples/collector/eventboat.yaml with the
+# DaemonSet's data_dir; the wildcard admin bind is what the kubelet probes
+# reach. In production: kubectl create configmap eventboat-runtime
+# --from-file=eventboat.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: eventboat-runtime
+data:
+  eventboat.yaml: |
+    apiVersion: eventboat/v1
+    kind: Runtime
+    storage:
+      data_dir: /var/lib/eventboat
+    telemetry:
+      prometheus: true
+      sample_ratio: 0
+    admin: {listen: 0.0.0.0:7788}

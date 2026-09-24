@@ -23,6 +23,7 @@ func RegisterAll(reg *registry.Registry) error {
 		registerWasmTransform,
 		registerFileSink,
 		registerHTTPSink,
+		registerVictoriaLogsSink,
 		registerKafkaSink,
 		registerDropSink,
 		registerDebugSink,

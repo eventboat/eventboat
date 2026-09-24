@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["url"],
+  "properties": {
+    "url": {
+      "type": "string",
+      "minLength": 1,
+      "description": "VictoriaLogs base URL; the sink POSTs to <url>/insert/jsonline"
+    },
+    "stream_fields": {
+      "type": "string",
+      "description": "_stream_fields query parameter (e.g. host,app): the fields that identify the log stream"
+    },
+    "time_field": {
+      "type": "string",
+      "description": "_time_field query parameter: the JSON field carrying the event timestamp"
+    },
+    "msg_field": {
+      "type": "string",
+      "description": "_msg_field query parameter: the JSON field carrying the log message"
+    },
+    "extra_fields": {
+      "type": "string",
+      "description": "_extra_fields query parameter: comma-separated fields stored as extra fields"
+    },
+    "gzip": {
+      "type": "boolean",
+      "default": false,
+      "description": "true gzips the request body (Content-Encoding: gzip)"
+    },
+    "max_idle_conns": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 2,
+      "description": "HTTP transport MaxIdleConnsPerHost (connection reuse; one sink goroutine by design)"
+    },
+    "timeout_ms": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 10000,
+      "description": "request timeout in milliseconds"
+    },
+    "account_id": {
+      "type": "integer",
+      "minimum": 0,
+      "default": 0,
+      "description": "VictoriaLogs tenant account id; 0 omits the AccountID header"
+    },
+    "project_id": {
+      "type": "integer",
+      "minimum": 0,
+      "default": 0,
+      "description": "VictoriaLogs tenant project id; 0 omits the ProjectID header"
+    }
+  },
+  "additionalProperties": false
+}
