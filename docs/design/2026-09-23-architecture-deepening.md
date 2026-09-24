@@ -38,7 +38,7 @@ explicitly confirmed.
 | 05 | One verify-first path — the CLI stops re-implementing ops | Strong | Design agreed |
 | 06 | One framework vocabulary — whitelist, order, defaults | Worth exploring | Design agreed |
 | 07 | Typed failure kinds across the transform seam | Worth exploring | Design agreed |
-| 08 | The jobs manager owns run admission and terminal transitions | Worth exploring | Design agreed |
+| 08 | The jobs manager owns run admission and terminal transitions | Worth exploring | Implemented (stage S4) |
 | 09 | Explain renders resolved semantics | Speculative | Design agreed |
 
 Out of scope by decision (see §7): dropping `Source.Commit` entirely, the

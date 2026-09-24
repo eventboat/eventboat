@@ -227,7 +227,7 @@ func (o *Obs) createInstruments() error {
 	o.WasmTimeouts = newCounter("eventboat_wasm_timeouts_total", "WASM transform invocations killed by the per-invoke wall-clock budget (review-m3 R1)")
 	o.JobsStarted = newCounter("eventboat_jobs_started_total", "Job runs started")
 	o.JobsOverlapSkipped = newCounter("eventboat_jobs_overlap_skipped_total", "Triggers rejected by overlap:skip")
-	o.JobsCatchupSkipped = newCounter("eventboat_jobs_catchup_skipped_total", "Missed schedule ticks outside the catchup window")
+	o.JobsCatchupSkipped = newCounter("eventboat_jobs_catchup_skipped_total", "Catch-up episodes with missed ticks outside the catchup window")
 	o.JobsCompleted = newCounter("eventboat_jobs_completed_total", "Job runs completed by terminal status")
 	o.JobRowsRead = newCounter("eventboat_job_rows_read_total", "Rows read by job runs")
 	o.JobRowsDelivered = newCounter("eventboat_job_rows_delivered_total", "Rows delivered by job runs")
@@ -377,7 +377,9 @@ func (o *Obs) RecordOverlapSkip(pipeline string) {
 	o.JobsOverlapSkipped.Add(context.Background(), 1, metric.WithAttributes(attribute.String("pipeline", pipeline)))
 }
 
-// RecordCatchupSkip counts one out-of-window missed tick.
+// RecordCatchupSkip counts one skipped catch-up episode (missed ticks fell
+// outside the window; candidate 08 counts the episode once, since the
+// bounded catch-up never walks the missed list).
 func (o *Obs) RecordCatchupSkip(pipeline string) {
 	if o == nil || o.JobsCatchupSkipped == nil {
 		return

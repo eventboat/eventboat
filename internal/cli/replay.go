@@ -296,6 +296,14 @@ func cmdReplay(args []string, jsonOut bool) int {
 	}
 
 	// Live replay: run the engine with REAL sinks, inject, wait for commit.
+	// A replay engine is a writer: take the cross-process store lease, or
+	// refuse while a daemon owns the pipeline (candidate 08).
+	lease, err := acquireRunLease(owner, "replay", pip.Config.Name)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	defer func() { _ = lease.Release() }()
 	eng, err := engine.New(pip, st, reg, engine.DefaultOptions().WithLimits(pip.Config.Limits))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "replay: %v\n", err)

@@ -9,10 +9,15 @@ import (
 	"github.com/eventboat/eventboat/internal/fsname"
 )
 
-// Provider returns the durable store for one pipeline. Callers (ops, tests)
-// depend on this interface, never on the layout or the concrete owner.
+// Provider returns the durable store for one pipeline and the exclusive
+// cross-process lease that protects it (candidate 08): Open hands out the
+// handle, Acquire reserves the single-writer right before a run starts.
+// Callers (ops, the one-shot CLI verbs) depend on this interface, never on
+// the layout or the concrete owner. A provider that cannot lease cannot
+// exist: silently running without the lease would void the one-writer rule.
 type Provider interface {
 	Open(pipeline string) (Store, error)
+	Leaser
 }
 
 // Owner decides where a pipeline's durable store lives and owns its handle
@@ -33,8 +38,9 @@ type Provider interface {
 // stores. It is what tests and --ephemeral use, so every surface of one
 // process sees the same data instead of a fresh store per Open.
 //
-// Owner implements Provider. Path exposes the on-disk file (stage 08's
-// cross-process lease locks exactly this file); a memory owner has none.
+// Owner implements Provider and Leaser. Path exposes the on-disk file (the
+// cross-process lease locks the sidecar next to exactly this file); a memory
+// owner has none and hands out a no-op lease.
 type Owner struct {
 	dataDir string
 	memory  bool
@@ -74,6 +80,22 @@ func (o *Owner) Open(pipeline string) (Store, error) {
 	}
 	o.handles[pipeline] = st
 	return st, nil
+}
+
+// Acquire reserves the pipeline's exclusive store lease (candidate 08). The
+// durable owner takes the OS file lock on the sidecar <store>.lock, so the
+// lock is released with the process — no TTL heartbeat. The memory owner
+// returns a no-op lease: in-memory stores are process-local, and
+// single-process tests must see no behavioral change.
+func (o *Owner) Acquire(pipeline string) (Lease, error) {
+	if o.memory {
+		return noopLease{}, nil
+	}
+	path, err := o.path(pipeline)
+	if err != nil {
+		return nil, err
+	}
+	return acquireFileLease(pipeline, path)
 }
 
 // Path returns the on-disk location of the pipeline's store without opening
@@ -143,3 +165,11 @@ func (o *Owner) path(pipeline string) (string, error) {
 	}
 	return filepath.Join(o.dataDir, "stores", name+".db"), nil
 }
+
+// Both owners satisfy the provider-and-lease contract (candidate 08): a
+// provider without Acquire cannot exist, because ops and the one-shot verbs
+// would silently skip the single-writer rule.
+var (
+	_ Provider = (*Owner)(nil)
+	_ Leaser   = (*Owner)(nil)
+)

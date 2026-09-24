@@ -22,6 +22,7 @@ import (
 	"github.com/eventboat/eventboat/internal/registry/builtin"
 	"github.com/eventboat/eventboat/internal/store"
 	"github.com/eventboat/eventboat/internal/testkit"
+	"github.com/robfig/cron/v3"
 )
 
 // recordingSink records delivered bytes with optional wedging.
@@ -588,13 +589,14 @@ sinks:
 }
 
 // catchup_window: a missed tick inside the window runs once at startup;
-// ticks outside the window are counted and skipped.
+// missed ticks outside the window are counted as one skipped episode
+// (candidate 08: per-tick counting would walk the unbounded missed list).
 func TestJobCatchupWindow(t *testing.T) {
 	testkit.ResetFakePull()
 	// Every-minute schedule; the process was down across several ticks.
 	// Window 2m: with last successful tick 12:25 and now 12:30, the missed
-	// ticks are 12:26..12:30 — 12:26/12:27 fall outside the window (skipped,
-	// counted), 12:28..12:30 are inside, and only the LATEST (12:30) runs.
+	// ticks are 12:26..12:30 — 12:26/12:27 fall outside the window, and only
+	// the LATEST (12:30) runs.
 	h := newJobHarness(t, "* * * * *", "skip", "2m", false, "")
 	st := store.NewMemory()
 
@@ -635,8 +637,8 @@ func TestJobCatchupWindow(t *testing.T) {
 	if catchups != 1 {
 		t.Errorf("catchup runs = %d, want exactly 1 (latest missed tick)", catchups)
 	}
-	if skipped != 2 {
-		t.Errorf("out-of-window ticks skipped = %d, want 2 (12:26, 12:27)", skipped)
+	if skipped != 1 {
+		t.Errorf("skipped catch-up episodes = %d, want 1 (the 12:26/12:27 ticks are one bounded episode count)", skipped)
 	}
 	m.Stop()
 }
@@ -953,5 +955,292 @@ sinks:
 	}
 	if got := len(h.sink("drained").snapshot()); got != 3 {
 		t.Fatalf("second run re-delivered: %d rows total, want 3", got)
+	}
+}
+
+// --- candidate 08: run admission, the stop barrier, bounded catchup ---
+
+// stallingCreateStore stalls the FIRST CreateJobRun, which lets a test hold a
+// trigger inside the admission critical section and observe whether a second
+// trigger can slip past the overlap check against a still-empty active set
+// (the pre-candidate-08 TOCTOU window).
+type stallingCreateStore struct {
+	store.Store
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (s *stallingCreateStore) CreateJobRun(jr store.JobRun) error {
+	s.once.Do(func() { close(s.entered) })
+	<-s.release
+	return s.Store.CreateJobRun(jr)
+}
+
+// countSchedule wraps a parsed schedule and counts Next probes.
+type countSchedule struct {
+	cron.Schedule
+	probes *int32
+}
+
+func (c countSchedule) Next(t time.Time) time.Time {
+	atomic.AddInt32(c.probes, 1)
+	return c.Schedule.Next(t)
+}
+
+// Candidate 08 acceptance 1: with overlap: skip, two racing triggers admit
+// exactly one. The first trigger is stalled INSIDE CreateJobRun (holding the
+// manager lock), and the second must WAIT for the lock instead of passing
+// the overlap check against an empty active set and creating a second run.
+func TestRunAdmissionAtomicOverlapSkip(t *testing.T) {
+	testkit.ResetFakePull()
+	h := newJobHarness(t, "", "skip", "0s", false, "")
+	st := &stallingCreateStore{Store: store.NewMemory(), entered: make(chan struct{}), release: make(chan struct{})}
+	m := h.buildManager(st, time.Now)
+
+	gate := make(chan struct{})
+	gateOnce := sync.OnceFunc(func() { close(gate) })
+	t.Cleanup(gateOnce)
+	h.sink("out").block = func(int) (<-chan struct{}, bool) { return gate, true }
+	testkit.FakePull("feed").StageJSON(`{"i":1}`, "c1")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := m.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	first := make(chan error, 1)
+	go func() {
+		_, _, err := m.Trigger(ctx, nil, false)
+		first <- err
+	}()
+	select {
+	case <-st.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("first trigger never reached CreateJobRun")
+	}
+
+	second := make(chan error, 1)
+	go func() {
+		_, _, err := m.Trigger(ctx, nil, false)
+		second <- err
+	}()
+	select {
+	case err := <-second:
+		t.Fatalf("second trigger returned while the first was mid-admission (TOCTOU): %v", err)
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	close(st.release)
+	if err := <-first; err != nil {
+		t.Fatalf("first trigger: %v", err)
+	}
+	if err := <-second; err == nil || !strings.Contains(err.Error(), "overlap") {
+		t.Fatalf("second trigger error = %v, want the overlap: skip refusal", err)
+	}
+	runs, _ := st.JobRuns("nightly", 10)
+	if len(runs) != 1 {
+		t.Fatalf("run records = %d, want exactly 1 (one admitted run)", len(runs))
+	}
+	gateOnce()
+	m.Stop()
+}
+
+// Candidate 08 acceptance 1: with overlap: latest, two racing triggers leave
+// exactly one active run: the second cancels the stalled first and is the
+// only run driving the pipeline afterwards.
+func TestRunAdmissionAtomicOverlapLatest(t *testing.T) {
+	testkit.ResetFakePull()
+	h := newJobHarness(t, "", "latest", "0s", false, "")
+	st := &stallingCreateStore{Store: store.NewMemory(), entered: make(chan struct{}), release: make(chan struct{})}
+	m := h.buildManager(st, time.Now)
+
+	gate := make(chan struct{})
+	gateOnce := sync.OnceFunc(func() { close(gate) })
+	t.Cleanup(gateOnce)
+	h.sink("out").block = func(int) (<-chan struct{}, bool) { return gate, true }
+	feed := testkit.FakePull("feed")
+	feed.StageJSON(`{"i":1}`, "c1")
+	feed.StageJSON(`{"i":2}`, "c2")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := m.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	firstID := make(chan string, 1)
+	go func() {
+		id, _, _ := m.Trigger(ctx, nil, false)
+		firstID <- id
+	}()
+	<-st.entered
+
+	second := make(chan struct {
+		id  string
+		err error
+	}, 1)
+	go func() {
+		id, _, err := m.Trigger(ctx, nil, false)
+		second <- struct {
+			id  string
+			err error
+		}{id, err}
+	}()
+	select {
+	case r := <-second:
+		t.Fatalf("second trigger returned while the first was mid-admission (TOCTOU): %+v", r)
+	case <-time.After(200 * time.Millisecond):
+	}
+	close(st.release)
+	run1 := <-firstID
+	r2 := <-second
+	if r2.err != nil {
+		t.Fatalf("second trigger: %v", r2.err)
+	}
+	if run1 == "" || r2.id == "" || run1 == r2.id {
+		t.Fatalf("run ids: first %q, second %q", run1, r2.id)
+	}
+	// Run 1 reaches its terminal state (bounded abandon) and exactly the
+	// replacement stays active.
+	waitFor(t, 10*time.Second, func() bool {
+		jr, err := st.GetJobRun("nightly", run1)
+		return err == nil && !store.IsRunnableStatus(jr.Status)
+	})
+	waitFor(t, 10*time.Second, func() bool {
+		active := m.ActiveRuns()
+		return len(active) == 1 && active[0] == r2.id
+	})
+	if runs, _ := st.JobRuns("nightly", 10); len(runs) != 2 {
+		t.Fatalf("run records = %d, want 2", len(runs))
+	}
+	gateOnce()
+	m.Stop()
+}
+
+// Candidate 08 acceptance 3 (manager half): Stop returns only after every run
+// has reached and persisted its terminal state — a wedged delivery cannot
+// leave a runnable record behind for a restarted manager to pick up.
+func TestStopWaitsForPersistedTerminalRuns(t *testing.T) {
+	testkit.ResetFakePull()
+	h := newJobHarness(t, "", "skip", "0s", false, "")
+	st := store.NewMemory()
+	m := h.buildManager(st, time.Now)
+
+	gate := make(chan struct{})
+	gateOnce := sync.OnceFunc(func() { close(gate) })
+	t.Cleanup(gateOnce)
+	h.sink("out").block = func(int) (<-chan struct{}, bool) { return gate, true }
+	testkit.FakePull("feed").StageJSON(`{"i":1}`, "c1")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := m.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	runID, _, err := m.Trigger(ctx, nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, 5*time.Second, func() bool { return h.sink("out").writes() >= 1 })
+
+	m.Stop() // waits for the bounded abandon and the terminal record write
+
+	jr, err := st.GetJobRun("nightly", runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if store.IsRunnableStatus(jr.Status) {
+		t.Fatalf("run status after Stop = %s, want a terminal state", jr.Status)
+	}
+	if runnable, err := st.RunnableJobRuns("nightly"); err != nil || len(runnable) != 0 {
+		t.Fatalf("runnable runs after Stop = %+v (%v), want none", runnable, err)
+	}
+	gateOnce()
+}
+
+// Candidate 08 acceptance 6 (manager half): an async trigger hands back the
+// created record, so the run id can cross ops to admin/MCP (never null).
+func TestTriggerAsyncReturnsCreatedRecord(t *testing.T) {
+	testkit.ResetFakePull()
+	h := newJobHarness(t, "", "skip", "0s", false, "")
+	st := store.NewMemory()
+	m := h.buildManager(st, time.Now)
+
+	gate := make(chan struct{})
+	gateOnce := sync.OnceFunc(func() { close(gate) })
+	t.Cleanup(gateOnce)
+	h.sink("out").block = func(int) (<-chan struct{}, bool) { return gate, true }
+	testkit.FakePull("feed").StageJSON(`{"i":1}`, "c1")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := m.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	runID, jr, err := m.Trigger(ctx, nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if jr == nil || jr.RunID != runID || jr.Status != store.JobPending {
+		t.Fatalf("async trigger record = %+v (runID %q), want the created pending record", jr, runID)
+	}
+	gateOnce()
+	m.Stop()
+}
+
+// Candidate 08 acceptance 7: a long outage locates the last in-window tick
+// with a BOUNDED number of schedule probes — the missed-tick list was never
+// materialized, and per-tick iteration is gone (a 6.7-year outage of a daily
+// schedule would have been ~2,400 iterations; the bisection needs ~25).
+func TestCatchupBoundedProbesAfterLongOutage(t *testing.T) {
+	testkit.ResetFakePull()
+	h := newJobHarness(t, "0 0 * * *", "skip", "5m", false, "")
+	st := store.NewMemory()
+	now := time.Date(2026, 9, 3, 12, 0, 30, 0, time.UTC)
+	if err := st.CreateJobRun(store.JobRun{
+		RunID: "ancient", Pipeline: "nightly", Status: store.JobSuccess,
+		TriggerType: "schedule", ScheduledFor: "2020-01-01T00:00:00Z",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	m := h.buildManager(st, func() time.Time { return now })
+	var probes int32
+	m.scheduleParser = func(spec string) (cron.Schedule, error) {
+		sched, err := cron.ParseStandard(spec)
+		if err != nil {
+			return nil, err
+		}
+		return countSchedule{Schedule: sched, probes: &probes}, nil
+	}
+	var skipped int64
+	m.opts.CatchupTicksSkipped = func(d int64) { skipped += d }
+
+	m.maybeCatchup(context.Background())
+
+	if got := atomic.LoadInt32(&probes); got == 0 || got > 64 {
+		t.Fatalf("catch-up used %d schedule probes for a 6.7-year outage; want a bounded bisection (<=64)", got)
+	}
+	if skipped != 1 {
+		t.Fatalf("skipped catch-up episodes = %d, want 1", skipped)
+	}
+	if runs, _ := st.JobRuns("nightly", 10); len(runs) != 1 {
+		t.Fatalf("runs = %d, want only the seeded history (no catch-up outside the window)", len(runs))
+	}
+}
+
+// lastTickBefore must resolve the newest tick for second-granular schedules
+// too (`@every 1s` descriptors): a one-minute bracket would stop on the FIRST
+// tick of the last minute instead of the last one.
+func TestLastTickBeforeSecondGranularSchedule(t *testing.T) {
+	sched, err := cron.ParseStandard("@every 1s")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 9, 3, 12, 0, 0, 0, time.UTC)
+	last := now.Add(-time.Hour)
+	if got := lastTickBefore(sched, last, now); !got.Equal(now) {
+		t.Fatalf("last tick = %s, want %s (the newest tick in (last, now])", got, now)
 	}
 }

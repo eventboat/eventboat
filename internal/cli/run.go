@@ -90,6 +90,15 @@ func cmdRun(args []string, jsonOut bool) int {
 	// store opens, so a one-shot run reads the SAME file the daemon uses.
 	owner := newStoreOwner(rt.Storage)
 	defer func() { _ = owner.Close() }()
+	// A one-shot run is an engine writer: hold the cross-process store lease
+	// for its whole life, or refuse when another process (the daemon) owns
+	// the pipeline (candidate 08).
+	lease, err := acquireRunLease(owner, "run", pip.Config.Name)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	defer func() { _ = lease.Release() }()
 	st, err := owner.Open(pip.Config.Name)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "run: open store: %v\n", err)

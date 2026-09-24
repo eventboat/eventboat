@@ -262,7 +262,7 @@ func exerciseJobStore(t *testing.T, st Store) {
 		t.Errorf("parameters roundtrip: %+v", got.Parameters)
 	}
 	runnable, err := st.RunnableJobRuns("p")
-	if err != nil || len(runnable) != 1 || !runnable[0].Runnable() {
+	if err != nil || len(runnable) != 1 || !IsRunnableStatus(runnable[0].Status) {
 		t.Fatalf("runnable: %+v %v", runnable, err)
 	}
 	if ok, _ := st.HasSuccessfulRunFor("p", "2026-09-03T01:00:00Z"); ok {

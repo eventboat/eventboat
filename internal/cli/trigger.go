@@ -70,6 +70,14 @@ func cmdTrigger(args []string, jsonOut bool) int {
 
 	owner := newStoreOwner(runtimecfg.Storage{DataDir: *dataDir, Ephemeral: *ephemeral})
 	defer func() { _ = owner.Close() }()
+	// One writer per pipeline store: refuse while a daemon (or another
+	// one-shot verb) owns the pipeline (candidate 08).
+	lease, err := acquireRunLease(owner, "trigger", lr.Pipeline.Name)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	defer func() { _ = lease.Release() }()
 	st, err := owner.Open(lr.Pipeline.Name)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "trigger: open store: %v\n", err)

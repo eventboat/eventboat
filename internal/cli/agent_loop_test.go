@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -219,6 +220,42 @@ cases:
 	tail := mustCall(t, "tail", map[string]any{"node": "out", "n": 5})
 	if !strings.Contains(tail, "synced") {
 		t.Fatalf("tail shows no deliveries:\n%.500s", tail)
+	}
+
+	// 12. async trigger (candidate 08): wait=false returns the created run
+	// record so the agent gets a run_id — never null — and the run completes
+	// in the background.
+	asyncOut := mustCall(t, "trigger", map[string]any{"pipeline": "agent-loop-sync"})
+	var asyncRun struct {
+		RunID  string `json:"run_id"`
+		Status string `json:"status"`
+	}
+	if err := json.Unmarshal([]byte(asyncOut), &asyncRun); err != nil {
+		t.Fatalf("async trigger output is not a run record: %v\n%s", err, asyncOut)
+	}
+	if asyncRun.RunID == "" {
+		t.Fatalf("async trigger returned no run_id:\n%s", asyncOut)
+	}
+	deadline := time.Now().Add(60 * time.Second)
+	for {
+		runsOut := mustCall(t, "jobs", map[string]any{"pipeline": "agent-loop-sync", "limit": 5})
+		var runs []map[string]any
+		if err := json.Unmarshal([]byte(runsOut), &runs); err != nil {
+			t.Fatalf("jobs output: %v\n%s", err, runsOut)
+		}
+		for _, r := range runs {
+			if r["run_id"] != asyncRun.RunID {
+				continue
+			}
+			status, _ := r["status"].(string)
+			if status != "pending" && status != "running" {
+				return // the async run reached a terminal state
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("async run %s never reached a terminal state:\n%s", asyncRun.RunID, runsOut)
+		}
+		time.Sleep(100 * time.Millisecond)
 	}
 }
 

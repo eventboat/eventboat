@@ -128,7 +128,7 @@ func NewServer(svc *ops.Service, name, version string) *mcp.Server {
 		})
 
 	mcp.AddTool(server, &mcp.Tool{Name: "trigger",
-		Description: "Manually fire a job pipeline run, optionally with parameters (backfill ranges). wait=true blocks until the run reaches a terminal state and returns it."},
+		Description: "Manually fire a job pipeline run, optionally with parameters (backfill ranges). wait=false (default) returns the created run record immediately — its run_id is the handle for polling `jobs`; wait=true blocks until the run reaches a terminal state and returns the final record."},
 		func(ctx context.Context, req *mcp.CallToolRequest, in struct {
 			Pipeline   string         `json:"pipeline"`
 			Parameters map[string]any `json:"parameters,omitempty"`

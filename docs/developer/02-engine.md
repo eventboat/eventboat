@@ -236,6 +236,18 @@ regressing:
 - Per-source `Commit` states persist through the committers (above), with the
   monotonic guard inside each committer; the checkpoint stays the durable
   barrier.
+- **Single writer (candidate 08).** A pipeline store is written by exactly one
+  process at a time. A running engine holds an exclusive OS file lock on a
+  sidecar next to the canonical database — `<store>.lock` — via
+  `internal/store/lease.go` (`flock` on Unix, `LockFileEx` on Windows, both
+  non-blocking); the kernel releases the lock when the process dies, so there
+  is no TTL heartbeat and a crash leaves no stale lease. The daemon acquires
+  the lease per deployed pipeline and releases it when the instance stops;
+  `run --config`, `trigger` and a live `replay` acquire it for the duration of
+  their run and refuse with a message pointing at the admin/MCP surface when
+  they cannot (a second engine on the same spool would race the checkpoint).
+  The lock is a sidecar so SQLite's own locking is untouched, and the file is
+  never deleted — an unlocked leftover is expected and harmless.
 
 ## Recovery
 
@@ -249,9 +261,14 @@ uncommitted tail may arrive twice: once via spool replay, once via
 re-emission — duplicate delivery, never loss (invariant 3;
 `TestInvariant_Kill9ReplayReplaysAllUncommitted`).
 
-Job pipelines resume runs found in `pending/running/committing` on startup;
+Job pipelines resume runs found in `pending`/`running` on startup;
 `internal/jobs` drives each run through `Engine.Wait` and maps the `Outcome`
-onto the run status (below). A canceled run that must stop immediately
+onto the run status (below). Run admission — the overlap policy, the run
+record and the goroutine registration — is one critical section, and
+`Manager.Stop` waits until every run **persisted** its terminal state, so
+`ops.Drain`/`Deploy` really wait for drained runs and a restarted manager
+cannot pick up a run the previous instance was still driving (candidate 08).
+A canceled run that must stop immediately
 dead-letters its outstanding set through the bounded `Abandon(ctx, reason)`:
 the durable record is written **first** and only then is the tracker cleared
 (force-terminate, which also releases the admission slot the old path

@@ -1,9 +1,9 @@
 // Package jobs implements the job-pipeline runtime (redesign-v3.md §5.8):
 // cron scheduling, catchup_window compensation, overlap admission,
 // skip_if_successful, per-run engine lifecycle (pending → running →
-// committing → success|partial|failed|canceled), typed parameters with the
-// cursor/now engine bindings, failure/success hooks and run-history
-// retention. Scheduling lives here — never in source plugins.
+// success|partial|failed|canceled), typed parameters with the cursor/now
+// engine bindings, failure/success hooks and run-history retention.
+// Scheduling lives here — never in source plugins.
 package jobs
 
 import (
@@ -34,7 +34,10 @@ type Options struct {
 	NewRunID      func() string
 	EngineOptions engine.Options // base; limits are applied per pipeline
 	// CatchupTicksSkipped / OverlapSkips count admission decisions (surfaced
-	// as OTel counters in M2 step 5).
+	// as OTel counters in M2 step 5). CatchupTicksSkipped counts one skipped
+	// catch-up EPISODE — a startup whose missed ticks all fell outside the
+	// window — because counting each tick would require walking the unbounded
+	// missed list the bounded catch-up exists to avoid (candidate 08).
 	CatchupTicksSkipped func(delta int64)
 	OverlapSkips        func(delta int64)
 }
@@ -74,11 +77,16 @@ type Manager struct {
 	st   Store
 	opts Options
 
-	mu      sync.Mutex
-	current map[string]*runningRun // active runs (overlap: all allows several)
-	stopped bool
-	stopCh  chan struct{}
-	wg      sync.WaitGroup
+	mu       sync.Mutex
+	current  map[string]*runningRun // active runs (overlap: all allows several)
+	stopped  bool
+	stopCh   chan struct{}
+	stopDone chan struct{}  // closed when the first Stop finished waiting
+	wg       sync.WaitGroup // every manager goroutine AND every run goroutine
+
+	// scheduleParser parses run.schedule; defaults to cron.ParseStandard. A
+	// test seam so the bounded-catchup acceptance can count schedule probes.
+	scheduleParser func(string) (cron.Schedule, error)
 
 	// admission is the pipeline-aggregated spool admission pool shared by
 	// every concurrent run's engine (M2 review R17: max_in_flight aggregates
@@ -116,16 +124,17 @@ func New(cfg *config.Pipeline, file string, st Store, reg *registry.Registry, op
 	opts.OverlapSkips = skips
 	return &Manager{
 		cfg: cfg, file: file, reg: reg, st: st, opts: opts,
-		current: map[string]*runningRun{},
-		stopCh:  make(chan struct{}),
+		current:  map[string]*runningRun{},
+		stopCh:   make(chan struct{}),
+		stopDone: make(chan struct{}),
 	}, nil
 }
 
 // Start resumes interrupted runs, performs catchup, and (when scheduled)
 // fires ticks until ctx is done.
 func (m *Manager) Start(ctx context.Context) error {
-	// Crash recovery: runs in pending/running/committing resume from the
-	// persisted watermark + spool replay (invariants 3 & 7).
+	// Crash recovery: runs in pending/running resume from the persisted
+	// watermark + spool replay (invariants 3 & 7).
 	runnable, err := m.st.RunnableJobRuns(m.cfg.Name)
 	if err != nil {
 		return fmt.Errorf("jobs: recovery: %w", err)
@@ -136,18 +145,30 @@ func (m *Manager) Start(ctx context.Context) error {
 
 	if m.cfg.Run.Schedule != "" {
 		m.maybeCatchup(ctx)
+		m.mu.Lock()
+		if m.stopped {
+			m.mu.Unlock()
+			return nil
+		}
 		m.wg.Add(1)
+		m.mu.Unlock()
 		go m.scheduleLoop(ctx)
 	}
 	return nil
 }
 
 // Stop cancels active runs (bounded drain + terminal dead letters, review
-// R2) and waits for the manager's goroutines.
+// R2) and waits until every run has reached and persisted its terminal
+// state. Nothing is left in flight when Stop returns, so a subsequent
+// process (or Deploy replacement) that resumes runnable runs cannot
+// double-run a run this manager is still driving. A concurrent second Stop
+// waits for the same barrier instead of returning early.
 func (m *Manager) Stop() {
 	m.mu.Lock()
 	if m.stopped {
+		done := m.stopDone
 		m.mu.Unlock()
+		<-done
 		return
 	}
 	m.stopped = true
@@ -160,7 +181,11 @@ func (m *Manager) Stop() {
 	for _, rr := range current {
 		rr.cancel()
 	}
+	// m.wg counts the schedule loop AND every run goroutine (registered under
+	// m.mu by runAsyncLocked), so this is the real "everything stopped"
+	// barrier candidate 08 needs.
 	m.wg.Wait()
+	close(m.stopDone)
 }
 
 // ActiveRuns lists the run-ids currently executing.
@@ -200,14 +225,30 @@ func (m *Manager) scheduleLoop(ctx context.Context) {
 	}
 }
 
+// parseSchedule resolves the pipeline's cron schedule with the injectable
+// parser (default: cron.ParseStandard).
+func (m *Manager) parseSchedule() (cron.Schedule, error) {
+	if m.scheduleParser != nil {
+		return m.scheduleParser(m.cfg.Run.Schedule)
+	}
+	return cron.ParseStandard(m.cfg.Run.Schedule)
+}
+
 // maybeCatchup runs at most ONE missed tick — the most recent one inside
 // the catchup window (open question #9 ruling: window内补跑一次，窗外跳过计数).
+//
+// The latest missed tick is located by bisecting the schedule (candidate 08)
+// instead of materializing the missed list: Next is monotone, so ~log(outage)
+// schedule probes find the last tick ≤ now — a process down for years would
+// otherwise allocate and iterate millions of ticks before deciding. The
+// skipped counter therefore fires once per skipped EPISODE (per-tick counting
+// is exactly the unbounded walk this function exists to avoid).
 func (m *Manager) maybeCatchup(ctx context.Context) {
 	window := m.cfg.Run.CatchupWindow
 	if window <= 0 {
 		return
 	}
-	sched, err := cron.ParseStandard(m.cfg.Run.Schedule)
+	sched, err := m.parseSchedule()
 	if err != nil {
 		return
 	}
@@ -220,25 +261,47 @@ func (m *Manager) maybeCatchup(ctx context.Context) {
 		return
 	}
 	now := m.opts.clock()()
-	var missed []time.Time
-	for t := sched.Next(lastTick); !t.After(now); t = sched.Next(t) {
-		missed = append(missed, t)
+	first := sched.Next(lastTick)
+	if first.After(now) {
+		return // nothing missed
 	}
-	if len(missed) == 0 {
+	// At least one missed tick is outside the window: count the episode once
+	// (per-tick counting is exactly the unbounded walk this function exists
+	// to avoid). The catch-up below still runs when the NEWEST missed tick is
+	// inside the window.
+	if now.Sub(first) > window {
+		m.opts.CatchupTicksSkipped(1)
+		m.opts.obs().RecordCatchupSkip(m.cfg.Name)
+	}
+	latest := lastTickBefore(sched, lastTick, now)
+	if !latest.After(lastTick) || latest.After(now) {
+		return // defensive; the bisection cannot lose a tick it bracketed
+	}
+	if now.Sub(latest) > window {
+		// Even the newest missed tick is outside the window, so every missed
+		// tick is: stay idle.
 		return
 	}
-	var catchable *time.Time
-	for i := range missed {
-		if now.Sub(missed[i]) <= window {
-			catchable = &missed[i]
+	m.fireTick(ctx, latest, "catchup")
+}
+
+// lastTickBefore returns the last schedule tick in (after, now]. It bisects
+// Next's staircase — Next(x) is the first tick after x — until the bracket is
+// no wider than the schedule's minimum spacing (one second: standard cron
+// specs are minute-granular, but `@every 1s` descriptors are second-granular),
+// then reads the tick off the low edge. Bounded by ~log2(outage) probes,
+// never by the number of ticks.
+func lastTickBefore(sched cron.Schedule, after, now time.Time) time.Time {
+	lo, hi := after, now
+	for hi.Sub(lo) > time.Second {
+		mid := lo.Add(hi.Sub(lo) / 2)
+		if sched.Next(mid).After(now) {
+			hi = mid
 		} else {
-			m.opts.CatchupTicksSkipped(1)
-			m.opts.obs().RecordCatchupSkip(m.cfg.Name)
+			lo = mid
 		}
 	}
-	if catchable != nil {
-		m.fireTick(ctx, *catchable, "catchup")
-	}
+	return sched.Next(lo)
 }
 
 // fireTick applies skip_if_successful and admission, then spawns the run.
@@ -254,14 +317,16 @@ func (m *Manager) fireTick(ctx context.Context, tick time.Time, trigger string) 
 
 // Trigger starts a manual run with caller-provided parameters (backfill).
 // It returns the run-id; wait=true blocks until the run reaches a terminal
-// state and additionally returns the final record.
+// state and returns the final record, while wait=false returns the created
+// pending record — never nil, so the async run id crosses every surface
+// (candidate 08; admin/MCP used to answer null).
 func (m *Manager) Trigger(ctx context.Context, params map[string]any, wait bool) (string, *store.JobRun, error) {
-	runID, _, err := m.spawn(ctx, params, "manual", "")
+	runID, created, err := m.spawn(ctx, params, "manual", "")
 	if err != nil {
 		return "", nil, err
 	}
 	if !wait {
-		return runID, nil, nil
+		return runID, created, nil
 	}
 	rr := m.currentOf(runID)
 	if rr == nil {
@@ -283,11 +348,21 @@ func (m *Manager) currentOf(runID string) *runningRun {
 	return m.current[runID]
 }
 
-// spawn validates parameters, applies overlap admission and starts runOnce.
+// spawn validates parameters, then applies overlap admission, creates the
+// run record and registers the run in ONE critical section (candidate 08):
+// releasing the lock between the overlap check and the registration lets two
+// concurrent triggers each observe an empty active set and both run,
+// defeating overlap: skip/latest (the old TOCTOU window).
 func (m *Manager) spawn(ctx context.Context, params map[string]any, trigger, scheduledFor string) (string, *store.JobRun, error) {
+	// Parameter validation is pure and cannot depend on admission state.
+	resolved, err := m.resolveParameters(params, nil)
+	if err != nil {
+		return "", nil, err
+	}
+
 	m.mu.Lock()
+	defer m.mu.Unlock()
 	if m.stopped {
-		m.mu.Unlock()
 		return "", nil, fmt.Errorf("jobs: manager stopped")
 	}
 	// Overlap admission.
@@ -296,19 +371,12 @@ func (m *Manager) spawn(ctx context.Context, params map[string]any, trigger, sch
 		if overlap == "skip" {
 			m.opts.OverlapSkips(1)
 			m.opts.obs().RecordOverlapSkip(m.cfg.Name)
-			m.mu.Unlock()
 			return "", nil, fmt.Errorf("jobs: previous run still active (overlap: skip)")
 		}
 		// latest: cancel active runs, then proceed (review R2 semantics).
 		for _, rr := range m.current {
 			rr.cancel()
 		}
-	}
-	m.mu.Unlock()
-
-	resolved, err := m.resolveParameters(params, nil)
-	if err != nil {
-		return "", nil, err
 	}
 	runID := m.opts.runID()
 	jr := store.JobRun{
@@ -322,8 +390,7 @@ func (m *Manager) spawn(ctx context.Context, params map[string]any, trigger, sch
 	if err := m.st.CreateJobRun(jr); err != nil {
 		return "", nil, err
 	}
-	rr := m.runAsync(ctx, jr, params, resolved)
-	_ = rr
+	m.runAsyncLocked(ctx, jr, params, resolved)
 	return runID, &jr, nil
 }
 
@@ -336,30 +403,34 @@ func (m *Manager) spawnResume(ctx context.Context, jr store.JobRun) {
 		params[k] = v
 	}
 	resolved, err := m.resolveParameters(params, nil)
-	if err == nil {
-		m.runAsync(ctx, jr, params, resolved)
-	} else {
+	if err != nil {
 		jr.Status = store.JobFailed
 		jr.Error = "resume: " + err.Error()
 		now := m.opts.clock()()
 		jr.EndedAt = now
 		_ = m.st.UpdateJobRun(jr)
+		return
 	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.runAsyncLocked(ctx, jr, params, resolved)
 }
 
-func (m *Manager) runAsync(ctx context.Context, jr store.JobRun, triggerParams, resolved map[string]any) *runningRun {
+// runAsyncLocked registers and starts one run. The caller holds m.mu and the
+// run goroutine is counted in m.wg under that same lock, so Stop (which takes
+// the lock before waiting) can never miss a run that was just admitted.
+func (m *Manager) runAsyncLocked(ctx context.Context, jr store.JobRun, triggerParams, resolved map[string]any) *runningRun {
 	runCtx, cancel := context.WithCancel(ctx)
 	rr := &runningRun{cancel: cancel, done: make(chan struct{}), jr: jr}
-	m.mu.Lock()
 	if m.stopped {
-		m.mu.Unlock()
 		cancel()
 		close(rr.done)
 		return rr
 	}
 	m.current[jr.RunID] = rr
-	m.mu.Unlock()
+	m.wg.Add(1)
 	go func() {
+		defer m.wg.Done()
 		defer close(rr.done)
 		m.runOnce(runCtx, &jr, triggerParams, resolved)
 		m.mu.Lock()

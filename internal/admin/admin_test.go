@@ -362,3 +362,73 @@ func TestAdminDeployRejectsTraversalName(t *testing.T) {
 		t.Fatalf("rejected deploy wrote files: %v", written)
 	}
 }
+
+// Candidate 08 acceptance 6 (admin surface): an async trigger answers with
+// the created run record — run_id present, never null — and wait=true keeps
+// the terminal record the MCP agent loop relies on.
+func TestAdminTriggerAsyncReturnsRunID(t *testing.T) {
+	testkit.ResetFakePull()
+	svc := newService(t)
+	t.Cleanup(svc.Stop)
+	dir := t.TempDir()
+	jobYAML := `
+apiVersion: eventboat/v1
+kind: Pipeline
+metadata: { name: admin-job }
+run:
+  mode: job
+  overlap: all
+sources:
+  in:
+    decoder: json
+    fakepull: { id: admin-feed }
+sinks:
+  out:
+    depends_on: [in]
+    file: { path: ` + filepath.ToSlash(filepath.Join(dir, "out.jsonl")) + ` }
+`
+	if _, err := svc.Deploy(context.Background(), jobYAML); err != nil {
+		t.Fatal(err)
+	}
+	testkit.FakePull("admin-feed").StageJSON(`{"i":1}`, "c1")
+
+	h := Handler(svc, nil, nil, Security{Listen: "127.0.0.1:7788"})
+	post := func(body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/admin/trigger/admin-job", strings.NewReader(body))
+		req.Host = "127.0.0.1:7788"
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec
+	}
+
+	rec := post(`{"wait":false}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("async trigger: status %d: %s", rec.Code, rec.Body.String())
+	}
+	var asyncRun struct {
+		RunID  string `json:"run_id"`
+		Status string `json:"status"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &asyncRun); err != nil {
+		t.Fatalf("async trigger body: %v\n%s", err, rec.Body.String())
+	}
+	if asyncRun.RunID == "" {
+		t.Fatalf("async trigger returned no run_id: %s", rec.Body.String())
+	}
+
+	testkit.FakePull("admin-feed").StageJSON(`{"i":2}`, "c2")
+	rec = post(`{"wait":true}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("wait trigger: status %d: %s", rec.Code, rec.Body.String())
+	}
+	var waitRun struct {
+		RunID  string `json:"run_id"`
+		Status string `json:"status"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &waitRun); err != nil {
+		t.Fatalf("wait trigger body: %v\n%s", err, rec.Body.String())
+	}
+	if waitRun.Status != "success" || waitRun.RunID == "" {
+		t.Fatalf("wait trigger record = %+v, want a successful run", waitRun)
+	}
+}

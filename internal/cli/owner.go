@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"fmt"
+
 	"github.com/eventboat/eventboat/internal/runtimecfg"
 	"github.com/eventboat/eventboat/internal/store"
 )
@@ -16,6 +18,19 @@ func newStoreOwner(storage runtimecfg.Storage) *store.Owner {
 		return store.NewMemoryOwner()
 	}
 	return store.NewOwner(storage.DataDir)
+}
+
+// acquireRunLease takes the pipeline's cross-process store lease for a
+// write-capable one-shot verb (run --config, trigger, replay). A verb that
+// cannot take it must refuse — with a message that names the conflict and
+// points at the admin/MCP surface — rather than start a second engine on the
+// same spool (candidate 08: one writer per pipeline store).
+func acquireRunLease(owner *store.Owner, verb, pipeline string) (store.Lease, error) {
+	lease, err := owner.Acquire(pipeline)
+	if err == nil {
+		return lease, nil
+	}
+	return nil, fmt.Errorf("%s: pipeline %q: %w; refusing to start a second engine on the same spool — if the pipeline is deployed in a daemon, use its admin/MCP surface instead (`trigger` for job runs, `dlq_replay` for dead letters)", verb, pipeline, err)
 }
 
 // storeDesc names the store a run is using for the startup line: the

@@ -300,6 +300,48 @@ hygiene findings.
   get the migration message instead of a plugin-name clash. Unaffected:
   job-run parameter bindings named `from` (`parameters:` /
   `trigger --parameters`) and the `eventboat replay --from` spool flag.
+- **Atomic run admission, started-instance semantics and the pipeline store
+  lease (candidate 08)**: the jobs manager's overlap admission was a TOCTOU
+  check — the lock was released before the run record was created and the run
+  registered, so two concurrent triggers could each observe an empty active
+  set and run together under `overlap: skip`/`latest`. `Manager.spawn` is now
+  ONE critical section (apply overlap → create the run record → register the
+  run goroutine), `Manager.Stop` waits until every run **persisted** its
+  terminal state, and `ops.managed.done` genuinely means the instance
+  stopped — `Drain`/`Pause`/`Deploy` return drained, and a replacement
+  manager's crash recovery cannot resume a run the old instance was still
+  driving. Deploy also waits for `jobs.Start` (crash recovery + catchup)
+  before the replacement instance becomes visible, closing a deploy/trigger
+  race that could start two engines for one run id. A running engine now
+  holds an exclusive OS file lock — the **store lease** — on the sidecar
+  `<store>.lock` next to the canonical database (`store.Owner.Acquire`;
+  `flock` on Unix, `LockFileEx` on Windows, build-tagged, no new dependency).
+  The lock is released by the kernel when the process dies (no TTL
+  heartbeat), it never touches SQLite's own locking, and the memory owner
+  returns a no-op lease so single-process tests and `--ephemeral` are
+  unchanged. The daemon acquires the lease per deployed pipeline; the
+  write-capable one-shot verbs (`run --config`, `trigger`, a live `replay`)
+  acquire it for their run and **refuse loudly when they cannot** — the
+  message names the conflict and points at the admin/MCP surface instead of
+  starting a second engine on the same spool. A Deploy while the same process
+  already runs the pipeline transfers cleanly under a per-pipeline lifecycle
+  mutex (old releases, new acquires); a different process holding the lease
+  makes Deploy fail loudly. The daemon's per-pipeline instance now moves
+  through an explicit state machine — `running`, `paused`, `drained`,
+  `completed`, `failed` — serialized by that same lifecycle mutex:
+  `Resume` from `drained` actually RESTARTS the pipeline (the old silent
+  no-op reported `running` while nothing ran), terminal instances refuse
+  Pause/Drain/Resume and are replaced by Deploy, and one status derivation
+  reports the LATEST runnable run instead of the oldest. Instance contexts no
+  longer derive from the Deploy/Resume CALL context (an MCP/HTTP request
+  finishing must not stop a deployed pipeline). An async `trigger`
+  (`wait=false`) returns the created run record — `run_id`, never `null` —
+  across jobs/ops/admin/MCP. `maybeCatchup` locates the newest in-window tick
+  by bisecting the schedule (~log2(outage) probes) instead of materializing
+  an unbounded missed-tick list; `eventboat_jobs_catchup_skipped_total` now
+  counts one skipped episode (counted once — exact per-tick counting is the
+  unbounded walk the bisection exists to avoid). Docs: 02-engine (recovery +
+  single writer), 06-observability (catch-up counter).
 - **Admin security hardening**: the `?token=` query form is accepted on
   `/admin/sse` only (EventSource cannot set headers); every other endpoint is
   header-only, so a token leaked in a URL no longer unlocks the write
@@ -321,6 +363,12 @@ hygiene findings.
 
 ### Removed
 
+- **`store.JobCommitting` and `JobRun.Runnable()`** (candidate 08): the
+  reserved `committing` state had no writer, so it was deleted from the enum,
+  the runnable predicate, the SQLite status sets (`RunnableJobRuns`,
+  `DeleteJobRunsBefore`) and the docs. The runnable set is `pending`/`running`
+  (now spelled `store.IsRunnableStatus`; the SQL mirrors it literally, and a
+  store test pins both backends against the same six-status enum).
 - Dead code: the hand-rolled insertion sort in `internal/ir`, the
   `var _ = strings.TrimSpace` placeholder in `internal/admin`, the unused
   `workers` computation in `engine.New`.

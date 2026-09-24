@@ -40,7 +40,7 @@ instruments carry the `eventboat_` prefix:
 | `eventboat_wasm_timeouts_total` | pipeline, node | WASM invocations killed by `timeout_ms` |
 | `eventboat_jobs_started_total` | pipeline, trigger | job runs started |
 | `eventboat_jobs_overlap_skipped_total` | pipeline | triggers rejected by `overlap: skip` |
-| `eventboat_jobs_catchup_skipped_total` | pipeline | missed ticks outside `catchup_window` |
+| `eventboat_jobs_catchup_skipped_total` | pipeline | catch-up episodes whose missed ticks fell outside `catchup_window` (counted once per episode: the catch-up locates the newest in-window tick by bisection and never walks the missed list — candidate 08) |
 | `eventboat_jobs_completed_total` | pipeline, status | runs completed by terminal status |
 | `eventboat_job_rows_read_total` | pipeline | rows read by job runs |
 | `eventboat_job_rows_delivered_total` | pipeline | rows delivered by job runs |

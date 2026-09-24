@@ -35,22 +35,23 @@ type DeadLetter struct {
 	CreatedAt time.Time      `json:"created_at"`
 }
 
-// Job statuses (redesign-v3.md §5.8 lifecycle).
+// Job statuses (redesign-v3.md §5.8 lifecycle). Candidate 08 deleted the
+// reserved "committing" state nothing ever wrote: a run is in flight
+// (pending/running) or terminal (success/partial/failed/canceled).
 const (
-	JobPending    = "pending"
-	JobRunning    = "running"
-	JobCommitting = "committing"
-	JobSuccess    = "success"
-	JobPartial    = "partial"
-	JobFailed     = "failed"
-	JobCanceled   = "canceled"
+	JobPending  = "pending"
+	JobRunning  = "running"
+	JobSuccess  = "success"
+	JobPartial  = "partial"
+	JobFailed   = "failed"
+	JobCanceled = "canceled"
 )
 
 // JobRun is one job-pipeline execution record (run history, §5.8).
 type JobRun struct {
 	RunID        string         `json:"run_id"`
 	Pipeline     string         `json:"pipeline"`
-	Status       string         `json:"status"`  // pending|running|committing|success|partial|failed|canceled
+	Status       string         `json:"status"`  // pending|running|success|partial|failed|canceled
 	TriggerType  string         `json:"trigger"` // schedule|manual|catchup
 	Parameters   map[string]any `json:"parameters"`
 	ScheduledFor string         `json:"scheduled_for"` // RFC3339 tick identity ("" for manual runs)
@@ -63,10 +64,12 @@ type JobRun struct {
 	UpdatedAt    time.Time      `json:"updated_at"`
 }
 
-// Runnable reports whether the run was in flight when its process died and
-// must be resumed (or failed) on restart.
-func (j JobRun) Runnable() bool {
-	return j.Status == JobPending || j.Status == JobRunning || j.Status == JobCommitting
+// IsRunnableStatus reports whether a run holding this status was in flight
+// when its process died and must be resumed (or failed) on restart. The
+// SQLite queries mirror this set literally ('pending','running') — keep the
+// two in sync (candidate 08 removed the unwritten "committing" state).
+func IsRunnableStatus(status string) bool {
+	return status == JobPending || status == JobRunning
 }
 
 // SpoolStore is the durable inbound spine: the append-only spool, the
@@ -497,7 +500,7 @@ func (s *memStore) RunnableJobRuns(pipeline string) ([]JobRun, error) {
 	defer s.mu.Unlock()
 	var out []JobRun
 	for _, jr := range s.jobRuns {
-		if jr.Pipeline == pipeline && jr.Runnable() {
+		if jr.Pipeline == pipeline && IsRunnableStatus(jr.Status) {
 			out = append(out, jr)
 		}
 	}
@@ -535,7 +538,7 @@ func (s *memStore) DeleteJobRunsBefore(pipeline string, cutoff time.Time) (int64
 	kept := s.jobRuns[:0:0]
 	var removed int64
 	for _, jr := range s.jobRuns {
-		if jr.Pipeline == pipeline && !jr.Runnable() && !jr.EndedAt.IsZero() && jr.EndedAt.Before(cutoff) {
+		if jr.Pipeline == pipeline && !IsRunnableStatus(jr.Status) && !jr.EndedAt.IsZero() && jr.EndedAt.Before(cutoff) {
 			removed++
 			continue
 		}

@@ -33,8 +33,11 @@ type Options struct {
 	Reg     *registry.Registry
 	// Stores is the process-wide store provider (candidate 04): the entry
 	// point builds one owner (store.NewOwner / store.NewMemoryOwner) and
-	// passes it here, so every surface shares one handle per pipeline. There
-	// is no default factory — layout and handle lifetime belong to the owner.
+	// passes it here, so every surface shares one handle per pipeline. It
+	// also hands out each pipeline's cross-process lease (candidate 08):
+	// ops acquires it before starting an instance and refuses a Deploy when
+	// another process holds it. There is no default factory — layout and
+	// handle lifetime belong to the owner.
 	Stores store.Provider
 	// SpoolRetention bounds spool rows behind the checkpoint
 	// (storage.spool_retention; 0 = the engine default) — passed through to
@@ -51,8 +54,9 @@ type Service struct {
 	opts Options
 	reg  *registry.Registry
 
-	mu        sync.Mutex
-	pipelines map[string]*managed
+	mu         sync.Mutex
+	pipelines  map[string]*managed
+	lifecycles map[string]*sync.Mutex // per-pipeline lifecycle serialization
 
 	tailMu sync.Mutex
 	tails  map[string][]TailEntry // node → recent deliveries (bounded)
@@ -66,7 +70,9 @@ type Service struct {
 }
 
 // managed is one deployed pipeline: either a continuous engine or a job
-// manager (per its run.mode).
+// manager (per its run.mode). Its status moves through the instance state
+// machine below; its lease is the cross-process single-writer lock on the
+// pipeline's store (candidate 08).
 type managed struct {
 	name    string
 	file    string
@@ -76,27 +82,92 @@ type managed struct {
 	jobs    *jobs.Manager
 	cancel  context.CancelFunc
 	done    chan struct{}
-	paused  bool
-	mu      sync.Mutex // guards status/err (written from lifecycle goroutines)
-	status  string
-	err     string
 	started time.Time
+
+	lease     store.Lease
+	leaseOnce sync.Once
+
+	mu     sync.Mutex // guards status/err (written from lifecycle goroutines)
+	status string
+	err    string
 }
 
-// setStatus/setErr are the only writers of the status surface; Status() is
-// the only reader and takes the same mutex (v1.24: the batch completion
-// watcher added a long-lived writer, so the field is no longer
-// publication-safe by construction).
-func (m *managed) setStatus(st string) {
+// Instance statuses (candidate 08, §3.7): the daemon's per-pipeline
+// lifecycle. `completed` and `failed` are terminal for one instance — a
+// Deploy replaces the instance; Pause/Drain/Resume refuse instead of
+// reporting a state the pipeline is not in.
+const (
+	stateRunning   = "running"
+	statePaused    = "paused"
+	stateDrained   = "drained"
+	stateCompleted = "completed"
+	stateFailed    = "failed"
+)
+
+// instanceTransitions is the explicit transition table: running may be
+// paused, drained, or finish (completed/failed); paused and drained restart
+// via Resume. Terminal states have no outgoing edges. Repeating the current
+// state is an idempotent no-op handled by transition, not listed here.
+var instanceTransitions = map[string]map[string]bool{
+	stateRunning: {statePaused: true, stateDrained: true, stateCompleted: true, stateFailed: true},
+	statePaused:  {stateRunning: true}, // Resume restarts
+	stateDrained: {stateRunning: true}, // Resume restarts
+}
+
+// state reads the current status.
+func (m *managed) state() string {
 	m.mu.Lock()
-	m.status = st
-	m.mu.Unlock()
+	defer m.mu.Unlock()
+	return m.status
 }
 
+// transition applies one state-machine step. Repeating the current state is
+// an idempotent no-op (Pause of a paused pipeline, Resume of a running one);
+// anything not in the table is refused loudly — no fake `running`.
+func (m *managed) transition(to string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.status == to {
+		return nil
+	}
+	if !instanceTransitions[m.status][to] {
+		return fmt.Errorf("pipeline %q: %s -> %s is not a valid transition", m.name, m.status, to)
+	}
+	m.status = to
+	return nil
+}
+
+// advance moves from -> to only while the instance is still in from: the
+// completion watcher's compare-and-set, so a Drain/Pause that already
+// stopped the instance is never overwritten by a late "completed".
+func (m *managed) advance(from, to string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.status != from {
+		return false
+	}
+	m.status = to
+	return true
+}
+
+// setErr is the only writer of the error surface; Status() reads it under
+// the same mutex.
 func (m *managed) setErr(msg string) {
 	m.mu.Lock()
 	m.err = msg
 	m.mu.Unlock()
+}
+
+// releaseLease drops the cross-process store lease once. It is called by the
+// instance's own goroutine BEFORE done closes: anyone who observed the stop
+// can immediately acquire the lease again (a Deploy replacement) without a
+// spurious "held by another process".
+func (m *managed) releaseLease() {
+	m.leaseOnce.Do(func() {
+		if m.lease != nil {
+			_ = m.lease.Release()
+		}
+	})
 }
 
 // Event is one SSE-notifiable change.
@@ -127,13 +198,14 @@ func New(opts Options) *Service {
 		opts.Clock = time.Now
 	}
 	return &Service{
-		opts:      opts,
-		reg:       opts.Reg,
-		pipelines: map[string]*managed{},
-		tails:     map[string][]TailEntry{},
-		subs:      map[chan Event]struct{}{},
-		lastSnap:  map[string]int64{},
-		rateAt:    time.Now(),
+		opts:       opts,
+		reg:        opts.Reg,
+		pipelines:  map[string]*managed{},
+		lifecycles: map[string]*sync.Mutex{},
+		tails:      map[string][]TailEntry{},
+		subs:       map[chan Event]struct{}{},
+		lastSnap:   map[string]int64{},
+		rateAt:     time.Now(),
 	}
 }
 
@@ -231,7 +303,9 @@ func (s *Service) Explain(configContent, message string, topology bool) (string,
 }
 
 // Deploy verifies then swaps one pipeline: drain the old instance, start the
-// new one (§3.4 iron rule: no write path bypasses verification).
+// new one (§3.4 iron rule: no write path bypasses verification). The
+// per-pipeline lifecycle mutex serializes concurrent Deploys, so two of them
+// can no longer start two managers on one store.
 func (s *Service) Deploy(ctx context.Context, configContent string) (map[string]any, error) {
 	if diags := s.Verify(configContent); hasErr(diags) {
 		return nil, fmt.Errorf("deploy rejected: verify failed:\n%s", diagLines(diags))
@@ -248,19 +322,23 @@ func (s *Service) Deploy(ctx context.Context, configContent string) (map[string]
 		return nil, err
 	}
 
-	// Stop the previous instance (drain) before starting the replacement.
+	lk := s.lifecycle(cfg.Name)
+	lk.Lock()
+	defer lk.Unlock()
 	previous := "none"
-	s.mu.Lock()
-	if old, ok := s.pipelines[cfg.Name]; ok {
+	old := s.named(cfg.Name)
+	if old != nil {
 		previous = old.kind
-		s.mu.Unlock()
-		old.shutdown()
-		s.mu.Lock()
-		delete(s.pipelines, cfg.Name)
+		if !old.shutdown() {
+			return nil, fmt.Errorf("deploy: pipeline %q: the previous instance did not stop; refusing to start a replacement while its runs may still be executing", cfg.Name)
+		}
 	}
 	m, err := s.startManaged(ctx, cfg, file)
-	s.mu.Unlock()
 	if err != nil {
+		// The old instance is stopped and no replacement exists: the
+		// pipeline is not deployed any more. Drop the entry instead of
+		// leaving a stopped instance reporting its previous status.
+		s.drop(cfg.Name, old)
 		return nil, err
 	}
 	s.emit("deploy", map[string]any{"pipeline": cfg.Name, "mode": m.kind, "replaced": previous})
@@ -270,14 +348,63 @@ func (s *Service) Deploy(ctx context.Context, configContent string) (map[string]
 	}, nil
 }
 
+// lifecycle returns the per-pipeline lifecycle mutex, creating it on first
+// use. It outlives any single instance: Deploy/Drain/Pause/Resume serialize
+// on it even while the pipeline is being replaced.
+func (s *Service) lifecycle(name string) *sync.Mutex {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	lk, ok := s.lifecycles[name]
+	if !ok {
+		lk = &sync.Mutex{}
+		s.lifecycles[name] = lk
+	}
+	return lk
+}
+
+// named returns a deployed pipeline by name, nil when absent.
+func (s *Service) named(name string) *managed {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.pipelines[name]
+}
+
+// drop removes the map entry when it still is `want` (nil drops nothing), so
+// a failed replacement does not leave a stopped instance behind reporting a
+// live-looking status.
+func (s *Service) drop(name string, want *managed) {
+	if want == nil {
+		return
+	}
+	s.mu.Lock()
+	if cur, ok := s.pipelines[name]; ok && cur == want {
+		delete(s.pipelines, name)
+	}
+	s.mu.Unlock()
+}
+
+// startManaged builds, registers and starts one instance. The cross-process
+// store lease is acquired BEFORE the store opens and released by the
+// instance's goroutine before `done` closes: one writer per pipeline store,
+// across processes (candidate 08). The caller owns the per-pipeline
+// lifecycle mutex.
 func (s *Service) startManaged(ctx context.Context, cfg *config.Pipeline, file string) (*managed, error) {
-	runCtx, cancel := context.WithCancel(ctx)
-	m := &managed{name: cfg.Name, file: file, cfg: cfg, cancel: cancel, done: make(chan struct{}), started: s.opts.Clock(), status: "running"}
+	lease, err := s.opts.Stores.Acquire(cfg.Name)
+	if err != nil {
+		return nil, fmt.Errorf("deploy: pipeline %q: %w; use the admin/MCP surface against the running process (the `trigger` tool for job runs, `dlq_replay` for dead letters) instead of starting a second engine on the same store", cfg.Name, err)
+	}
+	// The instance outlives the Deploy/Resume CALL: an MCP/HTTP request
+	// context is canceled when its response is sent, which must not stop a
+	// deployed pipeline. Values ride along; cancellation is the Service's
+	// business (shutdown/Stop).
+	runCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	m := &managed{name: cfg.Name, file: file, cfg: cfg, cancel: cancel, done: make(chan struct{}), started: s.opts.Clock(), status: stateRunning, lease: lease}
 	if cfg.IsJob() {
 		m.kind = "job"
 		st, err := s.opts.Stores.Open(cfg.Name)
 		if err != nil {
 			cancel()
+			m.releaseLease()
 			return nil, err
 		}
 		opts := jobs.Options{}
@@ -291,58 +418,86 @@ func (s *Service) startManaged(ctx context.Context, cfg *config.Pipeline, file s
 		jm, err := jobs.New(cfg, file, st, s.reg, opts)
 		if err != nil {
 			cancel()
+			m.releaseLease()
 			return nil, err
 		}
 		m.jobs = jm
-		s.pipelines[cfg.Name] = m
+		// Start performs crash recovery + catchup synchronously; the
+		// instance becomes visible only after it returned. Installing first
+		// would let a concurrent Trigger admit a run that recovery resumes a
+		// second time (one run id, two engines — the deploy/trigger race).
+		startup := make(chan error, 1)
 		go func() {
 			defer close(m.done)
-			if err := jm.Start(runCtx); err != nil {
+			defer m.releaseLease()
+			err := jm.Start(runCtx)
+			startup <- err
+			if err != nil {
 				m.setErr(err.Error())
+				m.advance(stateRunning, stateFailed)
+				return
 			}
+			<-runCtx.Done()
+			jm.Stop()
 		}()
-	} else {
-		m.kind = "continuous"
-		if cfg.IsBatch() {
-			m.kind = "batch"
+		if err := <-startup; err != nil {
+			return nil, fmt.Errorf("deploy: pipeline %q: start: %w", cfg.Name, err)
 		}
-		pip, diags := ir.Build(cfg, s.reg, starhost.DefaultOptions(), nil)
-		if pip == nil {
-			cancel()
-			return nil, fmt.Errorf("deploy: %s", firstErrText(diags))
-		}
-		st, err := s.opts.Stores.Open(cfg.Name)
-		if err != nil {
-			cancel()
-			return nil, err
-		}
-		opts := engine.DefaultOptions().WithLimits(cfg.Limits)
-		opts.SinkWrapper = s.tailWrapper(cfg)
-		opts.Obs = s.opts.Obs
-		opts.SpoolRetention = s.opts.SpoolRetention
-		if cfg.Telemetry != nil {
-			opts.SpanSampleRate = cfg.Telemetry.SpanSampleRate
-		}
-		eng, err := engine.New(pip, st, s.reg, opts)
-		if err != nil {
-			cancel()
-			return nil, err
-		}
-		m.eng = eng
-		s.pipelines[cfg.Name] = m
-		runDone := make(chan error, 1)
-		go func() { runDone <- eng.Run(runCtx) }()
-		// One terminal-status watcher for both engine shapes (batch and
-		// continuous): a batch completes by quiescing, while a continuous
-		// pipeline only stops with a live runCtx when it failed (source
-		// failure, worker-fatal) — the outcome decides, never a settle poll.
-		go s.watchEngineCompletion(m, eng, runDone, runCtx)
-		// Wait briefly for readiness so status immediately reflects reality.
-		for i := 0; i < 200 && !eng.Ready(); i++ {
-			time.Sleep(2 * time.Millisecond)
-		}
+		s.install(m)
+		return m, nil
+	}
+
+	m.kind = "continuous"
+	if cfg.IsBatch() {
+		m.kind = "batch"
+	}
+	pip, diags := ir.Build(cfg, s.reg, starhost.DefaultOptions(), nil)
+	if pip == nil {
+		cancel()
+		m.releaseLease()
+		return nil, fmt.Errorf("deploy: %s", firstErrText(diags))
+	}
+	st, err := s.opts.Stores.Open(cfg.Name)
+	if err != nil {
+		cancel()
+		m.releaseLease()
+		return nil, err
+	}
+	opts := engine.DefaultOptions().WithLimits(cfg.Limits)
+	opts.SinkWrapper = s.tailWrapper(cfg)
+	opts.Obs = s.opts.Obs
+	opts.SpoolRetention = s.opts.SpoolRetention
+	if cfg.Telemetry != nil {
+		opts.SpanSampleRate = cfg.Telemetry.SpanSampleRate
+	}
+	eng, err := engine.New(pip, st, s.reg, opts)
+	if err != nil {
+		cancel()
+		m.releaseLease()
+		return nil, err
+	}
+	m.eng = eng
+	s.install(m)
+	runDone := make(chan error, 1)
+	go func() { runDone <- eng.Run(runCtx) }()
+	// One terminal-status watcher for both engine shapes (batch and
+	// continuous): a batch completes by quiescing, while a continuous
+	// pipeline only stops with a live runCtx when it failed (source
+	// failure, worker-fatal) — the outcome decides, never a settle poll.
+	go s.watchEngineCompletion(m, eng, runDone, runCtx)
+	// Wait briefly for readiness so status immediately reflects reality.
+	for i := 0; i < 200 && !eng.Ready(); i++ {
+		time.Sleep(2 * time.Millisecond)
 	}
 	return m, nil
+}
+
+// install registers the instance, replacing any previous entry under one
+// s.mu critical section: Status/Drain never observe a half-installed map.
+func (s *Service) install(m *managed) {
+	s.mu.Lock()
+	s.pipelines[m.name] = m
+	s.mu.Unlock()
 }
 
 // watchEngineCompletion derives a pipeline's terminal status from the engine
@@ -350,28 +505,35 @@ func (s *Service) startManaged(ctx context.Context, cfg *config.Pipeline, file s
 // itself (source failure, worker-fatal), completed otherwise. The daemon
 // stays up — a finished pipeline keeps its history and its admin surface. A
 // run canceled by the service shutting down leaves the status to shutdown()
-// (it owns "stopped"/"drained"/"paused").
+// (it owns stopped/drained/paused). The lease is released before done closes,
+// so a replacement can re-acquire immediately.
 func (s *Service) watchEngineCompletion(m *managed, eng *engine.Engine, runDone <-chan error, runCtx context.Context) {
 	defer close(m.done)
+	defer m.releaseLease()
 	outcome := eng.Wait(runCtx, runDone, engine.WaitOptions{})
 	if runCtx.Err() != nil {
 		return // service shutting down: shutdown() owns the status
 	}
 	if outcome.Status == engine.RunFailed {
 		m.setErr(outcome.FailureText())
-		m.setStatus("failed")
+		m.advance(stateRunning, stateFailed)
 	} else {
-		m.setStatus("completed")
+		m.advance(stateRunning, stateCompleted)
 	}
 	s.emit("status", m.name)
 }
 
-// shutdown stops one managed pipeline. runCtx is canceled FIRST: the engine's
-// ctx derives from it, so this alone stops the run — and it makes the
-// terminal-status watcher see the shutdown as a caller cancellation (the
-// watcher then leaves the status to shutdown, which owns stopped/drained/
-// paused) instead of racing in a "completed" for a run that was stopped.
-func (m *managed) shutdown() {
+// shutdown stops one instance and reports whether it fully stopped. runCtx
+// is canceled FIRST: the engine's ctx derives from it, so this alone stops
+// the run — and it makes the terminal-status watcher see the shutdown as a
+// caller cancellation (the watcher then leaves the status to shutdown, which
+// owns paused/drained) instead of racing in a "completed" for a run that was
+// stopped. For job pipelines the instance's own goroutine calls jm.Stop()
+// after runCtx is done and only then closes m.done, so a true result means
+// every run reached and persisted its terminal state. The 15s guard covers a
+// goroutine that cannot return at all; callers treat false as "still
+// running" and refuse to start a replacement.
+func (m *managed) shutdown() bool {
 	m.cancel()
 	if m.eng != nil {
 		m.eng.Close()
@@ -381,9 +543,10 @@ func (m *managed) shutdown() {
 	}
 	select {
 	case <-m.done:
+		return true
 	case <-time.After(15 * time.Second):
+		return false
 	}
-	m.setStatus("stopped")
 }
 
 // of returns a managed pipeline by name.
@@ -474,9 +637,14 @@ func (s *Service) Status() []PipelineStatus {
 		if m.jobs != nil {
 			if runs, err := s.jobsRuns(m.name, 5); err == nil {
 				st.RecentRuns = runs
+				// Newest first: the FIRST runnable run is the latest one.
+				// The old loop kept overwriting, so several runnable runs
+				// reported the OLDEST status (candidate 08 — one status
+				// derivation).
 				for _, r := range runs {
-					if r.Runnable() {
+					if store.IsRunnableStatus(r.Status) {
 						st.Status = "run:" + r.Status
+						break
 					}
 				}
 			}
@@ -528,7 +696,10 @@ func (s *Service) Jobs(pipeline string, limit int) ([]store.JobRun, error) {
 	return s.jobsRuns(pipeline, limit)
 }
 
-// Trigger fires a job run (optionally waiting for it — backfills).
+// Trigger fires a job run. wait=true blocks for the terminal record
+// (backfills); wait=false returns the created pending record immediately —
+// its RunID is the handle for jobs polling, so async triggers are never
+// null on the admin/MCP surfaces (candidate 08).
 func (s *Service) Trigger(ctx context.Context, pipeline string, parameters map[string]any, wait bool) (*store.JobRun, error) {
 	m, err := s.of(pipeline)
 	if err != nil {
@@ -730,15 +901,31 @@ func (s *Service) DeadLetterReplay(pipeline string, ids []int64, at string) (int
 	return replayed, nil
 }
 
-// Drain stops a pipeline's sources and waits for in-flight work to commit.
-// The pipeline stays deployed (drained).
+// Drain stops a pipeline's sources and waits for in-flight work to commit —
+// and, for job pipelines, for every run to persist its terminal state
+// (candidate 08: Stop waits). The pipeline stays deployed (drained); Resume
+// restarts it.
 func (s *Service) Drain(pipeline string) error {
+	lk := s.lifecycle(pipeline)
+	lk.Lock()
+	defer lk.Unlock()
 	m, err := s.of(pipeline)
 	if err != nil {
 		return err
 	}
-	m.shutdown()
-	m.setStatus("drained")
+	switch m.state() {
+	case stateDrained:
+		return nil // idempotent
+	case stateRunning:
+	default:
+		return fmt.Errorf("pipeline %q is %s; only a running pipeline can be drained", pipeline, m.state())
+	}
+	if !m.shutdown() {
+		return fmt.Errorf("drain: pipeline %q did not stop within the drain bound; runs may still be executing", pipeline)
+	}
+	if err := m.transition(stateDrained); err != nil {
+		return err
+	}
 	s.emit("status", pipeline)
 	return nil
 }
@@ -746,37 +933,55 @@ func (s *Service) Drain(pipeline string) error {
 // Pause stops source pulls; Resume restarts from persisted source states
 // (at-least-once covers the pause window).
 func (s *Service) Pause(pipeline string) error {
+	lk := s.lifecycle(pipeline)
+	lk.Lock()
+	defer lk.Unlock()
 	m, err := s.of(pipeline)
 	if err != nil {
 		return err
 	}
-	if m.paused {
-		return nil
+	switch m.state() {
+	case statePaused:
+		return nil // idempotent
+	case stateRunning:
+	default:
+		return fmt.Errorf("pipeline %q is %s; only a running pipeline can be paused", pipeline, m.state())
 	}
-	m.shutdown()
-	m.paused = true
-	m.setStatus("paused")
+	if !m.shutdown() {
+		return fmt.Errorf("pause: pipeline %q did not stop within the drain bound; runs may still be executing", pipeline)
+	}
+	if err := m.transition(statePaused); err != nil {
+		return err
+	}
 	s.emit("status", pipeline)
 	return nil
 }
 
+// Resume restarts a paused or drained pipeline (candidate 08: the old
+// Resume-after-Drain was a silent no-op reporting `running` while nothing
+// ran). The previous instance was fully stopped by Pause/Drain — including
+// its runs' terminal persistence and the release of its store lease — so the
+// replacement starts cleanly. Terminal instances (completed/failed) are
+// replaced by Deploy, never resumed in place.
 func (s *Service) Resume(ctx context.Context, pipeline string) error {
+	lk := s.lifecycle(pipeline)
+	lk.Lock()
+	defer lk.Unlock()
 	m, err := s.of(pipeline)
 	if err != nil {
 		return err
 	}
-	if !m.paused {
-		return nil
+	switch m.state() {
+	case stateRunning:
+		return nil // idempotent
+	case statePaused, stateDrained:
+		// Restart below.
+	default:
+		return fmt.Errorf("pipeline %q is %s (terminal); deploy it again to restart", pipeline, m.state())
 	}
-	cfg, file := m.cfg, m.file
-	s.mu.Lock()
-	delete(s.pipelines, pipeline)
-	nm, err := s.startManaged(ctx, cfg, file)
-	s.mu.Unlock()
-	if err != nil {
+	if _, err := s.startManaged(ctx, m.cfg, m.file); err != nil {
 		return err
 	}
-	_ = nm
 	s.emit("status", pipeline)
 	return nil
 }
