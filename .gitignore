@@ -17,6 +17,6 @@ tools/sitegen/bin/
 # the job example ships a seeded source database (regenerate: go run ./examples/job-sync/seed)
 !examples/job-sync/data/orders.db
 examples/job-sync/out/
-.idea/*.test.exe
+.idea/
 test_output.txt
-"tools/sitegen/sitegen.exe"  
+tools/sitegen/sitegen.exe  
