@@ -41,7 +41,7 @@ explicitly confirmed.
 | 08 | The jobs manager owns run admission and terminal transitions | Worth exploring | Implemented (stage S4) |
 | 09 | Explain renders resolved semantics | Speculative | Implemented (stage S7) |
 
-Out of scope by decision (see §7): dropping `Source.Commit` entirely, the
+Out of scope by decision (see §6): dropping `Source.Commit` entirely, the
 source-lock contract as the fix for re-entrancy, full CLI delegation to
 `ops`, implementing `sinks.workers`, cross-process delegation to the admin
 API, and migrating old on-disk data files.
@@ -644,7 +644,31 @@ explain-safe plugins gain a Close contract (documented).
   revision notes and `CHANGELOG.md`; `CONTEXT.md` carries the vocabulary.
   Introducing ADRs would be a second, competing convention.
 
-## 7. Index maintenance
+## 7. Implementation record
+
+The program was implemented in seven sequential stages, each behind a gate
+(full build, the affected packages, `-race`, and the stage's own acceptance
+list verified first-hand by the orchestrating session before its restore
+point was committed).
+
+| Stage | Candidates | Commit | Gate scope |
+|---|---|---|---|
+| S1 | 01 | `a5d3160` | full suite · `-race` engine/rpcplugin/cli · examples |
+| S2 | 02 | `e14e2a1` | full suite · `-race` engine/jobs/cli/ops · agent-loop |
+| S3 | 04 | `3ee0632` | full suite · `-race` store/engine/jobs/ops/cli |
+| S4 | 08 | `829bce3` | full suite · `-race` store/jobs/ops/cli/admin |
+| S5 | 05 + 06 | `876012d` | full suite · `-race` config/ops/cli/lsp/jobs/engine/store/verify/dlq/framework |
+| S6 | 07 | `2513c9e` | full suite · `-race` engine/registry/wasmhost/store/lang/obs |
+| S7 | 09 | `dff5e9a` | full suite · `-race` explain/ir/ops/wasmhost/engine/verify |
+
+Final acceptance (2026-09-24): the full suite is green; key paths were walked
+end-to-end (`verify` + `explain` on `examples/branching`; the fanin batch
+example runs to completion with all five messages committed and exit 0); the
+scope was checked against §6 — all eight candidates are implemented and
+nothing on the not-doing list was built; every stage's acceptance list was
+verified first-hand at its own gate before the restore point landed.
+
+## 8. Index maintenance
 
 `docs/README.md` lists this document. When a candidate is implemented,
 update its row here (and the index) to `Implemented` with the PR/commit
