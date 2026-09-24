@@ -39,7 +39,12 @@ transforms:
 - **Error model**: guest errors (null-pointer return with `eb_last_error`),
   traps, timeouts and memory overflow are transform failures — the incoming
   edge's `delivery` policy retries them, then the message dead-letters with
-  the error text. Identical to the Starlark error path.
+  the error text and a **typed failure kind**: the host classifies at creation
+  (`wasmhost.Error.Kind`: compile/timeout/guest/trap) and the adapter maps it
+  onto the registry kinds (compile/timeout/guest/runtime — a trap is the
+  guest's runtime failure). Classification never matches the message text:
+  a guest error containing `"exceeded"` is a guest failure, not a timeout.
+  Identical to the Starlark error path otherwise.
 - **Resource model**: wazero has no instruction-count metering, so budgets
   are **wall-clock per invoke** (`timeout_ms`, opt-in) plus a **hard memory
   cap** (`max_memory_pages`, always on). The **default is fast mode** — no

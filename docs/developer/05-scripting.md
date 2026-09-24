@@ -100,9 +100,11 @@ Guarantees, all visible in `starhost.go`:
   `Recursion: false`, `GlobalReassign: false`**. No `while` loops, no
   recursion, no global reassignment.
 - **Step budget**: `thread.SetMaxExecutionSteps(100_000)` (`DefaultOptions`).
-  Exhaustion kills the execution; the engine flags it (`"steps"`) and
-  `eventboat_script_step_budget_exhausted_total` counts it. A script that
-  exceeds the budget dead letters after the incoming edge's retries.
+  Exhaustion kills the execution; the host types it at the step-limit hook
+  (`starhost.KindSteps` — never sniffed from the `"too many steps"` text) and
+  the engine counts it (`eventboat_script_step_budget_exhausted_total`). A
+  script that exceeds the budget dead letters after the incoming edge's
+  retries, with the `steps` failure kind as its dead-letter class.
 - **Load allowlist**: exactly `json` and `math` (`allowedModules`); there is
   no loadable `strings` module in go-starlark — string methods are built
   into the string type. No time, no I/O, no entropy: evaluation is

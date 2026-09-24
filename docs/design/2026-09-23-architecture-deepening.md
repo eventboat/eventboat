@@ -37,7 +37,7 @@ explicitly confirmed.
 | 04 | One owner for the durable store of a pipeline | Strong | Implemented (stage S3) |
 | 05 | One verify-first path — the CLI stops re-implementing ops | Strong | Implemented (stage S5) |
 | 06 | One framework vocabulary — whitelist, order, defaults | Worth exploring | Implemented (stage S5) |
-| 07 | Typed failure kinds across the transform seam | Worth exploring | Design agreed |
+| 07 | Typed failure kinds across the transform seam | Worth exploring | Implemented (stage S6) |
 | 08 | The jobs manager owns run admission and terminal transitions | Worth exploring | Implemented (stage S4) |
 | 09 | Explain renders resolved semantics | Speculative | Design agreed |
 

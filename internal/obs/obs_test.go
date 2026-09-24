@@ -20,7 +20,7 @@ func TestPrometheusExposition(t *testing.T) {
 
 	o.RecordMessageIn("p1", "in")
 	o.RecordCommit("p1", 0)
-	o.RecordDeadLetter("p1", "out", ReasonClass("script: boom"))
+	o.RecordDeadLetter("p1", "out", "script")
 	o.RecordScript("p1", "t", time.Millisecond, true)
 	o.RecordJobStart("p1", "schedule")
 	o.RecordJobEnd("p1", "success", 0, 3, 3, 0)

@@ -235,6 +235,9 @@ func TestWaitInterruptedAbandonsOnCancel(t *testing.T) {
 	if len(dls) != 1 || dls[0].Reason != "test canceled" {
 		t.Fatalf("abandoned dead letters = %+v", dls)
 	}
+	if dls[0].Class != store.DLClassCanceled {
+		t.Fatalf("abandoned dead-letter class = %q, want %q", dls[0].Class, store.DLClassCanceled)
+	}
 	if cp, _ := st.Checkpoint("inv"); cp != 1 {
 		t.Fatalf("checkpoint = %d after abandon, want 1 (the durable record landed first)", cp)
 	}

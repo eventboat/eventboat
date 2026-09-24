@@ -29,7 +29,7 @@ func (t *splitTransform) Init(env *registry.TransformEnv) error { return nil }
 func (t *splitTransform) Apply(msg *registry.Message) ([]*registry.Message, error) {
 	items, ok := msg.Decoded.([]any)
 	if !ok {
-		return nil, &registry.TransformError{Err: fmt.Errorf("payload is %T, want array", msg.Decoded), Flavor: "split"}
+		return nil, &registry.TransformError{Err: fmt.Errorf("payload is %T, want array", msg.Decoded), Kind: registry.FailureOther}
 	}
 	out := make([]*registry.Message, len(items))
 	for i, item := range items {
@@ -41,3 +41,8 @@ func (t *splitTransform) Apply(msg *registry.Message) ([]*registry.Message, erro
 }
 
 func (t *splitTransform) Close() error { return nil }
+
+// Flavor travels only through the TransformFlavor interface (candidate 07):
+// split is a known flavor, but no per-flavor instrument exists for it, so the
+// engine's generic branch records it.
+func (t *splitTransform) Flavor() string { return "split" }

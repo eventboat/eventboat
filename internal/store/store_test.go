@@ -81,7 +81,7 @@ func exerciseStore(t *testing.T, st Store) {
 
 	dl := DeadLetter{
 		Pipeline: "p", MessageID: "m-1", Node: "out", Edge: "t -> out",
-		Reason: "delivery: sink write failed after retries", Backtrace: "t.star:3:1",
+		Reason: "delivery: sink write failed after retries", Class: DLClassDelivery, Backtrace: "t.star:3:1",
 		Raw: msg.Raw, Codec: msg.Codec, Meta: msg.Meta, SrcName: "in", SrcSeq: 1,
 	}
 	if err := st.WriteDeadLetter(dl); err != nil {
@@ -91,7 +91,7 @@ func exerciseStore(t *testing.T, st Store) {
 	if err != nil || len(dls) != 1 {
 		t.Fatalf("dead letters: %v %v", dls, err)
 	}
-	if dls[0].Reason != dl.Reason || dls[0].Backtrace != "t.star:3:1" {
+	if dls[0].Reason != dl.Reason || dls[0].Class != DLClassDelivery || dls[0].Backtrace != "t.star:3:1" {
 		t.Errorf("dead letter roundtrip: %+v", dls[0])
 	}
 }
@@ -513,12 +513,17 @@ func TestSQLiteMigratesM1DeadLetterTable(t *testing.T) {
 		t.Fatalf("reopen with migration: %v", err)
 	}
 	defer func() { _ = st2.Close() }()
-	if err := st2.WriteDeadLetter(DeadLetter{Pipeline: "p", MessageID: "m", RunID: "run-9", Node: "out", Reason: "x", Raw: []byte(`{}`)}); err != nil {
+	if err := st2.WriteDeadLetter(DeadLetter{Pipeline: "p", MessageID: "m", RunID: "run-9", Node: "out",
+		Reason: "x", Class: DLClassCanceled, Raw: []byte(`{}`)}); err != nil {
 		t.Fatal(err)
 	}
 	forRun, err := st2.DeadLettersForRun("p", "run-9")
 	if err != nil || len(forRun) != 1 {
 		t.Fatalf("run-attributed dead letter after migration: %+v %v", forRun, err)
+	}
+	// The class column is added in place too (candidate 07).
+	if forRun[0].Class != DLClassCanceled {
+		t.Fatalf("class after migration = %q, want %q", forRun[0].Class, DLClassCanceled)
 	}
 }
 

@@ -104,4 +104,7 @@ sinks:
 	if len(dls) != 1 {
 		t.Fatalf("dead letters = %d, want 1", len(dls))
 	}
+	if dls[0].Class != store.DLClassCanceled {
+		t.Errorf("abandoned dead-letter class = %q, want %q", dls[0].Class, store.DLClassCanceled)
+	}
 }

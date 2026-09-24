@@ -53,6 +53,7 @@ CREATE TABLE IF NOT EXISTS dead_letter (
   node        TEXT    NOT NULL,
   edge        TEXT    NOT NULL DEFAULT '',
   reason      TEXT    NOT NULL,
+  class       TEXT    NOT NULL DEFAULT '',
   backtrace   TEXT    NOT NULL DEFAULT '',
   raw         BLOB    NOT NULL,
   codec       TEXT    NOT NULL DEFAULT '',
@@ -106,13 +107,16 @@ CREATE INDEX IF NOT EXISTS idx_job_run_pipeline ON job_run(pipeline, started_at)
 CREATE INDEX IF NOT EXISTS idx_job_run_sched ON job_run(pipeline, scheduled_for);
 `
 
-// migrate applies guarded column additions for databases created before M2.
+// migrate applies guarded column additions for databases created before M2
+// (job_run_id) and before candidate 07 (class). Old rows read with the empty
+// default; the beta ruling forbids migrating other old layouts, not adding a
+// column in place.
 func migrate(db *sql.DB) error {
 	rows, err := db.Query(`PRAGMA table_info(dead_letter)`)
 	if err != nil {
 		return err
 	}
-	hasRunID := false
+	hasRunID, hasClass := false, false
 	for rows.Next() {
 		var cid int
 		var name, ctype string
@@ -123,8 +127,11 @@ func migrate(db *sql.DB) error {
 			_ = rows.Close()
 			return err
 		}
-		if name == "job_run_id" {
+		switch name {
+		case "job_run_id":
 			hasRunID = true
+		case "class":
+			hasClass = true
 		}
 	}
 	_ = rows.Close()
@@ -134,6 +141,11 @@ func migrate(db *sql.DB) error {
 	if !hasRunID {
 		if _, err := db.Exec(`ALTER TABLE dead_letter ADD COLUMN job_run_id TEXT NOT NULL DEFAULT ''`); err != nil {
 			return fmt.Errorf("store: migrate dead_letter.job_run_id: %w", err)
+		}
+	}
+	if !hasClass {
+		if _, err := db.Exec(`ALTER TABLE dead_letter ADD COLUMN class TEXT NOT NULL DEFAULT ''`); err != nil {
+			return fmt.Errorf("store: migrate dead_letter.class: %w", err)
 		}
 	}
 	return nil
@@ -332,9 +344,9 @@ func (s *SQLite) WriteDeadLetter(dl DeadLetter) error {
 	}
 	_, err := s.db.Exec(
 		`INSERT INTO dead_letter
-		   (pipeline, message_id, job_run_id, node, edge, reason, backtrace, raw, codec, meta, cursor, src_name, src_seq, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		dl.Pipeline, dl.MessageID, dl.RunID, dl.Node, dl.Edge, dl.Reason, dl.Backtrace,
+		   (pipeline, message_id, job_run_id, node, edge, reason, class, backtrace, raw, codec, meta, cursor, src_name, src_seq, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		dl.Pipeline, dl.MessageID, dl.RunID, dl.Node, dl.Edge, dl.Reason, dl.Class, dl.Backtrace,
 		dl.Raw, dl.Codec, string(marshalMeta(dl.Meta)), dl.Cursor, dl.SrcName, dl.SrcSeq,
 		createdAt.UTC().Format(timeLayout))
 	if err != nil {
@@ -345,7 +357,7 @@ func (s *SQLite) WriteDeadLetter(dl DeadLetter) error {
 
 // dlqColumns excludes the deprecated origin_node/retry_count columns, which
 // only exist (empty) in pre-review-2026-09 databases.
-const dlqColumns = `id, pipeline, message_id, job_run_id, node, edge, reason, backtrace, raw, codec, meta, cursor, src_name, src_seq, created_at`
+const dlqColumns = `id, pipeline, message_id, job_run_id, node, edge, reason, class, backtrace, raw, codec, meta, cursor, src_name, src_seq, created_at`
 
 func (s *SQLite) scanDeadLetters(query string, args ...any) ([]DeadLetter, error) {
 	rows, err := s.db.Query(query, args...)
@@ -360,7 +372,7 @@ func (s *SQLite) scanDeadLetters(query string, args ...any) ([]DeadLetter, error
 			meta    string
 			created string
 		)
-		if err := rows.Scan(&dl.ID, &dl.Pipeline, &dl.MessageID, &dl.RunID, &dl.Node, &dl.Edge, &dl.Reason, &dl.Backtrace,
+		if err := rows.Scan(&dl.ID, &dl.Pipeline, &dl.MessageID, &dl.RunID, &dl.Node, &dl.Edge, &dl.Reason, &dl.Class, &dl.Backtrace,
 			&dl.Raw, &dl.Codec, &meta, &dl.Cursor, &dl.SrcName, &dl.SrcSeq, &created); err != nil {
 			return nil, fmt.Errorf("store: scan dead letter: %w", err)
 		}

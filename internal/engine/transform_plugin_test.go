@@ -109,7 +109,7 @@ func TestEnginePluginTransformErrorRetriesThenDeadLetters(t *testing.T) {
 	var calls atomic.Int32
 	if err := testkit.RegisterFakeTransform(h.reg, "flaky", func(msg *registry.Message) ([]*registry.Message, error) {
 		calls.Add(1)
-		return nil, &registry.TransformError{Err: errString("boom"), Flavor: "flaky"}
+		return nil, &registry.TransformError{Err: errString("boom")}
 	}); err != nil {
 		t.Fatal(err)
 	}

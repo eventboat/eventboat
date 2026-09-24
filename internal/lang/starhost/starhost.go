@@ -79,13 +79,14 @@ type Program struct {
 
 // Compile parses and resolves a script. Resolution errors (undefined names,
 // bad arity, disallowed constructs) surface here — this is what verify runs.
+// The returned error is a *ScriptError with KindCompile.
 func Compile(name, src string, opts Options) (*Program, error) {
 	if opts.MaxSteps == 0 {
 		opts = DefaultOptions()
 	}
 	_, prog, err := starlark.SourceProgramOptions(fileOptions(), name, src, isPredeclared)
 	if err != nil {
-		return nil, fmt.Errorf("starlark compile error: %w", err)
+		return nil, &ScriptError{Kind: KindCompile, Msg: "starlark compile error: " + err.Error()}
 	}
 	return &Program{
 		name:    name,
@@ -103,10 +104,24 @@ func (p *Program) Source() string { return p.src }
 // Name returns the script identifier (usually "transforms.<node>.script").
 func (p *Program) Name() string { return p.name }
 
+// Kind classifies a ScriptError at creation: Compile failures carry
+// KindCompile; execution failures distinguish budget exhaustion (typed by the
+// thread's OnMaxSteps hook — never by matching the "too many steps" text) from
+// ordinary runtime errors. The plugin adapter maps this onto
+// registry.FailureKind.
+type Kind string
+
+const (
+	KindCompile Kind = "compile" // the script did not compile (resolve/parse)
+	KindSteps   Kind = "steps"   // the step budget was exhausted
+	KindRuntime Kind = "runtime" // the script failed while executing
+)
+
 // ScriptError is a runtime script failure with its backtrace. The engine
 // turns this into a dead letter carrying the trace (no exceptions exist in
 // Starlark, so nothing can swallow it).
 type ScriptError struct {
+	Kind      Kind
 	Msg       string
 	Backtrace string
 	Line      int
@@ -136,6 +151,14 @@ func (p *Program) RunWithParams(payload, meta *MsgState, constants, params starl
 	}
 	thread := &starlark.Thread{Name: p.name, Load: loadModule}
 	thread.SetMaxExecutionSteps(p.opts.MaxSteps)
+	// Budget exhaustion is typed where the budget fires (the hook runs
+	// synchronously in the interpreter's goroutine), not sniffed from the
+	// resulting "too many steps" message.
+	budgetExhausted := false
+	thread.OnMaxSteps = func(th *starlark.Thread) {
+		budgetExhausted = true
+		th.Cancel("too many steps")
+	}
 	predeclared := starlark.StringDict{
 		"payload":          payload.Binding(),
 		"meta":             meta.Binding(),
@@ -145,12 +168,15 @@ func (p *Program) RunWithParams(payload, meta *MsgState, constants, params starl
 		"remove":           p.removeB,
 	}
 	if _, err := p.prog.Init(thread, predeclared); err != nil {
-		return asScriptError(err)
+		return asScriptError(err, budgetExhausted)
 	}
 	return nil
 }
 
-func asScriptError(err error) *ScriptError {
+// asScriptError types a script failure at creation: budget exhaustion is
+// known from the OnMaxSteps hook, everything else is a runtime failure.
+func asScriptError(err error, budgetExhausted bool) *ScriptError {
+	se := &ScriptError{Kind: KindRuntime}
 	if ee, ok := err.(*starlark.EvalError); ok {
 		// The innermost frame carries the user-visible line; frames are
 		// ordered outermost-first with a synthetic entry, so take the max.
@@ -160,9 +186,14 @@ func asScriptError(err error) *ScriptError {
 				line = int(fr.Pos.Line)
 			}
 		}
-		return &ScriptError{Msg: ee.Msg, Backtrace: ee.Backtrace(), Line: line}
+		se.Msg, se.Backtrace, se.Line = ee.Msg, ee.Backtrace(), line
+	} else {
+		se.Msg = err.Error()
 	}
-	return &ScriptError{Msg: err.Error()}
+	if budgetExhausted {
+		se.Kind = KindSteps
+	}
+	return se
 }
 
 // FreezeConstants converts a constants map into a frozen Starlark value once

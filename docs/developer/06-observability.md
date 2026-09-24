@@ -46,9 +46,13 @@ instruments carry the `eventboat_` prefix:
 | `eventboat_job_rows_delivered_total` | pipeline | rows delivered by job runs |
 | `eventboat_plugin_restarts_total` | plugin | supervisor respawns of crashed gRPC plugin processes (`grpc.restart: restart`) |
 
-`reason_class` is a coarse prefix class of the dead-letter reason — one of
-`script`, `decode`, `codec`, `delivery`, `encoder`, `canceled`, else
-`other` (`obs.ReasonClass`).
+`reason_class` is the dead-letter class the engine **recorded with the
+message** (`store.DeadLetter.Class`) — `decode`, `codec`, `encode`,
+`delivery`, `canceled`, or a transform failure kind (`steps`, `timeout`,
+`guest`, `compile`, `runtime`, `other`). It is never re-derived from the
+reason text: candidate 07 deleted the prefix-matching `obs.ReasonClass`, so
+the label values changed (`"script"` became the failure kind, `"encoder"`
+became `codec`, and an `"encode:"` failure is now `encode`, never `other`).
 
 ### Histograms (unit: seconds)
 

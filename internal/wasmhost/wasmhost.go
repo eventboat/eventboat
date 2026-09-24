@@ -8,6 +8,10 @@
 // timeout or memory overflow kills the instance (wazero closes it); the
 // invoker re-instantiates from the shared CompiledModule on the next call.
 //
+// Failures are typed where they happen (Error.Kind: compile, timeout, guest,
+// trap) so the plugin adapter maps them onto registry.FailureKind without
+// matching message text; the message keeps the host's "wasm: ..." wording.
+//
 // Guest ABI (review-m3 R3, full docs in docs/wasm.md): the module must be a
 // wasip1 reactor exporting _initialize, eb_alloc(len i32) i32 and
 // transform(ptr i32, len i32) i32; transform returns a pointer to 4-byte
@@ -28,6 +32,33 @@ import (
 
 // DefaultMaxMemoryPages caps guest memory when max_memory_pages is unset.
 const DefaultMaxMemoryPages = 512 // 32 MiB
+
+// Kind classifies a host failure where it is created, so the plugin adapter
+// maps it onto a registry.FailureKind without matching error text.
+type Kind string
+
+const (
+	KindCompile Kind = "compile" // module read/compile/ABI-export failures (verify-time)
+	KindTimeout Kind = "timeout" // the per-invoke wall-clock budget killed the call
+	KindGuest   Kind = "guest"   // the guest reported the failure through its ABI
+	KindTrap    Kind = "trap"    // wazero reported an execution fault (call error, instantiation)
+)
+
+// Error is a typed host failure. Error() keeps the host's message text
+// ("wasm: ..."), which the engine stores verbatim in the dead-letter reason;
+// classification travels in Kind alone.
+type Error struct {
+	Kind Kind
+	Err  error
+}
+
+func (e *Error) Error() string { return e.Err.Error() }
+func (e *Error) Unwrap() error { return e.Err }
+
+// kindError builds a typed host error with a formatted message.
+func kindError(kind Kind, format string, args ...any) *Error {
+	return &Error{Kind: kind, Err: fmt.Errorf(format, args...)}
+}
 
 // Config declares a WASM transform node (ladder tier 3, redesign-v3.md §4.5;
 // wire format and sandbox per redesign-v3-review-m3 R3/R4/R7). The schema
@@ -52,7 +83,7 @@ type Config struct {
 func Compile(ctx context.Context, path string, cfg *Config) (*Compiled, error) {
 	wasmBytes, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("wasmhost: read module: %w", err)
+		return nil, kindError(KindCompile, "wasmhost: read module: %w", err)
 	}
 	pages := 0
 	timeout := 0
@@ -78,14 +109,14 @@ func Compile(ctx context.Context, path string, cfg *Config) (*Compiled, error) {
 	compiled, err := r.CompileModule(ctx, wasmBytes)
 	if err != nil {
 		_ = r.Close(ctx)
-		return nil, fmt.Errorf("wasmhost: compile %s: %w", path, err)
+		return nil, kindError(KindCompile, "wasmhost: compile %s: %w", path, err)
 	}
 	// ABI check up front: a module missing the exports fails verify, not the
 	// first message (gate 1 catches it).
 	for _, name := range []string{"_initialize", "eb_alloc", "transform"} {
 		if compiled.ExportedFunctions()[name] == nil {
 			_ = r.Close(ctx)
-			return nil, fmt.Errorf("wasmhost: module %s does not export %q", path, name)
+			return nil, kindError(KindCompile, "wasmhost: module %s does not export %q", path, name)
 		}
 	}
 	return &Compiled{runtime: r, module: compiled}, nil
@@ -150,11 +181,11 @@ type Invoker struct {
 	alloc     api.Function
 }
 
-// Invoke runs one transform: payload in, payload out. An error is a
-// transform failure the engine treats exactly like a Starlark failure
-// (delivery retries, then dead letter). In fast mode there is no deadline —
-// a runaway call blocks until the pipeline restarts, and the watchdog logs
-// it once.
+// Invoke runs one transform: payload in, payload out. An error is a typed
+// *Error (KindCompile never reaches here: it fails verify) that the engine
+// treats exactly like a Starlark failure (delivery retries, then dead
+// letter). In fast mode there is no deadline — a runaway call blocks until
+// the pipeline restarts, and the watchdog logs it once.
 func (inv *Invoker) Invoke(parent context.Context, payload []byte) ([]byte, error) {
 	ctx := parent
 	if inv.timeout > 0 {
@@ -179,20 +210,20 @@ func (inv *Invoker) Invoke(parent context.Context, payload []byte) ([]byte, erro
 	res, err := inv.alloc.Call(ctx, uint64(len(payload)))
 	if err != nil {
 		inv.reset()
-		return nil, fmt.Errorf("wasm: eb_alloc: %w", err)
+		return nil, kindError(KindTrap, "wasm: eb_alloc: %w", err)
 	}
 	ptr := uint32(res[0])
 	if !inv.mod.Memory().Write(ptr, payload) {
 		inv.reset()
-		return nil, fmt.Errorf("wasm: eb_alloc returned a pointer outside memory")
+		return nil, kindError(KindGuest, "wasm: eb_alloc returned a pointer outside memory")
 	}
 	res, err = inv.transform.Call(ctx, uint64(ptr), uint64(len(payload)))
 	if err != nil {
 		inv.reset()
 		if ctx.Err() != nil {
-			return nil, fmt.Errorf("wasm: transform exceeded %s (per-invoke budget)", inv.timeout)
+			return nil, kindError(KindTimeout, "wasm: transform exceeded %s (per-invoke budget)", inv.timeout)
 		}
-		return nil, fmt.Errorf("wasm: transform trap: %w", err)
+		return nil, kindError(KindTrap, "wasm: transform trap: %w", err)
 	}
 	out, err := readResult(inv.mod, uint32(res[0]))
 	if err != nil {
@@ -218,7 +249,7 @@ func (inv *Invoker) ensure(ctx context.Context) error {
 	}
 	mod, err := inv.compiled.runtime.InstantiateModule(ctx, inv.compiled.module, cfg)
 	if err != nil {
-		return fmt.Errorf("wasm: instantiate: %w", err)
+		return kindError(KindTrap, "wasm: instantiate: %w", err)
 	}
 	inv.mod = mod
 	inv.alloc = mod.ExportedFunction("eb_alloc")
@@ -243,7 +274,9 @@ func (inv *Invoker) Close() error {
 	return nil
 }
 
-// readResult decodes the length-prefixed output buffer.
+// readResult decodes the length-prefixed output buffer. Every failure here is
+// a guest failure: the guest returned 0 (with or without an eb_last_error
+// message) or pointed at a malformed result buffer.
 func readResult(mod api.Module, ptr uint32) ([]byte, error) {
 	if ptr == 0 {
 		// Optional error message export (length-prefixed like results).
@@ -252,15 +285,15 @@ func readResult(mod api.Module, ptr uint32) ([]byte, error) {
 			defer cancel()
 			if res, err := fn.Call(ctx); err == nil && len(res) > 0 {
 				if msg, err := readResult(mod, uint32(res[0])); err == nil && len(msg) > 0 {
-					return nil, fmt.Errorf("wasm: transform error: %s", msg)
+					return nil, kindError(KindGuest, "wasm: transform error: %s", msg)
 				}
 			}
 		}
-		return nil, fmt.Errorf("wasm: transform returned an error (null pointer)")
+		return nil, kindError(KindGuest, "wasm: transform returned an error (null pointer)")
 	}
 	header, ok := mod.Memory().Read(ptr, 4)
 	if !ok {
-		return nil, fmt.Errorf("wasm: result pointer outside memory")
+		return nil, kindError(KindGuest, "wasm: result pointer outside memory")
 	}
 	n := uint32(header[0]) | uint32(header[1])<<8 | uint32(header[2])<<16 | uint32(header[3])<<24
 	if n == 0 {
@@ -268,7 +301,7 @@ func readResult(mod api.Module, ptr uint32) ([]byte, error) {
 	}
 	out, ok := mod.Memory().Read(ptr+4, n)
 	if !ok {
-		return nil, fmt.Errorf("wasm: result body outside memory (len %d)", n)
+		return nil, kindError(KindGuest, "wasm: result body outside memory (len %d)", n)
 	}
 	return out, nil
 }

@@ -237,8 +237,10 @@ type Transform interface {
   the plugin declared unsafe to share, so it must not degrade into being
   shared across workers (`internal/engine/nodes.go`, `runTransform`).
 - **`TransformFlavor`** — return `"script"` or `"wasm"` to feed the
-  per-flavor duration histograms and budget/timeout counters; anything else
-  records generically.
+  per-flavor duration histograms and budget/timeout counters; any other flavor
+  (including split's `"split"`) takes the engine's generic branch: the
+  execution is still counted by the run accounting and a failure's kind still
+  becomes the dead-letter class, but no per-flavor instrument exists for it.
 - Declare the `"explain-safe"` capability (script, split) if `explain` may
   dry-run your transform on scratch messages; wasm deliberately does not
   (explain never executes guest code).
@@ -253,11 +255,21 @@ in `registry.TransformError`:
 | `Err` | the underlying error |
 | `DiagCode` | at **verify** time, routes a factory failure to a specific diagnostic code (empty falls back to `plugin_schema`) — `expr_starlark_compile` and `expr_wasm_compile` survive this way, with a `Hint` |
 | `Backtrace` | at **run** time, stored verbatim in the dead letter (Starlark backtraces; positions render as `script:L:C`) |
-| `Flag` | marks budget exhaustion (`"steps"`) or timeout (`"timeout"`) — feeds the budget/timeout counters |
-| `Flavor` | per-flavor metrics |
+| `Kind` | the typed **failure kind** — `steps`, `timeout`, `guest`, `compile`, `runtime` or `other` (`registry.FailureKind`). It becomes the dead-letter class and drives the budget/timeout counters; classification is **never** derived from the message text |
+
+The hosts define their own kinds where the failure is created —
+`starhost.ScriptError.Kind` (compile/steps/runtime; budget exhaustion is set
+by the Starlark step-limit hook, not sniffed from `"too many steps"`) and
+`wasmhost.Error.Kind` (compile/timeout/guest/trap) — and the built-in
+adapters map them onto the registry enum: script → compile/steps/runtime,
+wasm → compile/timeout/guest/runtime (a trap is the guest's runtime failure).
+A custom in-process transform just sets `Kind` (or leaves it empty for
+`other`).
 
 `internal/ir.addFactoryDiags` unwraps `TransformError` at verify; the engine
-unwraps `Flag`/`Backtrace` at run time (`internal/engine/nodes.go`).
+unwraps `Kind`/`Backtrace` at run time (`internal/engine/nodes.go`). Flavor
+is **not** carried on errors: it is an instance property read through
+`TransformFlavor`.
 
 ## Writing a custom in-process transform
 

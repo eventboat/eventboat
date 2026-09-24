@@ -142,7 +142,10 @@ type TransformCloner interface {
 // TransformFlavor is implemented by transforms that participate in the
 // engine's per-flavor observability (script/wasm duration histograms, budget
 // and timeout counters); the engine reads it when recording metrics. Known
-// flavors are "script" and "wasm"; anything else is recorded generically.
+// flavors are "script" and "wasm"; any other flavor (including the built-in
+// "split") takes the generic branch — the execution is still counted by the
+// engine's run accounting and a failure's kind still rides the dead-letter
+// class, but no per-flavor instrument exists for it.
 type TransformFlavor interface {
 	Flavor() string
 }
@@ -159,18 +162,33 @@ type TransformEnv struct {
 	SlowCallWarn time.Duration
 }
 
+// FailureKind classifies a transform failure at the registry seam (CONTEXT.md
+// "Failure kind"): hosts (Starlark, wasm) define their own kinds and the
+// plugin adapters map them onto this enum; the engine consumes it for metrics
+// and for the dead-letter class. Classification is NEVER derived by matching
+// error text.
+type FailureKind string
+
+const (
+	FailureSteps   FailureKind = "steps"   // a compute/step budget was exhausted
+	FailureTimeout FailureKind = "timeout" // a per-invoke wall-clock budget killed the call
+	FailureGuest   FailureKind = "guest"   // the guest (wasm) reported the failure itself
+	FailureCompile FailureKind = "compile" // the transform could not be compiled or instantiated
+	FailureRuntime FailureKind = "runtime" // the transform failed while executing
+	FailureOther   FailureKind = "other"   // unclassified (third-party plugins)
+)
+
 // TransformError is the failure detail a transform plugin returns (or wraps)
 // from its factory or Apply. At verify time DiagCode/Hint route a factory
 // failure to a specific diagnostic code ("" falls back to plugin_schema).
 // At run time Backtrace reaches the dead-letter record verbatim (Starlark
-// backtraces); Flavor feeds the engine's per-flavor metrics ("script" and
-// "wasm" are recorded today, anything else is generic); Flag marks budget
-// exhaustion ("steps") or timeouts ("timeout").
+// backtraces) and Kind (FailureOther when empty) becomes the dead-letter
+// class the engine records. Flavor is deliberately NOT carried on errors: it
+// is an instance property read through TransformFlavor.
 type TransformError struct {
 	Err       error
 	Backtrace string
-	Flavor    string
-	Flag      string
+	Kind      FailureKind
 	DiagCode  string
 	Hint      string
 }

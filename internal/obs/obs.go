@@ -265,17 +265,10 @@ func (o *Obs) RecordPluginRestart(plugin string) {
 	o.PluginRestarts.Add(context.Background(), 1, metric.WithAttributes(attribute.String("plugin", plugin)))
 }
 
-// ReasonClass maps a dead-letter reason to a coarse class label.
-func ReasonClass(reason string) string {
-	for _, prefix := range []string{"script", "decode", "codec", "delivery", "encoder", "canceled"} {
-		if len(reason) >= len(prefix) && reason[:len(prefix)] == prefix {
-			return prefix
-		}
-	}
-	return "other"
-}
-
-// RecordDeadLetter counts one dead letter.
+// RecordDeadLetter counts one dead letter. class is the dead-letter class the
+// engine recorded with the message (store.DeadLetter.Class: decode, codec,
+// encode, delivery, canceled, or a transform failure kind) — never re-derived
+// from the reason text (candidate 07 deleted obs.ReasonClass).
 func (o *Obs) RecordDeadLetter(pipeline, node, class string) {
 	if o == nil || o.DeadLettered == nil {
 		return

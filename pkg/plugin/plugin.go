@@ -57,10 +57,26 @@ type (
 	TransformFlavor = registry.TransformFlavor
 	// TransformEnv is the execution environment handed to Transform.Init.
 	TransformEnv = registry.TransformEnv
-	// TransformError is the structured failure detail a transform returns.
+	// TransformError is the structured failure detail a transform returns;
+	// Kind carries the typed failure kind (steps/timeout/guest/compile/
+	// runtime/other) that becomes the dead-letter class.
 	TransformError = registry.TransformError
+	// FailureKind is the typed classification of a transform failure.
+	FailureKind = registry.FailureKind
 	// Codec turns raw bytes into a decoded value and back.
 	Codec = registry.Codec
+)
+
+// The failure-kind vocabulary of TransformError.Kind (candidate 07): hosts
+// classify where the failure is created and adapters map it, so engine
+// metrics and the dead-letter class never re-derive a class from error text.
+const (
+	FailureSteps   = registry.FailureSteps
+	FailureTimeout = registry.FailureTimeout
+	FailureGuest   = registry.FailureGuest
+	FailureCompile = registry.FailureCompile
+	FailureRuntime = registry.FailureRuntime
+	FailureOther   = registry.FailureOther
 )
 
 // RegisterSource registers a source plugin whose config contract is the

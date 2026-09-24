@@ -407,6 +407,49 @@ hygiene findings.
   now enforced in `[0, 1]`). Docs: 01-architecture, 03-plugins,
   04-config-pipeline, 06-observability.
 
+- **Typed failure kinds across the transform seam (candidate 07)**: the
+  engine classified transform failures by matching message text produced in
+  other packages — `strings.Contains(serr.Msg, "too many steps")` and
+  `strings.Contains(err.Error(), "exceeded")` — so a guest error containing
+  "exceeded" counted as a wasm timeout, `TransformError.Flavor` was a second,
+  unused flavor channel (split filled it without implementing the
+  interface), and `obs.ReasonClass`'s prefix list was already wrong: an
+  `"encode: "` reason never matched its `"encoder"` prefix and landed in
+  `other`. Hosts now type their failures **where the failure is created**:
+  `starhost.ScriptError.Kind` (compile/steps/runtime — budget exhaustion is
+  set by the Starlark step-limit hook, never sniffed from the message text)
+  and `wasmhost.Error.Kind` (compile/timeout/guest/trap; the per-invoke
+  budget error and every other host error is typed at creation). The builtin
+  adapters map the host kind onto the new `registry.FailureKind` enum
+  (steps/timeout/guest/compile/runtime/other) carried by
+  `TransformError.Kind`; the `"wasm: "` prefix stripping goes away and the
+  host's message text is preserved verbatim. **BREAKING**: `TransformError`
+  loses `Flavor` and `Flag` (compiled-in plugins rebuild, v1.18 precedent) —
+  flavor travels only through the `TransformFlavor` interface, which split
+  now implements, and the engine's flavor switch gained the documented
+  generic default: known flavors (`script`, `wasm`) feed their per-flavor
+  duration histograms and kind-driven budget/timeout counters, while an
+  unknown flavor is recorded generically (run accounting plus the
+  dead-letter class) instead of being silently ignored. `store.DeadLetter`
+  gains **`Class`**, recorded where the dead letter is produced — `decode`,
+  `codec`, `encode` (the old `encoder`/`encode` reason-prefix split is
+  resolved into explicit classes), `delivery`, `canceled` for abandoned
+  messages, and the transform failure kinds — and both store
+  implementations persist it (the SQLite column is added in place for
+  existing databases; the `class` field joins the dead-letter JSON).
+  `obs.ReasonClass` is deleted: `RecordDeadLetter` receives the class the
+  engine already knows, so **the `reason_class` metric label values
+  change** — `"script"` becomes the failure kind, `"encoder"` becomes
+  `codec`, an `"encode:"` failure is now `encode` (never `other`), and
+  cancel/abandon records are `canceled`. New tests: the host kind matrices
+  (script compile/steps/runtime; wasm compile/timeout/guest/trap against a
+  hand-assembled guest module), the adapter mapping, a grep gate against
+  text classification in starhost/wasmhost/builtin/engine/obs, the
+  false-positive regression (a guest error containing "exceeded" stays
+  guest), the dead-letter class on every production path with metric-label
+  assertions, and the unknown-flavor generic-branch pin. Docs: 02-engine,
+  03-plugins, 05-scripting, 06-observability, wasm.md.
+
 - **Admin security hardening**: the `?token=` query form is accepted on
   `/admin/sse` only (EventSource cannot set headers); every other endpoint is
   header-only, so a token leaked in a URL no longer unlocks the write
@@ -428,6 +471,12 @@ hygiene findings.
 
 ### Removed
 
+- **`registry.TransformError.Flavor` and `.Flag`** (candidate 07): flavor is
+  an instance property (read through `TransformFlavor`), and the failure kind
+  is typed on the error (`Kind`) where the failure is created.
+- **`obs.ReasonClass`** (candidate 07): the dead-letter class is recorded at
+  production time on `store.DeadLetter.Class`; metrics read it directly, so
+  no prefix list can drift from the reasons again.
 - **`store.JobCommitting` and `JobRun.Runnable()`** (candidate 08): the
   reserved `committing` state had no writer, so it was deleted from the enum,
   the runnable predicate, the SQLite status sets (`RunnableJobRuns`,

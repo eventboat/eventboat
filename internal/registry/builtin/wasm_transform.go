@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/eventboat/eventboat/internal/registry"
@@ -43,12 +42,39 @@ func registerWasmTransform(reg *registry.Registry) error {
 			}
 			compiled, err := wasmhost.Compile(context.Background(), path, &cfg)
 			if err != nil {
-				return nil, &registry.TransformError{Err: err, Flavor: "wasm",
-					DiagCode: "expr_wasm_compile",
-					Hint:     "the module must be a wasm32-wasip1 reactor exporting _initialize, eb_alloc and transform (docs/wasm.md)"}
+				return nil, &registry.TransformError{Err: err, Kind: wasmKindOf(err), DiagCode: "expr_wasm_compile",
+					Hint: "the module must be a wasm32-wasip1 reactor exporting _initialize, eb_alloc and transform (docs/wasm.md)"}
 			}
 			return &wasmTransform{cfg: cfg, compiled: compiled, owner: true}, nil
 		})
+}
+
+// wasmKind maps the wasm host's typed kind onto the registry failure kinds
+// (the adapter seam; the engine never reads the host error text). A trap is
+// the guest's runtime failure, so it maps to FailureRuntime.
+func wasmKind(k wasmhost.Kind) registry.FailureKind {
+	switch k {
+	case wasmhost.KindCompile:
+		return registry.FailureCompile
+	case wasmhost.KindTimeout:
+		return registry.FailureTimeout
+	case wasmhost.KindGuest:
+		return registry.FailureGuest
+	case wasmhost.KindTrap:
+		return registry.FailureRuntime
+	default:
+		return registry.FailureRuntime
+	}
+}
+
+// wasmKindOf reads the typed kind off a host error; an untyped error is a
+// runtime failure, never a timeout derived from its wording.
+func wasmKindOf(err error) registry.FailureKind {
+	var werr *wasmhost.Error
+	if errors.As(err, &werr) {
+		return wasmKind(werr.Kind)
+	}
+	return registry.FailureRuntime
 }
 
 func (w *wasmTransform) Init(env *registry.TransformEnv) error {
@@ -76,27 +102,26 @@ func (w *wasmTransform) Apply(msg *registry.Message) ([]*registry.Message, error
 		// reaching the template here is an engine wiring bug, not user error.
 		return nil, fmt.Errorf("no invoker: wasm requires per-worker clones")
 	}
-	fail := func(err error, flag string) error {
-		return &registry.TransformError{Err: errors.New(strings.TrimPrefix(err.Error(), "wasm: ")), Flavor: "wasm", Flag: flag}
+	// The host's message text is preserved as-is: classification rides Kind.
+	fail := func(err error, kind registry.FailureKind) error {
+		return &registry.TransformError{Err: err, Kind: kind}
 	}
 	in, err := json.Marshal(msg.Decoded)
 	if err != nil {
-		return nil, fail(fmt.Errorf("encode payload: %w", err), "")
+		return nil, fail(fmt.Errorf("encode payload: %w", err), registry.FailureOther)
 	}
 	out, err := w.invoker.Invoke(context.Background(), in)
 	if err != nil {
-		flag := ""
-		if strings.Contains(err.Error(), "exceeded") {
-			flag = "timeout"
-		}
-		return nil, fail(err, flag)
+		return nil, fail(err, wasmKindOf(err))
 	}
 	if len(out) == 0 {
-		return nil, fail(errors.New("transform returned empty output (payload must be JSON)"), "")
+		// The guest returned a well-formed empty result: a guest contract
+		// violation, not a host failure.
+		return nil, fail(errors.New("transform returned empty output (payload must be JSON)"), registry.FailureGuest)
 	}
 	var decoded any
 	if err := json.Unmarshal(out, &decoded); err != nil {
-		return nil, fail(fmt.Errorf("output is not valid JSON: %v", err), "")
+		return nil, fail(fmt.Errorf("output is not valid JSON: %v", err), registry.FailureGuest)
 	}
 	msg.Decoded = decoded
 	return []*registry.Message{msg}, nil
@@ -115,5 +140,5 @@ func (w *wasmTransform) Close() error {
 }
 
 // Flavor feeds the engine's wasm metrics (duration histogram, timeout
-// counter).
+// counter); the failure kind travels typed on TransformError.
 func (w *wasmTransform) Flavor() string { return "wasm" }

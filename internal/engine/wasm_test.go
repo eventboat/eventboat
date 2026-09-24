@@ -13,6 +13,7 @@ import (
 	"github.com/eventboat/eventboat/internal/config"
 	"github.com/eventboat/eventboat/internal/ir"
 	"github.com/eventboat/eventboat/internal/lang/starhost"
+	"github.com/eventboat/eventboat/internal/registry"
 	"github.com/eventboat/eventboat/internal/store"
 	"github.com/eventboat/eventboat/internal/wasmhost"
 )
@@ -112,6 +113,11 @@ sinks:
 	}
 	if want := "samples must not be empty"; !strings.Contains(dlq[0].Reason, want) {
 		t.Fatalf("dead letter reason %q does not contain %q", dlq[0].Reason, want)
+	}
+	// Candidate 07: the guest failure is typed as guest at the host and mapped
+	// by the adapter — never sniffed from the message text.
+	if dlq[0].Class != string(registry.FailureGuest) {
+		t.Fatalf("dead-letter class = %q, want %q", dlq[0].Class, registry.FailureGuest)
 	}
 }
 

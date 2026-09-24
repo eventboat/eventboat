@@ -15,6 +15,21 @@ import (
 	"github.com/eventboat/eventboat/internal/registry"
 )
 
+// Dead-letter classes (CONTEXT.md "Dead-letter class"): the coarse failure
+// class recorded together with the dead letter when it is produced, so
+// metrics and operators read a typed value instead of re-deriving one from
+// the reason text. Transform failures record their registry failure kind
+// (steps, timeout, guest, compile, runtime, other) as the class; the classes
+// below cover the engine-produced failures. An empty class is "other"
+// (records written before candidate 07, or by a caller that does not know).
+const (
+	DLClassDecode   = "decode"   // the payload failed decoding at entry
+	DLClassCodec    = "codec"    // the codec (decoder/encoder) could not be constructed
+	DLClassEncode   = "encode"   // the sink encoder failed on the payload
+	DLClassDelivery = "delivery" // the sink write failed after the edge's retries
+	DLClassCanceled = "canceled" // abandoned by a canceled run (Engine.Abandon)
+)
+
 // DeadLetter is one dead-lettered message with its full original content and
 // the error context (including Starlark backtraces / CEL error text).
 type DeadLetter struct {
@@ -25,6 +40,7 @@ type DeadLetter struct {
 	Node      string         `json:"node"`
 	Edge      string         `json:"edge"` // "from -> to"
 	Reason    string         `json:"reason"`
+	Class     string         `json:"class"` // coarse failure class (DLClass* or a registry.FailureKind)
 	Backtrace string         `json:"backtrace"`
 	Raw       []byte         `json:"raw"`
 	Codec     string         `json:"codec"`

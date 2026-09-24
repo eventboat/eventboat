@@ -1037,7 +1037,7 @@ func (e *Engine) Abandon(ctx context.Context, reason string) (int, error) {
 				return abandoned, fmt.Errorf("engine: abandon: %w", err)
 			}
 			msg := msgs[seq]
-			dl := e.deadLetterRecord(msg, firstNonEmpty(msg.SrcName, "unknown"), "", reason, "")
+			dl := e.deadLetterRecord(msg, firstNonEmpty(msg.SrcName, "unknown"), "", store.DLClassCanceled, reason, "")
 			if err := e.writeDeadLetter(ctx, seq, dl); err != nil {
 				return abandoned, fmt.Errorf("engine: abandon: %w", err)
 			}
@@ -1122,7 +1122,7 @@ func (e *Engine) dispatchFrom(sourceNode string, seq int64, msg registry.Message
 	node := e.IR.Nodes[sourceNode]
 	codec, err := e.codec(msg.Codec, e.Reg)
 	if err != nil {
-		e.deadLetterMsg(seq, msg, sourceNode, "", "codec: "+err.Error(), "")
+		e.deadLetterMsg(seq, msg, sourceNode, "", store.DLClassCodec, "codec: "+err.Error(), "")
 		return
 	}
 	if msg.Decoded == nil {
@@ -1130,7 +1130,7 @@ func (e *Engine) dispatchFrom(sourceNode string, seq int64, msg registry.Message
 		if derr != nil {
 			e.Metrics.DecodeErrors.Add(1)
 			e.Opts.Obs.RecordDecodeError(e.IR.Config.Name, sourceNode)
-			e.deadLetterMsg(seq, msg, sourceNode, "", "decode: "+derr.Error(), "")
+			e.deadLetterMsg(seq, msg, sourceNode, "", store.DLClassDecode, "decode: "+derr.Error(), "")
 			return
 		}
 		msg.Decoded = v
@@ -1218,7 +1218,7 @@ func (e *Engine) InjectReplay(node string, msg registry.Message) (int64, error) 
 func (e *Engine) dispatchInternal(node string, seq int64, msg registry.Message) {
 	codec, err := e.codec(msg.Codec, e.Reg)
 	if err != nil {
-		e.deadLetterMsg(seq, msg, node, "", "codec: "+err.Error(), "")
+		e.deadLetterMsg(seq, msg, node, "", store.DLClassCodec, "codec: "+err.Error(), "")
 		return
 	}
 	if msg.Decoded == nil {
@@ -1226,7 +1226,7 @@ func (e *Engine) dispatchInternal(node string, seq int64, msg registry.Message) 
 		if derr != nil {
 			e.Metrics.DecodeErrors.Add(1)
 			e.Opts.Obs.RecordDecodeError(e.IR.Config.Name, node)
-			e.deadLetterMsg(seq, msg, node, "", "decode: "+derr.Error(), "")
+			e.deadLetterMsg(seq, msg, node, "", store.DLClassDecode, "decode: "+derr.Error(), "")
 			return
 		}
 		msg.Decoded = v

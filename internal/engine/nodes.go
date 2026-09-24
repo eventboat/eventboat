@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/eventboat/eventboat/internal/ir"
-	"github.com/eventboat/eventboat/internal/obs"
 	"github.com/eventboat/eventboat/internal/registry"
 	"github.com/eventboat/eventboat/internal/store"
 )
@@ -74,26 +73,35 @@ func (e *Engine) processTransform(node *ir.Node, inst *instance, t registry.Tran
 	if f, ok := t.(registry.TransformFlavor); ok {
 		flavor = f.Flavor()
 	}
-	record := func(flag string) {
+	kind, backtrace := registry.FailureOther, ""
+	if aerr != nil {
+		kind, backtrace = failureKind(aerr)
+	}
+	// record runs for every execution (success and failure). The flavor — read
+	// through TransformFlavor, the ONLY flavor channel — selects the
+	// per-flavor instruments; the typed kind read off the TransformError
+	// selects the budget/timeout counters, never the error text.
+	record := func(failed bool) {
 		switch flavor {
 		case "script":
-			e.Opts.Obs.RecordScript(e.IR.Config.Name, node.Name, time.Since(start), flag == "steps")
+			e.Opts.Obs.RecordScript(e.IR.Config.Name, node.Name, time.Since(start), failed && kind == registry.FailureSteps)
 		case "wasm":
-			e.Opts.Obs.RecordWasm(e.IR.Config.Name, node.Name, time.Since(start), flag == "timeout")
+			e.Opts.Obs.RecordWasm(e.IR.Config.Name, node.Name, time.Since(start), failed && kind == registry.FailureTimeout)
+		default:
+			// Generic branch (the documented promise — split and third-party
+			// flavors): no per-flavor instrument exists, so the execution is
+			// recorded through the generic channels instead — the engine's
+			// run accounting here, and, on a failure, the dead-letter class
+			// the engine writes below.
 		}
 	}
 
 	if aerr != nil {
-		flag, backtrace := "", ""
-		var te *registry.TransformError
-		if errors.As(aerr, &te) {
-			flag, backtrace = te.Flag, te.Backtrace
-		}
-		record(flag)
-		e.deadLetter(inst, node.Name, node.Config.Plugin+": "+aerr.Error(), backtrace)
+		record(true)
+		e.deadLetter(inst, node.Name, string(kind), node.Config.Plugin+": "+aerr.Error(), backtrace)
 		return
 	}
-	record("")
+	record(false)
 	if len(outputs) == 0 {
 		e.Metrics.NoMatch.Add(1)
 		e.Opts.Obs.RecordNoMatch(e.IR.Config.Name, node.Name)
@@ -106,6 +114,20 @@ func (e *Engine) processTransform(node *ir.Node, inst *instance, t registry.Tran
 	for _, out := range outputs {
 		e.fanOut(node, inst.seq, *out)
 	}
+}
+
+// failureKind reads the typed failure kind and backtrace off a transform
+// error: an error that is not a *registry.TransformError (or carries no kind)
+// is a generic "other" failure. The engine never inspects the message text.
+func failureKind(err error) (registry.FailureKind, string) {
+	var te *registry.TransformError
+	if errors.As(err, &te) {
+		if te.Kind != "" {
+			return te.Kind, te.Backtrace
+		}
+		return registry.FailureOther, te.Backtrace
+	}
+	return registry.FailureOther, ""
 }
 
 // runSink batches and writes one sink node; batching is engine-owned
@@ -167,7 +189,7 @@ func (e *Engine) writeBatch(node *ir.Node, sink registry.Sink, insts []*instance
 	encoder, err := e.codec(node.Config.Encoder, e.Reg)
 	if err != nil {
 		for _, inst := range insts {
-			e.deadLetter(inst, node.Name, "encoder: "+err.Error(), "")
+			e.deadLetter(inst, node.Name, store.DLClassCodec, "codec: "+err.Error(), "")
 		}
 		return
 	}
@@ -184,7 +206,7 @@ func (e *Engine) writeBatch(node *ir.Node, sink registry.Sink, insts []*instance
 		if m.Decoded != nil {
 			out, encErr := encoder.Encode(m.Decoded)
 			if encErr != nil {
-				e.deadLetter(inst, node.Name, "encode: "+encErr.Error(), "")
+				e.deadLetter(inst, node.Name, store.DLClassEncode, "encode: "+encErr.Error(), "")
 				continue
 			}
 			m.Out = out
@@ -243,15 +265,15 @@ func (e *Engine) writeBatch(node *ir.Node, sink registry.Sink, insts []*instance
 			e.commit.done(r.inst.seq)
 			continue
 		}
-		e.deadLetter(r.inst, node.Name, "delivery: sink write failed after retries", "")
+		e.deadLetter(r.inst, node.Name, store.DLClassDelivery, "delivery: sink write failed after retries", "")
 	}
 }
 
 // deadLetter writes a durable dead letter and commits the branch. A failing
 // dead letter write NEVER drops the message: it retries until it succeeds or
 // the engine shuts down (invariant 4: degraded, not lossy).
-func (e *Engine) deadLetter(inst *instance, node, reason, backtrace string) {
-	e.deadLetterMsg(inst.seq, inst.msg, node, edgeLabel(inst.via), reason, backtrace)
+func (e *Engine) deadLetter(inst *instance, node, class, reason, backtrace string) {
+	e.deadLetterMsg(inst.seq, inst.msg, node, edgeLabel(inst.via), class, reason, backtrace)
 }
 
 // deadLetterMsg is the normal (invariant 4) dead-letter path: it retries with
@@ -259,8 +281,8 @@ func (e *Engine) deadLetter(inst *instance, node, reason, backtrace string) {
 // shutdown the message stays uncommitted and is replayed on restart. A
 // successful record commits the branch; Abandon's path force-terminates
 // instead (the message is canceled, not processed).
-func (e *Engine) deadLetterMsg(seq int64, msg registry.Message, node, edge, reason, backtrace string) {
-	dl := e.deadLetterRecord(msg, node, edge, reason, backtrace)
+func (e *Engine) deadLetterMsg(seq int64, msg registry.Message, node, edge, class, reason, backtrace string) {
+	dl := e.deadLetterRecord(msg, node, edge, class, reason, backtrace)
 	if err := e.writeDeadLetter(e.ctx, seq, dl); err == nil {
 		e.commit.done(seq)
 	}
@@ -268,8 +290,9 @@ func (e *Engine) deadLetterMsg(seq int64, msg registry.Message, node, edge, reas
 
 // deadLetterRecord assembles the durable record for one terminally failed
 // message (run attribution: the engine's MetaStamps win, a replayed message
-// keeps its own).
-func (e *Engine) deadLetterRecord(msg registry.Message, node, edge, reason, backtrace string) store.DeadLetter {
+// keeps its own). class is the coarse failure class known where the failure
+// was produced — never re-derived later.
+func (e *Engine) deadLetterRecord(msg registry.Message, node, edge, class, reason, backtrace string) store.DeadLetter {
 	runID := ""
 	if e.Opts.MetaStamps != nil {
 		if v, ok := e.Opts.MetaStamps["job_run_id"].(string); ok {
@@ -288,6 +311,7 @@ func (e *Engine) deadLetterRecord(msg registry.Message, node, edge, reason, back
 		Node:      node,
 		Edge:      edge,
 		Reason:    reason,
+		Class:     class,
 		Backtrace: backtrace,
 		Raw:       msg.Raw,
 		Codec:     msg.Codec,
@@ -308,7 +332,7 @@ func (e *Engine) writeDeadLetter(ctx context.Context, seq int64, dl store.DeadLe
 		err := e.Store.WriteDeadLetter(dl)
 		if err == nil {
 			e.Metrics.DeadLettered.Add(1)
-			e.Opts.Obs.RecordDeadLetter(e.IR.Config.Name, dl.Node, obs.ReasonClass(dl.Reason))
+			e.Opts.Obs.RecordDeadLetter(e.IR.Config.Name, dl.Node, classLabel(dl.Class))
 			e.finishSpan(seq, "dead_letter", dl.Reason)
 			return nil
 		}
@@ -320,6 +344,16 @@ func (e *Engine) writeDeadLetter(ctx context.Context, seq int64, dl store.DeadLe
 			return ctx.Err()
 		}
 	}
+}
+
+// classLabel maps an empty dead-letter class (a record written before
+// candidate 07, or by a caller that does not know) to the generic "other"
+// metric label, so reason_class is never empty.
+func classLabel(class string) string {
+	if class == "" {
+		return string(registry.FailureOther)
+	}
+	return class
 }
 
 func (e *Engine) deliveryOf(edge *ir.Edge) (retries int, backoff string) {

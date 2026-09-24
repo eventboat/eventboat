@@ -123,7 +123,7 @@ func conformanceLog(t *testing.T, st Store) []string {
 	// --- dead letters: two pipelines, run attribution, since/delete ---
 	dl := func(p, id, runID string, at time.Time) DeadLetter {
 		return DeadLetter{Pipeline: p, MessageID: id, RunID: runID, Node: "out", Edge: "t -> out",
-			Reason: "delivery: x", Backtrace: "bt", Raw: []byte(`{"id":"` + id + `"}`), Codec: "json",
+			Reason: "delivery: x", Class: DLClassDelivery, Backtrace: "bt", Raw: []byte(`{"id":"` + id + `"}`), Codec: "json",
 			Meta: map[string]any{"m": id}, Cursor: "c", SrcName: "in", SrcSeq: 1, CreatedAt: at}
 	}
 	if err := st.WriteDeadLetter(dl("a", "d1", "r1", t0)); err != nil {
@@ -142,7 +142,7 @@ func conformanceLog(t *testing.T, st Store) []string {
 		}
 		var out []string
 		for _, d := range dls {
-			out = append(out, fmt.Sprintf("%d/%s", d.ID, d.MessageID))
+			out = append(out, fmt.Sprintf("%d/%s/%s", d.ID, d.MessageID, d.Class))
 		}
 		return fmt.Sprintf("%s=%v", p, out)
 	}

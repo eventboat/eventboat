@@ -141,8 +141,11 @@ overrides per edge (`internal/ir/ir.go`): `Required` (default **true**),
   commit (invariant 4) — degraded, not lossy. `Abandon` calls the same
   writer with a caller-bounded ctx (candidate 02): a failed write stops the
   attempt and the message stays uncommitted for the next run's replay. The
-  record carries the full original
-  message, node/edge attribution, reason, backtrace and run id.
+  record carries the full original message, node/edge attribution, reason,
+  **the dead-letter class recorded where the failure was produced**
+  (`store.DeadLetter.Class`: decode/codec/encode/delivery/canceled or the
+  transform failure kind — never re-derived from the reason text), backtrace
+  and run id.
 - **Delivery on shutdown** is deliberately not committed: an instance that
   could not be queued before `ctx.Done()` stays uncommitted and is replayed
   from the spool on restart (invariant 3).
@@ -352,7 +355,10 @@ cloned **once per worker** (`Clone()` after `Init`); stateless plugins share
 one instance — script programs are immutable and per-message state lives in
 copy-on-write bindings, `split` has no state. A failed `Clone` is
 worker-fatal (see above). `TransformFlavor` ("script", "wasm") selects the
-per-flavor duration histogram and budget/timeout counters.
+per-flavor duration histogram and the budget/timeout counters, which are
+driven by the typed failure kind (`registry.FailureKind`); any other flavor
+takes the generic branch (run accounting + dead-letter class, no per-flavor
+instrument).
 
 ## Options and defaults
 
