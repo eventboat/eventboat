@@ -22,6 +22,8 @@ func TestPrometheusExposition(t *testing.T) {
 	o.RecordCommit("p1", 0)
 	o.RecordDeadLetter("p1", "out", "script")
 	o.RecordScript("p1", "t", time.Millisecond, true)
+	o.RecordSinkWrite("p1", "out1", time.Millisecond)
+	o.RecordSpoolAppend("p1", time.Millisecond)
 	o.RecordJobStart("p1", "schedule")
 	o.RecordJobEnd("p1", "success", 0, 3, 3, 0)
 	o.RecordOverlapSkip("p1")
@@ -47,6 +49,7 @@ func TestPrometheusExposition(t *testing.T) {
 		"eventboat_jobs_overlap_skipped_total",
 		"eventboat_in_flight_messages",
 		"eventboat_spool_depth",
+		"eventboat_spool_append_seconds",
 		`pipeline="p1"`,
 	} {
 		if !strings.Contains(body, want) {
@@ -63,6 +66,7 @@ func TestNilObsIsInert(t *testing.T) {
 	o.RecordDeadLetter("p", "n", "script")
 	o.RecordScript("p", "n", 0, false)
 	o.RecordSinkWrite("p", "n", 0)
+	o.RecordSpoolAppend("p", 0)
 	o.RecordJobStart("p", "manual")
 	o.RecordJobEnd("p", "success", 0, 0, 0, 0)
 	o.RecordOverlapSkip("p")

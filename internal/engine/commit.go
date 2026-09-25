@@ -110,8 +110,25 @@ func (t *commitTracker) add(seq int64, delta int) {
 	}
 	before := t.outstanding[seq]
 	t.outstanding[seq] += delta
-	t.openBranches += posBranches(t.outstanding[seq]) - posBranches(before)
+	count := t.outstanding[seq]
+	t.openBranches += posBranches(count) - posBranches(before)
+	// Decided before the sweep runs: a below-cursor seq is invisible to
+	// advanceLocked, so its terminal event must be delivered here.
+	straggler := count <= 0 && seq < t.committedPtr
 	justCommit, advanced, through, frontiers := t.advanceLocked()
+	if straggler {
+		// Straggler registration: the seq landed after the contiguous-prefix
+		// sweep had already passed it (the AppendSpool→arrived window under
+		// concurrent sources; group commit widens it, since a batch's
+		// waiters wake in completion order, not seq order). advanceLocked
+		// never looks below committedPtr, so without this branch the
+		// message's terminal event is lost: its admission slot, accept-time
+		// entry and commit count leak while openBranches silently reads
+		// zero. The sweep has already treated the seq as committed for
+		// checkpoint purposes, so only the per-message hook is owed here.
+		delete(t.outstanding, seq)
+		justCommit = append(justCommit, seq)
+	}
 	t.mu.Unlock()
 	t.invoke(justCommit, advanced, through, frontiers)
 }

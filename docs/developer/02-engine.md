@@ -257,6 +257,55 @@ regressing:
   The lock is a sidecar so SQLite's own locking is untouched, and the file is
   never deleted — an unlocked leftover is expected and harmless.
 
+### Group-commit write path (P1, design 2026-09-24 §2.2)
+
+Every store mutation runs on **one writer goroutine over one dedicated
+connection** (`internal/store/writer.go`); reads (`Checkpoint`, `SourceState`,
+replay, dead-letter and job-run queries) stay on the pool. There is exactly
+one write transaction at a time, so writer-writer `SQLITE_BUSY` contention is
+gone by construction. The pragma contract (WAL, `synchronous=NORMAL`,
+`busy_timeout`) is unchanged.
+
+`AppendSpool` is a group commit:
+
+- The writer drains the queued writes and commits one transaction per group —
+  a single multi-row `INSERT` for the spool, capped at
+  `storage.write_batch.max_rows` (default 256) spool rows per transaction.
+  `spool.seq` is `INTEGER PRIMARY KEY AUTOINCREMENT`, so one statement assigns
+  contiguous rowids: the group's seqs come back as
+  `last_insert_rowid - n + 1 .. last_insert_rowid`, in queue (admission)
+  order.
+- **Every caller blocks until its own group has committed** and returns the
+  seq of its own row. A failed transaction fails *every* waiter it carried
+  with the same error — the refusal contract is unchanged (nothing durable,
+  the source re-emits). `AppendSpool` takes no `ctx` and has no "give up
+  halfway" path: a source cancelled while its append is in flight still gets
+  the row committed and registered, so a committed row can never be invisible
+  to the commit tracker and pin the contiguous prefix (the orphan-row hazard,
+  `TestAppendCancelDuringAppendRegistersRow`).
+- `SetCheckpoint` and `SetSourceState` coalesce: one upsert per pipeline (the
+  maximum seq) and one per `(pipeline, source)` (the request with the highest
+  `srcSeq`, carrying its paired state — never a field-level merge) per group.
+  Monotonic high-water marks make a later transaction unable to regress an
+  earlier value; a caller whose value was superseded still succeeds, with its
+  value or a larger one durable.
+- **Close** stops the writer, refuses everything still queued with
+  `ErrClosed`, refuses a transaction that was in flight (rollback — nothing
+  landed), joins the writer goroutine and releases the dedicated connection:
+  a caller blocked in `AppendSpool` is always woken, never left blocking.
+
+**No artificial linger.** `storage.write_batch.max_wait_ms` (default 2) does
+not make the writer sleep: a timer's floor is the OS quantum (>500 µs on
+Windows), which would cap a lone producer at ~1K rows/s while gaining nothing
+— a lone producer cannot enqueue a companion until its own append returns.
+Instead the value maps to a bounded probe budget (up to 16 scheduler yields,
+`companionProbes`): after a group commits, the writer yields to let the
+callers it just released re-enqueue, then commits whatever arrived. `0`
+disables companion collection (write-through). Observed batch sizes are
+available through the optional `WriteOptions.OnBatch(rows, waited)` hook; the
+store stays a leaf and never imports telemetry (§2.6.3 is the tuning
+surface).
+
 ## Recovery
 
 Crash recovery is `Run`'s second phase: read the checkpoint, replay every

@@ -1,7 +1,8 @@
 // Package runtimecfg is the deployment-level configuration (open question
-// #10, M2 review R13): storage location, admin listener, MCP toggle and
-// telemetry endpoints. Pipeline resources stay in their own files; this is
-// the "runtime vs resource" split of redesign-v3.md §5.10.
+// #10, M2 review R13): storage location, admin listener, MCP toggle,
+// telemetry endpoints and the store's group-commit write batch. Pipeline
+// resources stay in their own files; this is the "runtime vs resource" split
+// of redesign-v3.md §5.10.
 //
 // Resolution order: explicit --runtime file, then ./eventboat.yaml, then
 // defaults; CLI flags override file values.
@@ -39,6 +40,21 @@ type Storage struct {
 	// the checkpoint advances, bounding SQLite disk and --ephemeral memory on
 	// long runs. 0 = engine default (10_000).
 	SpoolRetention int64 `yaml:"spool_retention"`
+	// WriteBatch is the group-commit tuning surface (§2.6.2).
+	WriteBatch WriteBatch `yaml:"write_batch"`
+}
+
+// WriteBatch configures the store's single-writer group commit.
+type WriteBatch struct {
+	// MaxRows caps one multi-row spool INSERT (write_batch.max_rows). Larger
+	// batches amortize the transaction; the group is bounded by how many
+	// callers are blocked on the store at once, so this is a ceiling, not a
+	// trigger. Must be >= 1.
+	MaxRows int `yaml:"max_rows"`
+	// MaxWaitMs is the ceiling on how long a queued write may wait for
+	// companions before its group commits (write_batch.max_wait_ms). 0 =
+	// write-through. Must be >= 0.
+	MaxWaitMs int `yaml:"max_wait_ms"`
 }
 
 type Admin struct {
@@ -65,10 +81,14 @@ func Default() Config {
 	return Config{
 		APIVersion: "eventboat/v1",
 		Kind:       "Runtime",
-		Storage:    Storage{DataDir: "data", SpoolRetention: 10_000},
-		Admin:      Admin{Listen: "127.0.0.1:7788", Enable: true},
-		MCP:        MCP{Enable: true},
-		Telemetry:  Telemetry{SampleRatio: 0.1, Prometheus: true},
+		Storage: Storage{
+			DataDir:        "data",
+			SpoolRetention: 10_000,
+			WriteBatch:     WriteBatch{MaxRows: 256, MaxWaitMs: 2},
+		},
+		Admin:     Admin{Listen: "127.0.0.1:7788", Enable: true},
+		MCP:       MCP{Enable: true},
+		Telemetry: Telemetry{SampleRatio: 0.1, Prometheus: true},
 	}
 }
 
@@ -121,6 +141,12 @@ func Load(path string) (Config, error) {
 	if cfg.Storage.SpoolRetention < 0 {
 		return defaults, fmt.Errorf("runtime config %s: storage.spool_retention must be >= 0 (rows kept behind the checkpoint)", file)
 	}
+	if cfg.Storage.WriteBatch.MaxRows < 1 {
+		return defaults, fmt.Errorf("runtime config %s: storage.write_batch.max_rows must be >= 1 (rows per group-commit batch)", file)
+	}
+	if cfg.Storage.WriteBatch.MaxWaitMs < 0 {
+		return defaults, fmt.Errorf("runtime config %s: storage.write_batch.max_wait_ms must be >= 0 (milliseconds; 0 = write-through)", file)
+	}
 	if cfg.Admin.Listen == "" {
 		cfg.Admin.Listen = defaults.Admin.Listen
 	}
@@ -135,12 +161,14 @@ func Load(path string) (Config, error) {
 // scalarRules is the runtime config's leaf schema: dotted path → YAML value
 // kind. It exists because yaml.v3's decoder coerces scalar tags into string
 // and bool fields; the whole-document type check is what makes
-// `data_dir: 123` and `enable: "yes"` errors instead of silent defaults or
-// silent coercions (candidate 06).
+// `data_dir: 123`, `enable: "yes"` and `write_batch.max_rows: "256"` errors
+// instead of silent defaults or silent coercions (candidate 06).
 var scalarRules = []struct{ path, kind string }{
 	{"storage.data_dir", "string"},
 	{"storage.ephemeral", "bool"},
 	{"storage.spool_retention", "int"},
+	{"storage.write_batch.max_rows", "int"},
+	{"storage.write_batch.max_wait_ms", "int"},
 	{"admin.listen", "string"},
 	{"admin.enable", "bool"},
 	{"admin.token", "string"},
@@ -152,20 +180,32 @@ var scalarRules = []struct{ path, kind string }{
 
 func checkScalarTypes(file string, doc map[string]any) error {
 	for _, rule := range scalarRules {
-		section, key, _ := strings.Cut(rule.path, ".")
-		sec, ok := doc[section].(map[string]any)
+		v, ok := lookupPath(doc, rule.path)
 		if !ok {
 			continue // absent, or a non-mapping already rejected by the typed decode
-		}
-		v, ok := sec[key]
-		if !ok {
-			continue
 		}
 		if !matchesKind(v, rule.kind) {
 			return fmt.Errorf("runtime config %s: %s must be a %s, got %v (%T)", file, rule.path, rule.kind, v, v)
 		}
 	}
 	return nil
+}
+
+// lookupPath walks a dotted path through the raw document; a missing key or a
+// non-mapping intermediate reports absent.
+func lookupPath(doc map[string]any, path string) (any, bool) {
+	var cur any = doc
+	for _, part := range strings.Split(path, ".") {
+		m, ok := cur.(map[string]any)
+		if !ok {
+			return nil, false
+		}
+		cur, ok = m[part]
+		if !ok {
+			return nil, false
+		}
+	}
+	return cur, true
 }
 
 func matchesKind(v any, kind string) bool {

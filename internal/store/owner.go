@@ -20,6 +20,12 @@ type Provider interface {
 	Leaser
 }
 
+// OwnerOptions tunes the durable handles an owner opens (the group-commit
+// write path). The zero value keeps the SQLite defaults.
+type OwnerOptions struct {
+	Write WriteOptions
+}
+
 // Owner decides where a pipeline's durable store lives and owns its handle
 // lifetime: one handle per pipeline per process, cached, closed together.
 //
@@ -48,12 +54,21 @@ type Owner struct {
 	mu      sync.Mutex
 	handles map[string]Store
 	closed  bool
+	// opts carries the deployment's store tuning into every handle the owner
+	// opens (storage.write_batch.* from the Runtime config).
+	opts OwnerOptions
 }
 
-// NewOwner returns the owner of the durable stores under dataDir. Handles are
-// opened lazily on first use and cached for the process's lifetime.
+// NewOwner returns the owner of the durable stores under dataDir with the
+// default store options. Handles are opened lazily on first use and cached
+// for the process's lifetime.
 func NewOwner(dataDir string) *Owner {
-	return &Owner{dataDir: dataDir, handles: map[string]Store{}}
+	return NewOwnerWithOptions(dataDir, OwnerOptions{})
+}
+
+// NewOwnerWithOptions is NewOwner with explicit store tuning.
+func NewOwnerWithOptions(dataDir string, opts OwnerOptions) *Owner {
+	return &Owner{dataDir: dataDir, opts: opts, handles: map[string]Store{}}
 }
 
 // NewMemoryOwner returns an owner of cached per-pipeline in-memory stores:
@@ -147,7 +162,15 @@ func (o *Owner) open(pipeline string) (Store, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, fmt.Errorf("store owner: create stores dir: %w", err)
 	}
-	return OpenSQLite(path)
+	opts := o.opts.Write
+	if opts.isZero() {
+		// The zero OwnerOptions means "store defaults" (the group-commit
+		// batch is on by default); without this the raw WriteOptions zero
+		// value would normalize to write-through (MaxWait 0) and quietly
+		// diverge from OpenSQLite's contract.
+		opts = DefaultWriteOptions()
+	}
+	return OpenSQLiteWithOptions(path, opts)
 }
 
 // path is the canonical on-disk location: <dataDir>/stores/<sanitized>.db.

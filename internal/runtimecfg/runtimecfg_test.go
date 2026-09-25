@@ -64,3 +64,55 @@ storage:
 		t.Error("unknown storage key accepted")
 	}
 }
+
+// storage.write_batch (design §2.6.2) decodes strictly: values are validated,
+// absent keys keep the 256/2 defaults, and 0 is a legal write-through value,
+// not "unset".
+func TestWriteBatchConfig(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "eventboat.yaml")
+	write := func(yaml string) (Storage, error) {
+		t.Helper()
+		if err := os.WriteFile(file, []byte(yaml), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := Load(file)
+		return cfg.Storage, err
+	}
+
+	st, err := write("apiVersion: eventboat/v1\nkind: Runtime\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.WriteBatch.MaxRows != 256 || st.WriteBatch.MaxWaitMs != 2 {
+		t.Fatalf("default write_batch = %+v, want {256 2}", st.WriteBatch)
+	}
+
+	st, err = write("kind: Runtime\nstorage:\n  write_batch:\n    max_rows: 1000\n    max_wait_ms: 5\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.WriteBatch.MaxRows != 1000 || st.WriteBatch.MaxWaitMs != 5 {
+		t.Fatalf("write_batch override = %+v", st.WriteBatch)
+	}
+
+	st, err = write("kind: Runtime\nstorage:\n  write_batch:\n    max_rows: 64\n    max_wait_ms: 0\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.WriteBatch.MaxRows != 64 || st.WriteBatch.MaxWaitMs != 0 {
+		t.Fatalf("explicit write-through = %+v, want {64 0}", st.WriteBatch)
+	}
+
+	if _, err = write("kind: Runtime\nstorage:\n  write_batch:\n    max_rows: 0\n"); err == nil {
+		t.Error("max_rows: 0 accepted (a batch of zero rows cannot commit anything)")
+	}
+	if _, err = write("kind: Runtime\nstorage:\n  write_batch:\n    max_rows: -1\n"); err == nil {
+		t.Error("negative max_rows accepted")
+	}
+	if _, err = write("kind: Runtime\nstorage:\n  write_batch:\n    max_wait_ms: -1\n"); err == nil {
+		t.Error("negative max_wait_ms accepted")
+	}
+	if _, err = write("kind: Runtime\nstorage:\n  write_batch:\n    max_rows: 100\n    max_wait_millis: 5\n"); err == nil {
+		t.Error("unknown write_batch key accepted")
+	}
+}

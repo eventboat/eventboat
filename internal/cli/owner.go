@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/eventboat/eventboat/internal/runtimecfg"
 	"github.com/eventboat/eventboat/internal/store"
@@ -13,11 +14,31 @@ import (
 // the daemon and each one-shot verb — builds exactly one owner and closes it
 // on shutdown, so all of a process's surfaces share one handle per pipeline
 // and every entry point reads the same file.
+//
+// The durable owner carries the Runtime config's group-commit settings
+// (storage.write_batch.*) into every handle it opens; a hand-built
+// runtimecfg.Storage (the one-shot verbs' flags) has no explicit write batch
+// and gets the store defaults.
 func newStoreOwner(storage runtimecfg.Storage) *store.Owner {
 	if storage.Ephemeral {
 		return store.NewMemoryOwner()
 	}
-	return store.NewOwner(storage.DataDir)
+	return store.NewOwnerWithOptions(storage.DataDir, store.OwnerOptions{Write: writeOptions(storage)})
+}
+
+// writeOptions maps storage.write_batch onto the store's writer options. A
+// zero WriteBatch (a Storage value built outside runtimecfg.Load) means
+// unset: keep the defaults, which is also what the CLI flags-only verbs need.
+func writeOptions(storage runtimecfg.Storage) store.WriteOptions {
+	if storage.WriteBatch == (runtimecfg.WriteBatch{}) {
+		return store.DefaultWriteOptions()
+	}
+	opts := store.DefaultWriteOptions()
+	if storage.WriteBatch.MaxRows > 0 {
+		opts.MaxRows = storage.WriteBatch.MaxRows
+	}
+	opts.MaxWait = time.Duration(storage.WriteBatch.MaxWaitMs) * time.Millisecond
+	return opts
 }
 
 // acquireRunLease takes the pipeline's cross-process store lease for a

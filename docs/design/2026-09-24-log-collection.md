@@ -2,7 +2,7 @@
 
 | 状态 Status | 日期 Date | 关联 Links |
 |---|---|---|
-| Draft — P0 implemented | 2026-09-24 | [Architecture deepening](../design/2026-09-23-architecture-deepening.md) (batch-flush direction, §R-B1) · [`competitor-research.md`](../../competitor-research.md) §4 (Fluentd / Fluent Bit) · [Kubernetes deployment](../k8s.md) · [`scripts/bench-gate.sh`](../../scripts/bench-gate.sh) |
+| Draft — P0, P1 implemented | 2026-09-24 | [Architecture deepening](../design/2026-09-23-architecture-deepening.md) (batch-flush direction, §R-B1) · [`competitor-research.md`](../../competitor-research.md) §4 (Fluentd / Fluent Bit) · [Kubernetes deployment](../k8s.md) · [`scripts/bench-gate.sh`](../../scripts/bench-gate.sh) |
 
 This document is the design of record for using Eventboat as the log
 collector in a file-based collection scenario — host files and container logs,
@@ -108,6 +108,20 @@ committed, so **invariant 1 (spool before visible) and the refusal contract
 hold unchanged**. A dedicated single writer also removes the writer-writer
 `SQLITE_BUSY` contention measured in §1.2.
 
+**Implementation (P1, 2026-09-25).** `internal/store/writer.go`: every mutation
+runs on one writer goroutine over one dedicated connection, reads stay on the
+pool; the spool group is one multi-row `INSERT`; same-key checkpoints/source
+states fold to one upsert each per group behind monotonic high-water marks;
+`Close` refuses queued and in-flight writes with `ErrClosed` and always wakes
+every waiter. `max_wait_ms` is realised as a bounded scheduler-yield probe
+budget, **not** a sleeping timer: an OS-timer floor (Windows: >500 µs) would
+cap a lone producer at ~1K rows/s without buying batch companions — see "No
+artificial linger" in [`docs/developer/02-engine.md`](../developer/02-engine.md).
+Batch sizes are observable through the optional `WriteOptions.OnBatch` hook;
+`AppendSpool` keeps its signature and gains no cancellation path, so a
+cancelled source still registers a committed row (the orphan-row rule above is
+structural, not a callback convention).
+
 One hazard must be handled explicitly: **a waiter cancelled after its row was
 batched**. If the caller returned `ctx.Err()` without registering the row, the
 orphan row would wedge the contiguous commit prefix until restart. Rule: once
@@ -183,8 +197,8 @@ telemetry, **pipeline** for per-pipeline semantics. Principles:
 | Knob | Layer | Default | Tradeoff |
 |---|---|---|---|
 | `storage.write_batch.max_rows` | Runtime | 256 | group-commit batch size; larger = higher throughput, coarser latency |
-| `storage.write_batch.max_wait_ms` | Runtime | 2 | max wait before flushing a partial batch; `0` = write-through |
-| `storage.checkpoint_interval_ms` | Runtime | 0 (every advance) | checkpoint write frequency: **replay window ↔ write load** |
+| `storage.write_batch.max_wait_ms` | Runtime | 2 | companion-probe budget before flushing a partial batch; `0` = write-through. Implemented as bounded scheduler yields, not a sleeping timer (P1 note, §2.2) |
+| `storage.checkpoint_interval_ms` | Runtime | 0 (every advance) | **trimmed from P1** (2026-09-25): the engine's `persistMu` already serializes checkpoint writes, and delaying them by an interval makes `SetCheckpoint` non-blocking, weakening the `durableThrough` visibility barrier — it needs engine-side changes (see `docs/developer/02-engine.md`, Persistence), so it ships in a later stage if at all |
 | file `scan_frequency_ms` / `close_inactive_ms` / `ignore_older_ms` | pipeline | 250 / 5m / 0 | fd + scan cost ↔ discovery latency |
 | file `read_buffer_bytes` / `max_line_bytes` / `oversize` | pipeline | 64 KiB / 256 KiB / truncate | memory ↔ oversized-line policy |
 | file `multiline.{max_lines,max_bytes,timeout_ms}` | pipeline | 500 / 1 MiB / 2s | aggregation memory ↔ group completeness |

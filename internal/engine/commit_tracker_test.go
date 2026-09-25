@@ -121,3 +121,51 @@ func TestCommitTrackerOpenCountMatchesMap(t *testing.T) {
 		t.Fatalf("after full drain: committedThrough = %d, want arrivedMax %d", committedThrough, arrivedMax)
 	}
 }
+
+// TestCommitTrackerStragglerDeliversTerminalEvent: a seq whose arrived() lands
+// after the contiguous-prefix sweep passed it — the AppendSpool→arrived window
+// between two concurrent sources — must still get its per-message terminal
+// event when its branches finish. Missing it leaks the admission slot (release
+// runs only from onCommit), the accept-time entry and the commit count while
+// the tracker still reads quiescent (2026-09-25: the group-commit writer made
+// this window routine because a batch's waiters wake in completion order, not
+// seq order; the engine benchmark stranded messages before the fix).
+func TestCommitTrackerStragglerDeliversTerminalEvent(t *testing.T) {
+	var commits []int64
+	tr := newCommitTracker("p", []string{"in"}, func(seq int64) { commits = append(commits, seq) }, nil)
+
+	// Seq 2 arrives and completes while seq 1 is still between AppendSpool
+	// and arrived: the sweep treats the not-yet-registered 1 as committed and
+	// moves the prefix past it (the documented tolerance for holes).
+	tr.arrived(2, "in", 2)
+	tr.done(2)
+	if len(commits) != 1 || commits[0] != 2 {
+		t.Fatalf("commits after seq 2 = %v, want [2]", commits)
+	}
+	if out, through, _ := tr.snapshot(); out != 0 || through != 2 {
+		t.Fatalf("after seq 2: outstanding=%d through=%d, want 0/2", out, through)
+	}
+
+	// The straggler registers below the swept prefix and fans out: no
+	// terminal event until every branch is done (arrived registers one unit;
+	// fanOut adds len(matched)-1, so +1 makes two branches).
+	tr.arrived(1, "in", 1)
+	tr.add(1, 1)
+	if len(commits) != 1 {
+		t.Fatalf("straggler committed with open branches: %v", commits)
+	}
+	tr.done(1)
+	if len(commits) != 1 {
+		t.Fatalf("straggler committed with one branch still open: %v", commits)
+	}
+	tr.done(1)
+	if len(commits) != 2 || commits[1] != 1 {
+		t.Fatalf("commits = %v, want [2 1]: the straggler's terminal event was lost", commits)
+	}
+	if out, _, _ := tr.snapshot(); out != 0 {
+		t.Fatalf("outstanding after the straggler drained = %d, want 0", out)
+	}
+	if _, open := tr.outstanding[1]; open {
+		t.Fatal("straggler left in the outstanding map")
+	}
+}

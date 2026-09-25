@@ -165,7 +165,13 @@ func (a *admission) admit(ctx context.Context, req admitRequest) (int64, error) 
 		}
 
 		var err error
+		spoolStart := time.Now()
 		seq, err = e.Store.AppendSpool(e.IR.Config.Name, msg, ingest)
+		if req.mode == admitLive {
+			// The durable append latency (group-commit wait included). The
+			// inject path is operator traffic and stays untimed.
+			e.Opts.Obs.RecordSpoolAppend(e.IR.Config.Name, time.Since(spoolStart))
+		}
 		if err != nil {
 			<-a.gate
 			e.Metrics.SpoolFailures.Add(1)

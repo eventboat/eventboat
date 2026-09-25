@@ -3,8 +3,9 @@
 // /metrics) and optional OTLP/HTTP export (push, when an endpoint is
 // configured) — plus a TracerProvider (OTLP when configured, noop
 // otherwise). Metric names carry the eventboat_ prefix; the implemented set
-// is the review's list of 25 ("写下的 = 实现的"). All helpers are nil-receiver
-// safe: a nil *Obs means telemetry is disabled.
+// is the review's list of 25 ("写下的 = 实现的") plus the P1 spool-append
+// histogram. All helpers are nil-receiver safe: a nil *Obs means telemetry is
+// disabled.
 package obs
 
 import (
@@ -40,7 +41,8 @@ type Obs struct {
 	tracerProvider *sdktrace.TracerProvider
 	handler        http.Handler // prometheus exposition (nil when disabled)
 
-	// The 25 instruments (review §六), created once.
+	// The instrument set (review §六 plus the P1 spool-append histogram),
+	// created once.
 	MessagesIn            metric.Int64Counter
 	MessagesCommitted     metric.Int64Counter
 	DeadLettered          metric.Int64Counter
@@ -67,6 +69,9 @@ type Obs struct {
 	JobDuration       metric.Float64Histogram
 	CommitLatency     metric.Float64Histogram
 	WasmDuration      metric.Float64Histogram
+	// SpoolAppendDuration is the durable append latency including the group
+	// commit wait (P1: the knob map uses it to see whether batches form).
+	SpoolAppendDuration metric.Float64Histogram
 
 	InFlight       metric.Float64Gauge
 	SpoolDepth     metric.Float64Gauge
@@ -238,6 +243,7 @@ func (o *Obs) createInstruments() error {
 	o.SinkWriteDuration = newHist("eventboat_sink_write_duration_seconds", "Sink batch write duration")
 	o.JobDuration = newHist("eventboat_job_duration_seconds", "Job run wall-clock duration")
 	o.CommitLatency = newHist("eventboat_commit_latency_seconds", "Accept-to-commit latency")
+	o.SpoolAppendDuration = newHist("eventboat_spool_append_seconds", "Durable spool append latency (group-commit wait included)")
 
 	o.InFlight = newGauge("eventboat_in_flight_messages", "Uncommitted messages in execution")
 	o.SpoolDepth = newGauge("eventboat_spool_depth", "Spooled messages beyond the checkpoint")
@@ -314,6 +320,18 @@ func (o *Obs) RecordSinkWrite(pipeline, node string, d time.Duration) {
 	}
 	o.SinkWriteDuration.Record(context.Background(), d.Seconds(), metric.WithAttributes(
 		attribute.String("pipeline", pipeline), attribute.String("node", node)))
+}
+
+// RecordSpoolAppend observes one durable store append on the accept path: the
+// caller blocks until its group-commit batch has committed, so this latency
+// includes the batching wait (P1: the store is a leaf and knows nothing about
+// telemetry; the engine times the call).
+func (o *Obs) RecordSpoolAppend(pipeline string, d time.Duration) {
+	if o == nil || o.SpoolAppendDuration == nil || d <= 0 {
+		return
+	}
+	o.SpoolAppendDuration.Record(context.Background(), d.Seconds(),
+		metric.WithAttributes(attribute.String("pipeline", pipeline)))
 }
 
 // RecordWasm observes one WASM transform invocation; timedOut feeds the

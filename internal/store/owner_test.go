@@ -106,6 +106,25 @@ func TestOwnerNameRules(t *testing.T) {
 	}
 }
 
+// The zero OwnerOptions means "store defaults": NewOwner must agree with
+// OpenSQLite (group commit on), not silently normalize to write-through.
+func TestOwnerDefaultWriteOptions(t *testing.T) {
+	owner := NewOwner(t.TempDir())
+	t.Cleanup(func() { _ = owner.Close() })
+	st, err := owner.Open("p")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sqlite, ok := st.(*SQLite)
+	if !ok {
+		t.Fatalf("Open returned %T, want *SQLite", st)
+	}
+	opts := sqlite.w.opts
+	if opts.MaxRows != defaultWriteBatchRows || opts.MaxWait != defaultWriteBatchWait {
+		t.Fatalf("owner default write options = %+v, want %d rows / %v", opts, defaultWriteBatchRows, defaultWriteBatchWait)
+	}
+}
+
 // The memory owner caches per pipeline (the --ephemeral fix): every surface
 // of one process sees the same data, and Path has no answer.
 func TestMemoryOwnerCachesPerPipeline(t *testing.T) {

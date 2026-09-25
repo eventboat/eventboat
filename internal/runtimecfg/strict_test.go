@@ -21,6 +21,9 @@ func TestStrictTypedDecode(t *testing.T) {
 		{"data_dir type", "kind: Runtime\nstorage:\n  data_dir: 123\n", "data_dir"},
 		{"ephemeral type", "kind: Runtime\nstorage:\n  ephemeral: \"yes\"\n", "ephemeral"},
 		{"spool_retention type", "kind: Runtime\nstorage:\n  spool_retention: many\n", "spool_retention"},
+		{"write_batch max_rows type", "kind: Runtime\nstorage:\n  write_batch:\n    max_rows: \"256\"\n", "cannot unmarshal"},
+		{"write_batch max_wait_ms type", "kind: Runtime\nstorage:\n  write_batch:\n    max_wait_ms: soon\n", "cannot unmarshal"},
+		{"write_batch unknown key", "kind: Runtime\nstorage:\n  write_batch:\n    max_batch: 1\n", "max_batch"},
 		{"admin enable type", "kind: Runtime\nadmin:\n  enable: \"yes\"\n", "enable"},
 		{"admin listen type", "kind: Runtime\nadmin:\n  listen: 7788\n", "listen"},
 		{"mcp enable type", "kind: Runtime\nmcp:\n  enable: on\n", "enable"},
@@ -60,6 +63,9 @@ func TestAbsentKeysKeepDefaults(t *testing.T) {
 	}
 	if cfg.Storage.DataDir != "data" || cfg.Storage.SpoolRetention != 10_000 {
 		t.Fatalf("storage defaults lost: %+v", cfg.Storage)
+	}
+	if cfg.Storage.WriteBatch.MaxRows != 256 || cfg.Storage.WriteBatch.MaxWaitMs != 2 {
+		t.Fatalf("write_batch defaults lost: %+v", cfg.Storage.WriteBatch)
 	}
 	if !cfg.Storage.Ephemeral {
 		t.Fatal("explicit ephemeral lost")

@@ -115,8 +115,41 @@ hygiene findings.
   `EVENTBOAT_VICTORIALOGS_URL`; CI job `victorialogs-integration`) drives a
   real file through the engine into a live VictoriaLogs and queries the rows
   back, covering the decode dead letter and the gzip body.
+- **`storage.write_batch.*` — the group-commit tuning surface**
+  (log-collection design §2.6.2): Runtime `storage.write_batch.max_rows`
+  (default 256) and `storage.write_batch.max_wait_ms` (default 2; `0` =
+  write-through) are strictly decoded (unknown keys and type errors are
+  diagnostics) and validated (`max_rows >= 1`, `max_wait_ms >= 0`), then
+  carried by `store.Owner` into every SQLite handle the process opens
+  (`store.NewOwner` keeps its default behavior; `NewOwnerWithOptions` is the
+  new seam). `max_wait_ms` is realised as a bounded scheduler-yield probe
+  budget, not a sleeping timer — the OS timer floor would cap a lone producer
+  at ~1K rows/s without buying companions (see `docs/developer/02-engine.md`,
+  "No artificial linger"). `storage.checkpoint_interval_ms` is deliberately
+  **trimmed**: the engine already serializes checkpoint writes under
+  `persistMu`, and delaying them would make `SetCheckpoint` non-blocking and
+  weaken the `durableThrough` visibility barrier, which needs engine-side
+  changes — recorded in the design doc, not half-implemented here. The durable
+  append is now observable as `eventboat_spool_append_seconds`
+  (pipeline-labelled, group-commit wait included), and the optional
+  `store.WriteOptions.OnBatch(rows, waited)` hook exposes committed batch sizes
+  to the ops side; the store stays a leaf and never imports telemetry.
 
 ### Fixed
+
+- **Commit-tracker straggler registration** (found by the P1 group-commit
+  benchmark): a spool seq whose `arrived()` landed after the contiguous-prefix
+  sweep had already passed it — two sources between `AppendSpool` and
+  `arrived`, a window the group-commit writer widens because a batch's waiters
+  wake in completion order, not seq order — lost its per-message terminal
+  event. The message's admission slot, accept-time entry and commit count
+  leaked while the tracker still read quiescent, so a long enough run fills
+  the backpressure gate and the source wedges; HEAD stranded 0.01–0.7% of
+  messages under the SQLite throughput benchmark. `commitTracker.add` now
+  delivers the terminal event when a below-cursor seq's branches drain
+  (`TestCommitTrackerStragglerDeliversTerminalEvent`); the sweep's hole
+  tolerance is unchanged, so burned seqs from failed batches still cannot pin
+  the prefix.
 
 - **Branch isolation (new invariant 8, `TestInvariant_BranchIsolation`)**:
   fan-out siblings share the underlying `msg.Decoded` / `msg.Meta` maps, and
@@ -198,6 +231,30 @@ hygiene findings.
   null) is accepted as an empty declaration instead of a type error.
 
 ### Changed
+
+- **Every durable store write now runs through one writer goroutine with
+  group commit** (log-collection design §2.2, P1;
+  `internal/store/writer.go`): `AppendSpool`, `SetCheckpoint`,
+  `SetSourceState`, the dead-letter and retention deletes and the job-run
+  records all execute on one goroutine over one dedicated connection, so
+  writer-writer `SQLITE_BUSY` contention is gone by construction (reads stay
+  on the pool). `AppendSpool` commits one multi-row `INSERT` per group (up to
+  `write_batch.max_rows`), assigning contiguous seqs from
+  `last_insert_rowid - n + 1` in admission order; same-key checkpoints and
+  source states coalesce to one upsert each per group (monotonic high-water
+  marks; a source state keeps its `(state, srcSeq)` pair). Each caller still
+  blocks until its own group commits and **a failed transaction refuses every
+  waiter in it** — the original refusal contract. `AppendSpool` gained no
+  `ctx` and no "give up halfway" path, so a source cancelled mid-append still
+  registers its committed row (the §2.2 orphan-row rule is structural);
+  `Close` wakes every waiting caller with `ErrClosed` and joins the writer.
+  On the reference dev machine (each shape in its own process; see the
+  benchmark notes) the durable end-to-end pipeline moved from 0.6–9.2K rows/s
+  (HEAD, `one_source/batch=1` … `sources16/batch=100`) to 9.1–25.4K rows/s
+  (16 sources, `batch=100`: 25.4K), and parallel `AppendSpool` from 71µs to
+  11µs per op; the single-source serial append pays the writer handoff
+  (~+40µs/op), which the engine-level numbers still absorb because
+  per-message checkpoint contention dominated there.
 
 - **The SSE `status` event has one payload shape (rethink follow-up
   2026-09-24)**: the transition events (pause/drain/resume/engine
