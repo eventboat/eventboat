@@ -69,6 +69,38 @@ func TestExamplesVerifyAndTest(t *testing.T) {
 						t.Errorf("%s: case %q failed: %v", tf, c.Name, c.Failures)
 					}
 				}
+
+				// The same suite must also pass from the example's own
+				// directory: the file source resolves relative paths against
+				// the process working directory, so a shipped sample inside
+				// the watched glob would pollute the captures there (the
+				// collector example keeps its sample outside logs/). No test
+				// in this package runs in parallel, so the chdir is safe.
+				abs, err := filepath.Abs(tf)
+				if err != nil {
+					t.Errorf("%s: abs: %v", tf, err)
+					continue
+				}
+				wd, err := os.Getwd()
+				if err != nil {
+					t.Errorf("%s: getwd: %v", tf, err)
+					continue
+				}
+				if err := os.Chdir(dir); err != nil {
+					t.Errorf("%s: chdir %s: %v", tf, dir, err)
+					continue
+				}
+				report, err = testrun.RunFile(abs, reg)
+				_ = os.Chdir(wd)
+				if err != nil {
+					t.Errorf("%s (from %s): %v", tf, dir, err)
+					continue
+				}
+				for _, c := range report.Cases {
+					if c.Status != "pass" {
+						t.Errorf("%s (from %s): case %q failed: %v", tf, dir, c.Name, c.Failures)
+					}
+				}
 			}
 		}
 	}

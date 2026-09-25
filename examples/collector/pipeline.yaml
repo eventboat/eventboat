@@ -5,6 +5,7 @@
 # Run from this directory (file paths resolve against the process working
 # directory, not the config file's location):
 #
+#   mkdir -p logs && cp sample/app.jsonl logs/   # the runnable sample input
 #   eventboat verify --config pipeline.yaml
 #   eventboat run --config pipeline.yaml --data-dir ./data
 #
@@ -12,8 +13,10 @@
 # state at the production path (/var/lib/eventboat).
 #
 # In production the constants come from the deployment (per-host ConfigMap or
-# ${VAR} substitution); logs/app.jsonl ships two sample lines. The glob picks
-# up rotation (rename + recreate) and files that appear later.
+# ${VAR} substitution). The glob picks up rotation (rename + recreate) and
+# files that appear later; the contract suite injects its own fixtures, so the
+# sample lives outside the watched logs/ directory and `eventboat test` is
+# clean from any working directory.
 apiVersion: eventboat/v1
 kind: Pipeline
 metadata: {name: collector}

@@ -213,6 +213,13 @@ type trackedFile struct {
 	removed      bool // no longer matched by the glob
 	reopen       bool // a read error dropped the descriptor; force a reopen
 
+	// tail is the fingerprint of the consumed stream: the last
+	// tailFingerprintBytes bytes ending at offset+partialBytes. It detects an
+	// in-place rewrite that regrows past the read offset (copytruncate): the
+	// `size < consumed` check cannot see that, but the consumed bytes change,
+	// so a mismatch resets the file to 0 (duplicates, never loss).
+	tail []byte
+
 	// Multiline group state (zero unless multiline is configured): the joined
 	// lines, the end offset of the LAST line in the group (the watermark
 	// recorded when the group flushes) and the time the last line was added.
@@ -237,6 +244,14 @@ type fileStateEntry struct {
 }
 
 const fileReadChunk = 64 * 1024
+
+// tailFingerprintBytes is how many bytes of the consumed stream the file
+// source remembers to detect an in-place rewrite that regrew past the read
+// offset (copytruncate): the `size < consumed` check cannot see it, but the
+// consumed bytes change. 64 bytes makes an accidental match on real log
+// content vanishingly unlikely while keeping the per-poll verification read
+// tiny.
+const tailFingerprintBytes = 64
 
 func (s *fileSource) Init(state []byte) error {
 	if len(state) == 0 {
@@ -477,19 +492,23 @@ func (s *fileSource) discoverLocked(path string) *trackedFile {
 		e.path = path
 	}
 	if e.f == nil {
-		if e.offset > fi.Size() {
-			// Truncated while the descriptor was closed: restart from 0
-			// (copytruncate; duplicates are acceptable). The open group was
-			// flushed when the descriptor closed, so nothing is carried
-			// across the reset.
-			e.offset, e.committed = 0, 0
-		}
-		if _, err := f.Seek(e.offset, io.SeekStart); err != nil {
-			_ = f.Close()
-			return nil
-		}
 		e.f = f
 		e.partial, e.partialBytes, e.oversize = nil, 0, false
+		if s.truncatedLocked(e, fi.Size()) {
+			// Rewritten while the descriptor was closed (copytruncate):
+			// restart from 0. The open group was flushed when the descriptor
+			// closed, so nothing is carried across the reset (nil emitter).
+			if _, err := s.resetTruncatedLocked(e, nil); err != nil {
+				_ = f.Close()
+				e.f = nil
+				return nil
+			}
+		}
+		if _, err := e.f.Seek(e.offset, io.SeekStart); err != nil {
+			_ = f.Close()
+			e.f = nil
+			return nil
+		}
 		e.lastRead = time.Now()
 	} else {
 		_ = f.Close() // same id already open: keep the existing descriptor
@@ -522,25 +541,92 @@ func (s *fileSource) newTrackedLocked(id, path string, size int64) *trackedFile 
 	return e
 }
 
+// observeTail records the chunk in the rolling tail fingerprint: the last
+// tailFingerprintBytes bytes of the consumed stream. Every byte read is
+// consumed (into a complete line or the partial line), so appending the read
+// chunks in order keeps the fingerprint aligned with offset+partialBytes.
+func (e *trackedFile) observeTail(chunk []byte) {
+	if len(chunk) >= tailFingerprintBytes {
+		e.tail = append(e.tail[:0], chunk[len(chunk)-tailFingerprintBytes:]...)
+		return
+	}
+	e.tail = append(e.tail, chunk...)
+	if len(e.tail) > tailFingerprintBytes {
+		e.tail = e.tail[len(e.tail)-tailFingerprintBytes:]
+	}
+}
+
+// truncatedLocked reports whether the file was rewritten in place (copytruncate):
+// its size fell below the consumed extent (offset+partialBytes), or — when the
+// rewrite already regrew past that extent, which the size check cannot see —
+// the consumed tail fingerprint no longer matches the bytes on disk. Either way
+// the read position no longer describes the file and the source must reset to 0
+// (duplicates, never loss).
+func (s *fileSource) truncatedLocked(e *trackedFile, size int64) bool {
+	end := e.offset + e.partialBytes
+	if size < end {
+		return true
+	}
+	if len(e.tail) == 0 || e.f == nil {
+		return false
+	}
+	n := int64(len(e.tail))
+	if end < n {
+		return false // defensive: the tail can never exceed the consumed extent
+	}
+	buf := s.scratch[:n]
+	if _, err := e.f.ReadAt(buf, end-n); err != nil {
+		return false // cannot verify (transient read error): never reset on it
+	}
+	return !bytes.Equal(buf, e.tail)
+}
+
+// resetTruncatedLocked restarts a rewritten or truncated file from 0: the open
+// multiline group is flushed first (its lines belong to the pre-truncation
+// content), then the read position, the partial line and the tail fingerprint
+// are cleared. A nil emit skips the group flush (the reopen path cannot have an
+// open group: closing flushes it).
+func (s *fileSource) resetTruncatedLocked(e *trackedFile, emit func(registry.Message) error) (bool, error) {
+	var emitted bool
+	if e.groupOpen {
+		if emit != nil {
+			em, err := s.flushGroupLocked(e, emit)
+			if err != nil {
+				return em, err
+			}
+			emitted = em
+		} else {
+			// No emitter available (the reopen path): closing already flushed
+			// any group, so an open group here is defensive-only — drop it
+			// rather than carry pre-truncation lines across the reset.
+			e.group, e.groupLines, e.groupBytes, e.groupLast, e.groupEnd, e.groupOpen = nil, 0, 0, time.Time{}, 0, false
+		}
+	}
+	e.offset, e.committed = 0, 0
+	e.partial, e.partialBytes, e.oversize = nil, 0, false
+	e.tail = e.tail[:0]
+	if e.f != nil {
+		if _, err := e.f.Seek(0, io.SeekStart); err != nil {
+			return emitted, nil
+		}
+	}
+	return emitted, nil
+}
+
 // drainLocked reads one open file to EOF, feeding complete lines through the
 // aggregator (or emitting them one by one when multiline is off). It returns
 // whether anything was emitted and the first refusal error.
 func (s *fileSource) drainLocked(e *trackedFile, emit func(registry.Message) error, now time.Time) (bool, error) {
 	if fi, err := e.f.Stat(); err == nil {
-		if fi.Size() < e.offset {
+		if s.truncatedLocked(e, fi.Size()) {
 			// copytruncate: the file was rewritten in place. Flush the open
 			// group FIRST — its lines belong to the pre-truncation content
 			// and the offset reset below would otherwise re-read them — then
 			// restart from 0 (duplicates are acceptable, a stalled tail is
 			// not).
-			em, err := s.flushGroupLocked(e, emit)
+			em, err := s.resetTruncatedLocked(e, emit)
 			if err != nil {
 				return em, err
-			}
-			e.offset, e.committed = 0, 0
-			e.partial, e.partialBytes, e.oversize = nil, 0, false
-			if _, err := e.f.Seek(0, io.SeekStart); err != nil {
-				return em, nil
 			}
 		}
 		e.size, e.mtime = fi.Size(), fi.ModTime()
@@ -551,6 +637,7 @@ func (s *fileSource) drainLocked(e *trackedFile, emit func(registry.Message) err
 		n, rerr := e.f.Read(s.scratch)
 		if n > 0 {
 			e.lastRead = now
+			e.observeTail(s.scratch[:n])
 			em, err := s.consumeLocked(e, s.scratch[:n], now, emit)
 			if em {
 				emitted = true
@@ -858,7 +945,19 @@ func (s *fileSource) closeLocked(e *trackedFile) {
 		_ = e.f.Close()
 		e.f = nil
 	}
+	// Closing discards the in-memory half-line: a reopen seeks to the read
+	// watermark and re-reads it, so the consumed extent shrinks to offset and
+	// the tail fingerprint must shrink with it (its last partialBytes bytes
+	// are beyond the new extent and would miscompare on reopen).
+	drop := e.partialBytes
 	e.partial, e.partialBytes, e.oversize = nil, 0, false
+	if drop > 0 && len(e.tail) > 0 {
+		if drop >= int64(len(e.tail)) {
+			e.tail = e.tail[:0]
+		} else {
+			e.tail = e.tail[:len(e.tail)-int(drop)]
+		}
+	}
 }
 
 // forgetLocked drops a file's state entirely (clean_removed). Pending
