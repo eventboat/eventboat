@@ -99,6 +99,72 @@ func TestFieldsTransformNonMapPayloadErrors(t *testing.T) {
 	}
 }
 
+// A non-map payload with wrap_field set becomes {wrap_field: payload} and
+// then goes through the normal from_meta/fields application — the usable
+// shape for raw text and multi-line stack traces (raw decoder, json sink).
+func TestFieldsTransformWrapField(t *testing.T) {
+	tr := newFieldsTransform(t, map[string]any{
+		"wrap_field": "msg",
+		"fields":     map[string]any{"app": "nginx"},
+		"from_meta":  []any{"file_path"},
+	})
+	msg := &registry.Message{
+		Decoded: "java.lang.RuntimeException: boom\n\tat com.example.Main.main(Main.java:1)",
+		Meta:    map[string]any{"file_path": "/var/log/app.log"},
+	}
+	out, err := tr.Apply(msg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, ok := out[0].Decoded.(map[string]any)
+	if !ok {
+		t.Fatalf("Decoded = %T, want map", out[0].Decoded)
+	}
+	want := map[string]any{
+		"msg":       "java.lang.RuntimeException: boom\n\tat com.example.Main.main(Main.java:1)",
+		"app":       "nginx",
+		"file_path": "/var/log/app.log",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("payload = %#v, want %#v", got, want)
+	}
+}
+
+// wrap_field has no effect on an object payload: the map is copied as before.
+func TestFieldsTransformWrapFieldIgnoredForMap(t *testing.T) {
+	tr := newFieldsTransform(t, map[string]any{
+		"wrap_field": "msg",
+		"fields":     map[string]any{"x": "one"},
+	})
+	msg := &registry.Message{Decoded: map[string]any{"a": true}, Meta: map[string]any{}}
+	out, err := tr.Apply(msg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := out[0].Decoded.(map[string]any)
+	if _, wrapped := got["msg"]; wrapped {
+		t.Fatalf("map payload was wrapped: %#v", got)
+	}
+	if !reflect.DeepEqual(got, map[string]any{"a": true, "x": "one"}) {
+		t.Fatalf("payload = %#v", got)
+	}
+}
+
+// A nil payload with wrap_field becomes {"msg": null} — still an object the
+// JSON sink accepts; without wrap_field it stays the old loud error.
+func TestFieldsTransformWrapFieldNilPayload(t *testing.T) {
+	tr := newFieldsTransform(t, map[string]any{"wrap_field": "msg"})
+	out, err := tr.Apply(&registry.Message{Decoded: nil, Meta: map[string]any{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := out[0].Decoded.(map[string]any)
+	v, ok := got["msg"]
+	if !ok || v != nil {
+		t.Fatalf("payload = %#v, want msg: nil", got)
+	}
+}
+
 // An empty config is a valid no-op and still replaces the map.
 func TestFieldsTransformEmptyConfigNoop(t *testing.T) {
 	tr := newFieldsTransform(t, map[string]any{})

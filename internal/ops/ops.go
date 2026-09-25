@@ -63,12 +63,6 @@ type Service struct {
 	lastSnap map[string]int64 // pipeline → messages_in at last snapshot (rate deltas)
 	rateAt   time.Time
 
-	// counterMu guards lastCounters: the baseline of every polled source
-	// counter, keyed "pipeline\x00node\x00counter". Status writes the delta
-	// since the previous observation to telemetry and never a negative one.
-	counterMu    sync.Mutex
-	lastCounters map[string]int64
-
 	subMu sync.Mutex
 	subs  map[chan Event]struct{}
 
@@ -654,7 +648,6 @@ func (s *Service) Status() []PipelineStatus {
 			st.MessagesIn = m.eng.Metrics.MessagesIn.Load()
 			st.Committed = m.eng.Metrics.CommittedCount.Load()
 			st.DeadLettered = m.eng.Metrics.DeadLettered.Load()
-			s.recordSourceCounters(m.name, m.eng)
 		}
 		if m.jobs != nil {
 			if runs, err := s.jobsRuns(m.name, 5); err == nil {
@@ -697,34 +690,6 @@ func (s *Service) Status() []PipelineStatus {
 		s.opts.Obs.SetGauges(st.Pipeline, st.InFlight, spoolDepth, st.Status == "paused")
 	}
 	return out
-}
-
-// recordSourceCounters writes the DELTA of every source health counter since
-// the previous Status poll to telemetry (log-collection design §2.6.3): the
-// source exposes monotonic totals, the instrument wants increments. A value
-// below its baseline means the counter reset (source restart or pipeline
-// redeploy) — the baseline is moved and no negative delta is written. The
-// engine/registry stay telemetry-free; this is the one polling seam.
-func (s *Service) recordSourceCounters(pipeline string, eng *engine.Engine) {
-	counters := eng.SourceCounters()
-	s.counterMu.Lock()
-	defer s.counterMu.Unlock()
-	if s.lastCounters == nil {
-		s.lastCounters = map[string]int64{}
-	}
-	for node, nodeCounters := range counters {
-		for counter, v := range nodeCounters {
-			key := pipeline + "\x00" + node + "\x00" + counter
-			prev, seen := s.lastCounters[key]
-			s.lastCounters[key] = v
-			if !seen || v < prev {
-				continue // first observation / reset: baseline only
-			}
-			if delta := v - prev; delta > 0 {
-				s.opts.Obs.RecordSourceCounter(pipeline, node, counter, delta)
-			}
-		}
-	}
 }
 
 func (s *Service) jobsRuns(name string, limit int) ([]store.JobRun, error) {

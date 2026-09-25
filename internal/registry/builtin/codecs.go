@@ -37,19 +37,25 @@ func (c *jsonCodec) Decode(raw []byte) (any, error) {
 }
 
 func (c *jsonCodec) Encode(v any) ([]byte, error) {
-	var (
-		b   []byte
-		err error
-	)
+	// HTML escaping is deliberately OFF. json.Marshal escapes <, > and & as
+	// \u003c/\u003e/\u0026 (six bytes each), so one log line full of shell
+	// redirections or JSP markup can inflate by 6x — and the encoded bytes
+	// are what VictoriaLogs measures against -insert.maxLineSizeBytes. JSON
+	// does not require the escaping, and no consumer of the encoded form is
+	// an HTML document. Control characters still expand (\u0000 etc.), which
+	// is why the victorialogs sink keeps its encoded-line bound.
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
 	if c.pretty {
-		b, err = json.MarshalIndent(v, "", "  ")
-	} else {
-		b, err = json.Marshal(v)
+		enc.SetIndent("", "  ")
 	}
-	if err != nil {
+	if err := enc.Encode(v); err != nil {
 		return nil, fmt.Errorf("json encode: %w", err)
 	}
-	return b, nil
+	// json.Encoder terminates every value with a newline; the codec contract
+	// is a bare value (sinks own their framing), so it is trimmed.
+	return bytes.TrimSuffix(buf.Bytes(), []byte("\n")), nil
 }
 
 type rawCodecConfig struct{}

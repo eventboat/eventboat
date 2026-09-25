@@ -82,6 +82,13 @@ type Options struct {
 	// Obs receives OpenTelemetry events (nil-safe: nil disables telemetry).
 	Obs *obs.Obs
 
+	// SourceCounterInterval bounds how often the engine samples the optional
+	// registry.CounterSource health counters and writes their deltas to Obs.
+	// Sampling happens on the commit-advance path, so the counters flow
+	// whether or not any ops/status surface is polled (run --config has
+	// none). 0 = DefaultSourceCounterInterval (1s).
+	SourceCounterInterval time.Duration
+
 	// MetaStamps are stamped into every accepted message's metadata (e.g.
 	// job_run_id for job runs).
 	MetaStamps map[string]any
@@ -114,6 +121,10 @@ const DefaultHighWatermark = 10_000
 // recent history for `replay --spool` disaster drills, while bounding disk
 // (SQLite) and memory (--ephemeral) on long runs.
 const DefaultSpoolRetention = 10_000
+
+// DefaultSourceCounterInterval is the sampling period of the source health
+// counters when Options.SourceCounterInterval is unset.
+const DefaultSourceCounterInterval = time.Second
 
 // DefaultOptions returns production defaults. It is `Options{}.withDefaults()`
 // — the ONE runtime normalization path New also applies, so a hand-built
@@ -156,6 +167,9 @@ func (o Options) withDefaults() Options {
 	}
 	if o.SpoolRetention <= 0 {
 		o.SpoolRetention = DefaultSpoolRetention
+	}
+	if o.SourceCounterInterval <= 0 {
+		o.SourceCounterInterval = DefaultSourceCounterInterval
 	}
 	if o.WasmSlowCallWarnMs == 0 {
 		// Negative explicitly disables; zero keeps the default watchdog so a
@@ -317,6 +331,14 @@ type Engine struct {
 	spanMu sync.Mutex
 	spans  map[int64]trace.Span // spool seq → sampled per-message span (nil rate = empty)
 
+	// counterMu guards the source-health-counter sampling state: lastCounters
+	// is the per-(node,counter) baseline and lastCounterSample paces the
+	// polling (Options.SourceCounterInterval). Sampling runs on the commit
+	// path, not in any ops surface.
+	counterMu         sync.Mutex
+	lastCounters      map[string]int64
+	lastCounterSample time.Time
+
 	persistMu        sync.Mutex
 	persistedThrough int64 // highest checkpoint successfully written
 	flushAttempted   int64 // highest advance whose persistence was attempted
@@ -364,19 +386,20 @@ func New(p *ir.Pipeline, st Store, reg *registry.Registry, opts Options) (*Engin
 	}
 
 	e := &Engine{
-		IR:         p,
-		Store:      st,
-		Reg:        reg,
-		Opts:       opts,
-		chans:      map[string]chan *instance{},
-		sinks:      map[string]registry.Sink{},
-		codecs:     map[string]registry.Codec{},
-		sources:    map[string]registry.Source{},
-		transforms: map[string]registry.Transform{},
-		committers: map[string]*sourceCommitter{},
-		srcErr:     map[string]error{},
-		srcDone:    map[string]bool{},
-		spans:      map[int64]trace.Span{},
+		IR:           p,
+		Store:        st,
+		Reg:          reg,
+		Opts:         opts,
+		chans:        map[string]chan *instance{},
+		sinks:        map[string]registry.Sink{},
+		codecs:       map[string]registry.Codec{},
+		sources:      map[string]registry.Source{},
+		transforms:   map[string]registry.Transform{},
+		committers:   map[string]*sourceCommitter{},
+		srcErr:       map[string]error{},
+		srcDone:      map[string]bool{},
+		spans:        map[int64]trace.Span{},
+		lastCounters: map[string]int64{},
 	}
 
 	for _, name := range p.Order {
@@ -502,6 +525,12 @@ func (e *Engine) onCommit(seq int64) {
 // durable barrier is the checkpoint, unchanged, and a source state that lags
 // it only widens the replay window on crash — duplicate delivery, never loss.
 func (e *Engine) persistCheckpoint(committedThrough int64, frontiers map[string]int64) {
+	// Source health counters ride the commit-advance path, rate-limited to
+	// Options.SourceCounterInterval: the counters are sampled where progress
+	// is already being observed, so they do not depend on any ops/status
+	// poll (a `run --config` process has no ops surface at all).
+	e.sampleSourceCounters()
+
 	e.persistMu.Lock()
 	defer e.persistMu.Unlock()
 	if committedThrough > e.persistedThrough {
@@ -1274,12 +1303,49 @@ func (e *Engine) CommitSnapshot() (outstanding int, committedThrough int64, arri
 	return e.commit.snapshot()
 }
 
+// sampleSourceCounters writes the DELTA of every source health counter to
+// telemetry, at most once per Options.SourceCounterInterval (default 1s). It
+// runs on the commit-advance path, independent of any status poll: the
+// counters flow in every run shape, `run --config` included. A value below
+// its baseline means the counter reset (source restart, pipeline redeploy) —
+// the baseline moves and no negative delta is written.
+func (e *Engine) sampleSourceCounters() {
+	if e.Opts.Obs == nil {
+		return
+	}
+	now := e.Opts.Clock()
+	e.counterMu.Lock()
+	if !e.lastCounterSample.IsZero() && now.Sub(e.lastCounterSample) < e.Opts.SourceCounterInterval {
+		e.counterMu.Unlock()
+		return
+	}
+	e.lastCounterSample = now
+	e.counterMu.Unlock()
+
+	counters := e.SourceCounters()
+	e.counterMu.Lock()
+	defer e.counterMu.Unlock()
+	for node, nodeCounters := range counters {
+		for counter, v := range nodeCounters {
+			key := node + "\x00" + counter
+			prev, seen := e.lastCounters[key]
+			e.lastCounters[key] = v
+			if !seen || v < prev {
+				continue // first observation / reset: baseline only
+			}
+			if delta := v - prev; delta > 0 {
+				e.Opts.Obs.RecordSourceCounter(e.IR.Config.Name, node, counter, delta)
+			}
+		}
+	}
+}
+
 // SourceCounters snapshots the optional registry.CounterSource counters of
 // every source node (node → counter → value). Sources without the facet are
-// absent. The engine is a poll-side seam only: ops diffs the values and
-// writes the deltas to telemetry, so neither the engine nor the registry
-// imports the obs package (log-collection design §2.6.3). The sources map is
-// written only by New, before the engine is handed out, so the read is safe.
+// absent. The engine samples it on the commit path (sampleSourceCounters) and
+// writes the deltas to Obs; this accessor stays for tests and callers that
+// want the raw snapshot. The sources map is written only by New, before the
+// engine is handed out, so the read is safe.
 func (e *Engine) SourceCounters() map[string]map[string]int64 {
 	out := make(map[string]map[string]int64, len(e.sources))
 	for name, src := range e.sources {

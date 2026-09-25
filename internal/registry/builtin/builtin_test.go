@@ -69,6 +69,53 @@ func TestCodecsRoundTrip(t *testing.T) {
 	}
 }
 
+// The JSON codec must not HTML-escape <, > and &: the escape inflates the
+// encoded line by up to 6x, and the encoded bytes are what VictoriaLogs
+// measures against -insert.maxLineSizeBytes (a silently skipped line used to
+// look like a successful write). Control characters still expand — that is
+// the sink's encoded-line bound's job.
+func TestJSONCodecDoesNotEscapeHTML(t *testing.T) {
+	reg := newReg(t)
+	for _, pretty := range []bool{false, true} {
+		name := "compact"
+		if pretty {
+			name = "pretty"
+		}
+		t.Run(name, func(t *testing.T) {
+			var cfg map[string]any
+			if pretty {
+				cfg = map[string]any{"pretty": true}
+			}
+			c, err := reg.NewCodec("json", cfg, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			in := map[string]any{"msg": `<script>if (a && b) { x = "<i>"; }</script>`}
+			out, err := c.Encode(in)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(out), `\u003c`) || strings.Contains(string(out), `\u003e`) || strings.Contains(string(out), `\u0026`) {
+				t.Fatalf("encoder HTML-escaped the payload: %s", out)
+			}
+			if !strings.Contains(string(out), `<script>`) || !strings.Contains(string(out), `a && b`) {
+				t.Fatalf("encoded form lost the literal characters: %s", out)
+			}
+			if strings.HasSuffix(string(out), "\n") {
+				t.Fatalf("encoded form has a trailing newline: %q", out)
+			}
+			// Decode re-reads the unescaped form unchanged.
+			v, err := c.Decode(out)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := v.(map[string]any)["msg"]; got != in["msg"] {
+				t.Fatalf("round trip = %q, want %q", got, in["msg"])
+			}
+		})
+	}
+}
+
 // --- cron source ---
 
 func TestCronSourceFactoryPaths(t *testing.T) {

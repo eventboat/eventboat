@@ -95,7 +95,7 @@ func TestMessageSpanDeadLetterTerminal(t *testing.T) {
 		t.Fatalf("recorded %d spans, want 1", len(spans))
 	}
 	requireSpanAttr(t, spans[0], "eventboat.terminal_state", "dead_letter")
-	if v, ok := spanAttr(spans[0], "eventboat.error"); !ok || v != "delivery: sink write failed after retries" {
+	if v, ok := spanAttr(spans[0], "eventboat.error"); !ok || v != "delivery: sink write failed after retries: sink down" {
 		t.Fatalf("span error attr = %q (found %v)", v, ok)
 	}
 }

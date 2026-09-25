@@ -1076,65 +1076,213 @@ func lint(p *Pipeline, file string, add func(config.Diagnostic)) {
 // the mismatch is invisible without the lint (design §2.6.3).
 const vlDefaultMaxLineBytes = 262144
 
+// vlJSONLineSink reports whether a sink ships to VictoriaLogs' jsonline
+// ingest endpoint: the dedicated `victorialogs` plugin, or the generic `http`
+// sink pointed at a URL containing insert/jsonline (case-insensitive). Both
+// receive the same 200-while-skipping behavior, so both are collection
+// destinations for the lints below (the D4 false-negative).
+func vlJSONLineSink(n *Node) bool {
+	if n.Section != config.SectionSink || n.Config.Grpc != nil {
+		return false
+	}
+	switch n.Config.Plugin {
+	case "victorialogs":
+		return true
+	case "http":
+		pc, _ := n.Config.PluginConfig.(map[string]any)
+		u, _ := pc["url"].(string)
+		return strings.Contains(strings.ToLower(u), "insert/jsonline")
+	}
+	return false
+}
+
+// upstreamNodes returns the names of every node reachable from start by
+// walking in-edges (start included). Dangling references are skipped: the
+// topology diagnostics own them.
+func upstreamNodes(p *Pipeline, start string) map[string]bool {
+	seen := map[string]bool{}
+	var walk func(name string)
+	walk = func(name string) {
+		if seen[name] {
+			return
+		}
+		seen[name] = true
+		for _, e := range p.Nodes[name].In {
+			if _, ok := p.Nodes[e.From]; ok {
+				walk(e.From)
+			}
+		}
+	}
+	if _, ok := p.Nodes[start]; ok {
+		walk(start)
+	}
+	return seen
+}
+
+// downstreamReaches reports whether any name in targets is reachable from
+// `from` along out-edges without descending through a barrier node (barriers
+// are never targets). It is how the non-object lint asks "is there a path
+// from this source to a VL sink that does NOT pass through a wrapping
+// transform?".
+func downstreamReaches(p *Pipeline, from string, barriers, targets map[string]bool) bool {
+	seen := map[string]bool{}
+	var walk func(name string) bool
+	walk = func(name string) bool {
+		if seen[name] {
+			return false
+		}
+		seen[name] = true
+		if targets[name] {
+			return true
+		}
+		if barriers[name] {
+			return false
+		}
+		n, ok := p.Nodes[name]
+		if !ok {
+			return false
+		}
+		for _, e := range n.Out {
+			if walk(e.To) {
+				return true
+			}
+		}
+		return false
+	}
+	return walk(from)
+}
+
+// fieldsWrapperNodes returns the names of `fields` transforms configured with
+// a non-empty wrap_field: they turn a non-object payload into an object, so a
+// source whose every path to a VL sink crosses one is safe.
+func fieldsWrapperNodes(p *Pipeline) map[string]bool {
+	out := map[string]bool{}
+	for _, name := range p.Order {
+		n := p.Nodes[name]
+		if n.Section != config.SectionTransform || n.Config.Grpc != nil || n.Config.Plugin != "fields" {
+			continue
+		}
+		if pc, ok := n.Config.PluginConfig.(map[string]any); ok {
+			if wf, _ := pc["wrap_field"].(string); wf != "" {
+				out[name] = true
+			}
+		}
+	}
+	return out
+}
+
 // lintCollector implements the log-collection guardrails of design §2.6.3.
-// All three fire only on pipelines that actually have a file source; the
-// file/multiline blocks are read from the raw plugin config because the lint
-// runs before (and independently of) the plugin factory, and "explicitly set"
-// is exactly the distinction the raw map preserves.
+// The line-bytes/multiline/batch-one lints fire only on pipelines that
+// actually have a file source; the non-object lint is about the source's
+// decoder and applies to any source kind. The file/multiline blocks are read
+// from the raw plugin config because the lint runs before (and independently
+// of) the plugin factory, and "explicitly set" is exactly the distinction the
+// raw map preserves.
 func lintCollector(p *Pipeline, file string, add func(config.Diagnostic)) {
-	hasFileSource := false
-	hasVLSink := false
+	fileSources := map[string]bool{}
 	for _, name := range p.Order {
 		n := p.Nodes[name]
 		if n.Section == config.SectionSource && n.Config.Plugin == "file" && n.Config.Grpc == nil {
-			hasFileSource = true
-		}
-		if n.Section == config.SectionSink && n.Config.Plugin == "victorialogs" {
-			hasVLSink = true
+			fileSources[name] = true
 		}
 	}
-	if !hasFileSource {
-		return
+
+	// VL destinations and the nodes upstream of them: a line can only be
+	// skipped server-side if the shape actually reaches a jsonline sink.
+	vlTargets := map[string]bool{}
+	for _, name := range p.Order {
+		if vlJSONLineSink(p.Nodes[name]) {
+			vlTargets[name] = true
+		}
 	}
+	vlUpstream := map[string]bool{}
+	for name := range vlTargets {
+		for up := range upstreamNodes(p, name) {
+			vlUpstream[up] = true
+		}
+	}
+	wrappers := fieldsWrapperNodes(p)
+
+	if len(fileSources) > 0 {
+		for _, name := range p.Order {
+			n := p.Nodes[name]
+			switch {
+			case n.Section == config.SectionSource && n.Config.Plugin == "file" && n.Config.Grpc == nil:
+				pc, _ := n.Config.PluginConfig.(map[string]any)
+				// Only a file source that actually feeds a VL sink can lose
+				// lines: a disconnected branch in the same pipeline cannot.
+				if vlUpstream[name] {
+					if v, ok := rawInt(pc["max_line_bytes"]); ok && v > vlDefaultMaxLineBytes {
+						add(config.Diagnostic{Severity: "warning", Code: "lint_line_bytes_over_vl", File: file,
+							Line: n.Config.Line,
+							Message: fmt.Sprintf("source %q raises max_line_bytes to %d but the pipeline ships to victorialogs: lines longer than %d are skipped server-side (the request still answers 200)",
+								name, v, vlDefaultMaxLineBytes),
+							Hint: "keep max_line_bytes <= 262144, or raise -insert.maxLineSizeBytes on the VictoriaLogs side to match"})
+					}
+				}
+				if ml, ok := pc["multiline"].(map[string]any); ok {
+					if v, present := rawInt(ml["timeout_ms"]); present && v == 0 {
+						add(config.Diagnostic{Severity: "warning", Code: "lint_multiline_no_timeout", File: file,
+							Line: n.Config.Line,
+							Message: fmt.Sprintf("source %q sets multiline.timeout_ms: 0: an open group has no time-based flush, so an isolated trailing group waits for the next group-starting line (or max_lines/max_bytes)",
+								name),
+							Hint: "omit timeout_ms (default 2000) or set a positive value; 0 is only safe when every group is closed by a following line"})
+					}
+				}
+			case n.Section == config.SectionSink && n.Config.Plugin != "drop" && n.Config.Plugin != "debug":
+				// lint_collector_batch_one: a real sink whose effective
+				// batch.size is 1 (unset, or explicitly 1 — a batch block
+				// without size keeps the framework default). Only sinks on a
+				// file source's downstream are collection destinations; a sink
+				// fed by another branch is not this lint's business (D4).
+				up := upstreamNodes(p, name)
+				downstreamOfFile := false
+				for fs := range fileSources {
+					if up[fs] {
+						downstreamOfFile = true
+						break
+					}
+				}
+				if !downstreamOfFile {
+					continue
+				}
+				size := 1 // framework.BatchSizeDefault, not repeated in typed config
+				if n.Config.Batch != nil {
+					size = n.Config.Batch.Size
+				}
+				if size == 1 {
+					add(config.Diagnostic{Severity: "warning", Code: "lint_collector_batch_one", File: file,
+						Line: n.Config.Line,
+						Message: fmt.Sprintf("sink %q keeps the effective batch.size at 1 in a pipeline with a file source: the collection shape should ship batches (one POST/write per batch)",
+							name),
+						Hint: "set batch: {size: 500, timeout_ms: 2000} (or another size) on the sink"})
+				}
+			}
+		}
+	}
+
+	// lint_vl_nonobject_payload: a `raw` decoder yields a Go string, which the
+	// json encoder turns into a JSON string — not the object the jsonline API
+	// accepts. VictoriaLogs skips it server-side while answering 200, so the
+	// engine would commit it as delivered. The fix is a fields transform with
+	// wrap_field on the path; if every path from the source to a VL sink
+	// crosses one, the shape is fine. csv needs no warning: its Decode always
+	// returns map[string]any (header mode returns an empty object), the other
+	// built-in decoders produce maps or arrays, and an array payload still
+	// dead-letters loudly at the sink guardrail.
 	for _, name := range p.Order {
 		n := p.Nodes[name]
-		switch {
-		case n.Section == config.SectionSource && n.Config.Plugin == "file" && n.Config.Grpc == nil:
-			pc, _ := n.Config.PluginConfig.(map[string]any)
-			if hasVLSink {
-				if v, ok := rawInt(pc["max_line_bytes"]); ok && v > vlDefaultMaxLineBytes {
-					add(config.Diagnostic{Severity: "warning", Code: "lint_line_bytes_over_vl", File: file,
-						Line: n.Config.Line,
-						Message: fmt.Sprintf("source %q raises max_line_bytes to %d but the pipeline ships to victorialogs: lines longer than %d are skipped server-side (the request still answers 200)",
-							name, v, vlDefaultMaxLineBytes),
-						Hint: "keep max_line_bytes <= 262144, or raise -insert.maxLineSizeBytes on the VictoriaLogs side to match"})
-				}
-			}
-			if ml, ok := pc["multiline"].(map[string]any); ok {
-				if v, present := rawInt(ml["timeout_ms"]); present && v == 0 {
-					add(config.Diagnostic{Severity: "warning", Code: "lint_multiline_no_timeout", File: file,
-						Line: n.Config.Line,
-						Message: fmt.Sprintf("source %q sets multiline.timeout_ms: 0: an open group has no time-based flush, so an isolated trailing group waits for the next group-starting line (or max_lines/max_bytes)",
-							name),
-						Hint: "omit timeout_ms (default 2000) or set a positive value; 0 is only safe when every group is closed by a following line"})
-				}
-			}
-		case n.Section == config.SectionSink && n.Config.Plugin != "drop" && n.Config.Plugin != "debug":
-			// lint_collector_batch_one: a real sink whose effective batch.size
-			// is 1 (unset, or explicitly 1 — a batch block without size keeps
-			// the framework default).
-			size := 1 // framework.BatchSizeDefault, not repeated in typed config
-			if n.Config.Batch != nil {
-				size = n.Config.Batch.Size
-			}
-			if size == 1 {
-				add(config.Diagnostic{Severity: "warning", Code: "lint_collector_batch_one", File: file,
-					Line: n.Config.Line,
-					Message: fmt.Sprintf("sink %q keeps the effective batch.size at 1 in a pipeline with a file source: the collection shape should ship batches (one POST/write per batch)",
-						name),
-					Hint: "set batch: {size: 500, timeout_ms: 2000} (or another size) on the sink"})
-			}
+		if n.Section != config.SectionSource || n.Config.Grpc != nil || n.Config.Decoder != "raw" {
+			continue
 		}
+		if !vlUpstream[name] || !downstreamReaches(p, name, wrappers, vlTargets) {
+			continue
+		}
+		add(config.Diagnostic{Severity: "warning", Code: "lint_vl_nonobject_payload", File: file,
+			Line: n.Config.Line,
+			Message: fmt.Sprintf("source %q uses decoder: raw but ships to victorialogs' jsonline API, which accepts JSON objects only: the text payload is encoded as a JSON string and skipped server-side (the request still answers 200)",
+				name),
+			Hint: "insert a fields transform on the path to the sink with `fields: {wrap_field: msg}` so the text ships as an object (e.g. {\"msg\": \"...\"})"})
 	}
 }
 

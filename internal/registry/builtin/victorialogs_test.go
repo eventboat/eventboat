@@ -257,6 +257,169 @@ func TestVictoriaLogsSinkRejectsBadConfig(t *testing.T) {
 	if _, err := reg.NewSink("victorialogs", map[string]any{"url": "http://127.0.0.1:9428", "nope": 1}); err == nil {
 		t.Error("unknown config field accepted")
 	}
+	if _, err := reg.NewSink("victorialogs", map[string]any{"url": "http://127.0.0.1:9428", "max_line_bytes": -1}); err == nil {
+		t.Error("negative max_line_bytes accepted")
+	}
+}
+
+// The ENCODED line guardrail (the D1/D2/D3 silent-drop fix): a non-object or
+// over-long line is refused before the request is sent, so the engine's
+// delivery policy dead-letters it instead of committing a 200 that VL used to
+// answer while skipping the line. The error carries the message id, the
+// reason and a <=128-byte line fragment for DLQ triage.
+func TestVictoriaLogsSinkEncodedLineGuardrails(t *testing.T) {
+	reg := newReg(t)
+
+	long := func(n int) []byte {
+		b := make([]byte, 0, n)
+		b = append(b, `{"msg":"`...)
+		for len(b) < n-2 {
+			b = append(b, 'a')
+		}
+		b = append(b, `"}`...)
+		return b
+	}
+
+	cases := []struct {
+		name    string
+		cfg     map[string]any
+		msg     registry.Message
+		wantErr string // "" = must pass
+	}{
+		{
+			name:    "over-long encoded line",
+			msg:     registry.Message{ID: "m-long", Out: long(262145)},
+			wantErr: "over max_line_bytes 262144",
+		},
+		{
+			name:    "array is not an object",
+			msg:     registry.Message{ID: "m-arr", Out: []byte(`[1,2,3]`)},
+			wantErr: "not a JSON object",
+		},
+		{
+			name:    "string is not an object",
+			msg:     registry.Message{ID: "m-str", Out: []byte(`"plain text"`)},
+			wantErr: "not a JSON object",
+		},
+		{
+			name:    "number is not an object",
+			msg:     registry.Message{ID: "m-num", Out: []byte(`42`)},
+			wantErr: "not a JSON object",
+		},
+		{
+			name:    "null is not an object",
+			msg:     registry.Message{ID: "m-null", Out: []byte(`null`)},
+			wantErr: "not a JSON object",
+		},
+		{
+			name:    "empty line",
+			msg:     registry.Message{ID: "m-empty", Out: []byte(``)},
+			wantErr: "not a JSON object",
+		},
+		{
+			name:    "raw fallback must be valid JSON",
+			msg:     registry.Message{ID: "m-badraw", Raw: []byte(`{"a": `)},
+			wantErr: "raw payload is not valid JSON",
+		},
+		{
+			name: "raw fallback object passes",
+			msg:  registry.Message{ID: "m-raw", Raw: []byte(`{"a":1}`)},
+		},
+		{
+			name: "valid object with encoded payload passes",
+			msg:  registry.Message{ID: "m-ok", Out: []byte(`{"msg":"a<b>&c"}`)},
+		},
+		{
+			name: "leading whitespace before the object is tolerated",
+			msg:  registry.Message{ID: "m-ws", Out: []byte("  \n {\"a\":1}")},
+		},
+		{
+			name:    "small explicit bound rejects a short line",
+			cfg:     map[string]any{"max_line_bytes": 16},
+			msg:     registry.Message{ID: "m-small", Out: []byte(`{"msg":"0123456789"}`)},
+			wantErr: "over max_line_bytes 16",
+		},
+		{
+			name: "max_line_bytes 0 disables the bound",
+			cfg:  map[string]any{"max_line_bytes": 0},
+			msg:  registry.Message{ID: "m-off", Out: []byte(`{"msg":"0123456789"}`)},
+		},
+		{
+			name: "max_line_bytes 0 accepts a huge line",
+			cfg:  map[string]any{"max_line_bytes": 0},
+			msg:  registry.Message{ID: "m-off-huge", Out: long(300000)},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, cap := newVLBackend(t, http.StatusOK)
+			cfg := map[string]any{"url": srv.URL}
+			for k, v := range tc.cfg {
+				cfg[k] = v
+			}
+			sink, err := reg.NewSink("victorialogs", cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = sink.Write(context.Background(), []registry.Message{tc.msg})
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("Write: %v", err)
+				}
+				if len(cap.snapshot()) != 1 {
+					t.Fatalf("valid line did not reach the backend")
+				}
+				return
+			}
+			if err == nil {
+				t.Fatal("Write succeeded, want a guardrail error")
+			}
+			for _, want := range []string{tc.msg.ID, tc.wantErr, "line:"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("error %q lacks %q", err, want)
+				}
+			}
+			if len(cap.snapshot()) != 0 {
+				t.Errorf("guardrail error still sent a request (VL would 200-skip it)")
+			}
+		})
+	}
+}
+
+// The fragment in the guardrail error is bounded (a multi-megabyte line must
+// not bloat the dead-letter row) and the default bound tracks VL's
+// -insert.maxLineSizeBytes.
+func TestVictoriaLogsSinkGuardrailFragmentAndDefaults(t *testing.T) {
+	reg := newReg(t)
+	srv, _ := newVLBackend(t, http.StatusOK)
+	sink, err := reg.NewSink("victorialogs", map[string]any{"url": srv.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := sink.(*victorialogsSink).maxLineBytes; got != 262144 {
+		t.Fatalf("default maxLineBytes = %d, want 262144", got)
+	}
+	off, err := reg.NewSink("victorialogs", map[string]any{"url": srv.URL, "max_line_bytes": 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := off.(*victorialogsSink).maxLineBytes; got != 0 {
+		t.Fatalf("explicit 0 maxLineBytes = %d, want 0 (disabled)", got)
+	}
+
+	// A raw line far over the bound: the error must stay small.
+	huge := append([]byte(`{"msg":"`), bytes.Repeat([]byte("x"), 1<<20)...)
+	huge = append(huge, `"}`...)
+	err = sink.Write(context.Background(), []registry.Message{{ID: "m-huge", Out: huge}})
+	if err == nil {
+		t.Fatal("huge line accepted")
+	}
+	if len(err.Error()) > 300 {
+		t.Fatalf("guardrail error is %d bytes; the fragment must be bounded: %.120s...", len(err.Error()), err.Error())
+	}
+	if !strings.Contains(err.Error(), "1048586 bytes") { // the real length is still reported
+		t.Errorf("error lacks the encoded length: %s", err)
+	}
 }
 
 func TestVictoriaLogsSinkInCatalog(t *testing.T) {

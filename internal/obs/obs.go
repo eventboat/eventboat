@@ -433,8 +433,8 @@ func (o *Obs) SetGauges(pipeline string, inFlight, spoolDepth int, paused bool) 
 // (eventboat_source_<counter>_total, attributes pipeline+node). The
 // instrument is created lazily on first use and cached under a mutex: the
 // counter set belongs to the source plugin's contract, so it cannot be part
-// of the static instrument list. delta <= 0 is ignored (ops writes
-// increments only). Nil-receiver safe.
+// of the static instrument list. delta <= 0 is ignored (the engine samples
+// monotonic totals and writes increments only). Nil-receiver safe.
 func (o *Obs) RecordSourceCounter(pipeline, node, counter string, delta int64) {
 	if o == nil || o.meter == nil || counter == "" || delta <= 0 {
 		return
@@ -447,7 +447,7 @@ func (o *Obs) RecordSourceCounter(pipeline, node, counter string, delta int64) {
 		}
 		var err error
 		c, err = o.meter.Int64Counter("eventboat_source_"+counter+"_total",
-			metric.WithDescription("Source health counter "+counter+" (delta polled by ops)"))
+			metric.WithDescription("Source health counter "+counter+" (delta sampled by the engine)"))
 		if err != nil {
 			c = nil // cache the failure: a bad name cannot succeed on retry
 		}

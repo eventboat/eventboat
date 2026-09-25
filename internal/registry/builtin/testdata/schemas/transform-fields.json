@@ -12,6 +12,10 @@
         "type": "string"
       },
       "description": "meta keys copied into the payload under the same name; missing keys are skipped"
+    },
+    "wrap_field": {
+      "type": "string",
+      "description": "when the payload is NOT an object, wrap it as {wrap_field: payload} before applying from_meta/fields (e.g. msg for raw text and stack traces); no effect on object payloads"
     }
   },
   "additionalProperties": false

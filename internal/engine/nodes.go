@@ -238,6 +238,7 @@ func (e *Engine) writeBatch(node *ir.Node, sink registry.Sink, insts []*instance
 	for i, r := range batch {
 		msgs[i] = r.msg
 	}
+	var lastErr error
 	for attempt := 0; attempt <= retries; attempt++ {
 		if attempt > 0 {
 			e.Metrics.Retries.Add(1)
@@ -257,6 +258,7 @@ func (e *Engine) writeBatch(node *ir.Node, sink registry.Sink, insts []*instance
 			}
 			return
 		}
+		lastErr = werr
 	}
 	for _, r := range batch {
 		if r.inst.via != nil && !r.inst.via.Required {
@@ -265,7 +267,11 @@ func (e *Engine) writeBatch(node *ir.Node, sink registry.Sink, insts []*instance
 			e.commit.done(r.inst.seq)
 			continue
 		}
-		e.deadLetter(r.inst, node.Name, store.DLClassDelivery, "delivery: sink write failed after retries", "")
+		// The sink's final error text is part of the dead-letter reason: a
+		// guardrail refusal (victorialogs encoded-line checks) must be
+		// triageable from the DLQ row alone, not inferred from "delivery
+		// failed".
+		e.deadLetter(r.inst, node.Name, store.DLClassDelivery, "delivery: sink write failed after retries: "+lastErr.Error(), "")
 	}
 }
 

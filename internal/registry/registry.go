@@ -98,11 +98,11 @@ type Source interface {
 
 // CounterSource is the optional health-counter facet of a source: a monotonic
 // snapshot of per-source counters (lines read/skipped/truncated, rotations,
-// merges). Ops polls it and writes deltas to telemetry, so the registry stays
-// a leaf and knows nothing about metrics (log-collection design §2.6.3).
-// Counter names are part of the plugin's contract and are documented per
-// plugin; a source that does not implement this interface is simply absent
-// from the snapshot.
+// merges). The engine samples it on the commit path (rate-limited, default
+// 1s) and writes the deltas to telemetry, so the registry stays a leaf and
+// knows nothing about metrics (log-collection design §2.6.3). Counter names
+// are part of the plugin's contract and are documented per plugin; a source
+// that does not implement this interface is simply absent from the snapshot.
 type CounterSource interface {
 	Counters() map[string]int64
 }

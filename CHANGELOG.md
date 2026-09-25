@@ -114,7 +114,15 @@ hygiene findings.
   env-gated integration test (`internal/inttests/victorialogs`,
   `EVENTBOAT_VICTORIALOGS_URL`; CI job `victorialogs-integration`) drives a
   real file through the engine into a live VictoriaLogs and queries the rows
-  back, covering the decode dead letter and the gzip body.
+  back, covering the decode dead letter, the gzip body, the three encoded-line
+  refusal shapes and the raw+`wrap_field` shape. Every ENCODED line is
+  validated before the request (new `max_line_bytes`, default 262144 = VL's
+  `-insert.maxLineSizeBytes` default, `0` disables): the first non-space byte
+  must be `{`, a Raw-fallback line must additionally be valid JSON, and the
+  encoded line must fit the bound. A violation returns an error naming the
+  message id and a <=128-byte line fragment, which the delivery policy
+  retries into the DLQ — instead of committing a request VL answered 200 to
+  while skipping the line.
 - **`storage.write_batch.*` — the group-commit tuning surface**
   (log-collection design §2.6.2): Runtime `storage.write_batch.max_rows`
   (default 256) and `storage.write_batch.max_wait_ms` (default 2; `0` =
@@ -166,7 +174,12 @@ hygiene findings.
   copy → `from_meta` → `fields`, so an explicitly configured field overrides
   both the payload and a meta-derived value; the payload map is replaced,
   never mutated (invariant 8), and a non-map payload is a typed transform
-  failure (edge retry, then dead letter — never silently skipped).
+  failure (edge retry, then dead letter — never silently skipped). New
+  `wrap_field` gives raw/text payloads the object shape JSON sinks require:
+  when the payload is NOT a map, `wrap_field: msg` constructs `{msg: <payload>}`
+  first and then applies `from_meta`/`fields` — the usable shape for Java
+  stack traces and other multi-line text. It has no effect on map payloads,
+  and without it a non-map payload stays the loud error it was.
   Registered with the `explain-safe` capability; `examples/collector` now
   uses it for host/app and keeps the script only for the timestamp backfill.
 - **File source multiline aggregation** (log-collection design §2.4, P3): an
@@ -192,24 +205,32 @@ hygiene findings.
   cannot contain underscores and the runtime id is lowercase hex, so the
   parse is unambiguous; a file that merely resembles the shape just gets
   harmless extra fields.
-- **Three collection verify lints** (design §2.6.3; warnings, escalated by
+- **Four collection verify lints** (design §2.6.3; warnings, escalated by
   `--strict` like every lint): `lint_line_bytes_over_vl` (file source
-  `max_line_bytes > 262144` plus a `victorialogs` sink — VL's
-  `-insert.maxLineSizeBytes` default would skip longer lines server-side),
-  `lint_multiline_no_timeout` (explicit `multiline.timeout_ms: 0`), and
-  `lint_collector_batch_one` (file source plus a non-`drop`/`debug` sink whose
-  effective `batch.size` is 1 — unset or explicit). The `fanin`, `codecs` and
-  `branching` examples gained the batch config the last lint asks for, so the
-  examples gate verifies warning-free.
+  `max_line_bytes > 262144` plus a VL target — the `victorialogs` plugin OR a
+  generic `http` sink whose URL contains `insert/jsonline`, case-insensitive,
+  and only when the file source actually feeds that target),
+  `lint_multiline_no_timeout` (explicit `multiline.timeout_ms: 0`),
+  `lint_collector_batch_one` (a file source's downstream plus a non-`drop`/
+  `debug` sink whose effective `batch.size` is 1 — unset or explicit; a sink
+  outside the file downstream no longer misreports), and
+  `lint_vl_nonobject_payload` (a `raw`-decoder source with an unwrapped path
+  to a VL target: the text encodes to a JSON string and is skipped
+  server-side; the hint points at `fields: {wrap_field: msg}`. csv is exempt —
+  its Decode always returns an object). The `fanin`, `codecs` and `branching`
+  examples gained the batch config the batch lint asks for, so the examples
+  gate verifies warning-free.
 - **Source health counters** (design §2.6.3, P3): `internal/registry` gains
   the optional `CounterSource` facet, implemented by the file source as
   `lines_read`, `lines_skipped`, `lines_truncated`, `rotations` and
-  `multiline_merges`. `Engine.SourceCounters()` snapshots them per node, and
-  the ops status snapshot writes the delta since the previous snapshot to
-  telemetry as `eventboat_source_<counter>_total{pipeline,node}` (instruments
-  are created lazily and cached under a mutex; a counter regression
-  re-baselines instead of writing a negative delta). The registry and engine
-  stay telemetry-free — ops is the one polling seam.
+  `multiline_merges`. The ENGINE samples it on the commit-advance path,
+  rate-limited to once per second (`Options.SourceCounterInterval`), and
+  writes positive deltas to telemetry as
+  `eventboat_source_<counter>_total{pipeline,node}` (instruments are created
+  lazily and cached under a mutex; a counter regression re-baselines instead
+  of writing a negative delta). Sampling is independent of any status poll,
+  so `run --config` — which has no ops/admin surface — records too; the
+  registry stays telemetry-free and ops only reads gauges.
 - **`docs/tuning.md` — the operator's tuning reference** (design §2.6, P4):
   the two-layer knob map (Runtime `storage.*`/`telemetry.*` vs pipeline
   semantics) with every implemented default and its direction, the sizing
@@ -329,6 +350,30 @@ hygiene findings.
   null) is accepted as an empty declaration instead of a type error.
 
 ### Changed
+
+- **The JSON codec no longer HTML-escapes `<`, `>`, `&`** (adversarial
+  review of the log-collection plan): `json.Marshal` rendered them as
+  `\u003c`/`\u003e`/`\u0026`, six bytes each, so one line dense in shell
+  redirections or JSP markup could inflate up to 6x — and the encoded bytes
+  are what VictoriaLogs measures against `-insert.maxLineSizeBytes`. The
+  encoder now uses `json.Encoder` with `SetEscapeHTML(false)` (compact and
+  pretty) and still emits no trailing newline; control characters still
+  expand, which is why the VL sink's encoded-line bound exists. This is an
+  intentional output change for every JSON-encoding sink.
+- **Delivery dead letters carry the sink's final error** (`internal/engine`):
+  the reason stays prefixed `delivery: sink write failed after retries` and
+  now appends the last `Sink.Write` error, so a guardrail refusal (a
+  non-object or over-long victorialogs line, for example) is triageable from
+  the DLQ row alone instead of needing the engine logs.
+- **Source health counters are sampled by the engine, not by ops status
+  polls** (adversarial review of the log-collection plan): a deployment whose
+  `/metrics` is scraped without calling the admin `Status` — or `run
+  --config`, which has no ops surface at all — used to leave
+  `eventboat_source_*` at zero. The engine now samples the `CounterSource`
+  facet on the commit-advance path (default once per second), so the
+  counters flow in every run shape; the ops baseline/lock and its polling
+  call are deleted to avoid double counting, and `Status` keeps only the
+  gauges.
 
 - **File-source state is now the v2 document, and tail mode no longer emits
   a half line** (log-collection design §2.3, P2): `Commit` returns
