@@ -134,6 +134,41 @@ hygiene findings.
   (pipeline-labelled, group-commit wait included), and the optional
   `store.WriteOptions.OnBatch(rows, waited)` hook exposes committed batch sizes
   to the ops side; the store stays a leaf and never imports telemetry.
+- **File source v2 — glob, per-file offsets and rotation hardening**
+  (log-collection design §2.3, P2): `path` accepts a glob (`*`/`?`/`[...]`)
+  and every file keeps its own byte-offset watermark, keyed by the platform
+  file identity — `(device, inode)` on Unix, volume serial number + file
+  index on Windows, path fallback elsewhere (`fileid_unix.go` /
+  `fileid_windows.go` / `fileid_other.go`). Rename+recreate rotation drains
+  the old descriptor to EOF and opens the new file from `start_at`;
+  copytruncate (`size < offset`) resets to 0 and keeps going (duplicates, never
+  a stall); a deleted file is read to its end from the held descriptor; and a
+  retargeted link is rotation with the link path kept as the
+  glob/`meta.file_path` identity. New knobs: `close_inactive_ms` (default 5m;
+  a closed descriptor reopens when the file changes), `ignore_older_ms` (skip
+  old files at first discovery), `clean_removed` (default true — drop a
+  removed file's state once drained and closed), `max_line_bytes` (default
+  256 KiB, aligned to VictoriaLogs' `-insert.maxLineSizeBytes`) and
+  `oversize: truncate|skip` (truncate emits the first N bytes and the
+  decode/DLQ path makes it observable; skip drops and counts; the read buffer
+  is capped so a multi-megabyte line cannot blow up memory). Every message
+  carries `meta.file_path` and `meta.host`. On Windows files are opened with
+  `FILE_SHARE_DELETE`, so the tailer's descriptor no longer blocks
+  logrotate's rename or delete. Tests: the source-level and engine-level
+  scenario matrices (rotation, copytruncate, link retargeting, deletion,
+  half lines, glob discovery, ignore_older, close_inactive, oversize
+  truncate/skip with bounded memory, v1 state, crash resume from a partial
+  commit).
+- **`fields` transform — declarative payload fields** (log-collection design
+  §2.6, decision D5): `fields: {k: v}` writes static values (`${VAR}` and
+  `${constants.x}` are substituted at load) and `from_meta: [k, ...]` copies
+  source metadata by name, skipping missing keys. Application order is payload
+  copy → `from_meta` → `fields`, so an explicitly configured field overrides
+  both the payload and a meta-derived value; the payload map is replaced,
+  never mutated (invariant 8), and a non-map payload is a typed transform
+  failure (edge retry, then dead letter — never silently skipped).
+  Registered with the `explain-safe` capability; `examples/collector` now
+  uses it for host/app and keeps the script only for the timestamp backfill.
 
 ### Fixed
 
@@ -232,6 +267,16 @@ hygiene findings.
 
 ### Changed
 
+- **File-source state is now the v2 document, and tail mode no longer emits
+  a half line** (log-collection design §2.3, P2): `Commit` returns
+  `{"version":2,"files":{"<id>":{"path":"...","offset":N}}}` — one watermark
+  per file — and the v1 `{"offset":N}` document is still read and applied to a
+  single meta-free path, so existing stores resume without migration. A
+  trailing line without a newline is buffered until its newline arrives
+  instead of being emitted at EOF; `on_eof: stop` still finishes an
+  unterminated final line, because a complete batch file may legitimately end
+  without one. A file that stops matching the glob keeps its descriptor until
+  it is drained and idle, then `clean_removed` (default true) drops its state.
 - **Every durable store write now runs through one writer goroutine with
   group commit** (log-collection design §2.2, P1;
   `internal/store/writer.go`): `AppendSpool`, `SetCheckpoint`,

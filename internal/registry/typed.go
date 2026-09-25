@@ -558,9 +558,20 @@ func applyDefaults(v reflect.Value, dt *defaultTable) {
 	switch v.Kind() {
 	case reflect.Struct:
 		for _, d := range dt.byType[v.Type()] {
-			if f := v.Field(d.index); f.IsZero() && f.CanSet() {
-				f.Set(d.value)
+			f := v.Field(d.index)
+			if !f.IsZero() || !f.CanSet() {
+				continue
 			}
+			if f.Kind() == reflect.Pointer {
+				// A pointer field with a default is a tri-state knob (e.g.
+				// clean_removed: null=true, false=off): allocate the pointee
+				// so the decoded value can distinguish "unset" from false.
+				p := reflect.New(f.Type().Elem())
+				p.Elem().Set(d.value)
+				f.Set(p)
+				continue
+			}
+			f.Set(d.value)
 		}
 		for i := 0; i < v.NumField(); i++ {
 			applyDefaults(v.Field(i), dt)

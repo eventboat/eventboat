@@ -1,5 +1,5 @@
-# Log collection: tail one JSON-lines file, stamp host/app onto every event,
-# backfill a missing timestamp, ship batches to VictoriaLogs
+# Log collection: tail a glob of JSON-lines files, stamp host/app onto every
+# event, backfill a missing timestamp, ship batches to VictoriaLogs
 # (docs/collector.md; design: docs/design/2026-09-24-log-collection.md §2.1).
 #
 # Run from this directory (file paths resolve against the process working
@@ -12,7 +12,8 @@
 # state at the production path (/var/lib/eventboat).
 #
 # In production the constants come from the deployment (per-host ConfigMap or
-# ${VAR} substitution); logs/app.jsonl ships two sample lines.
+# ${VAR} substitution); logs/app.jsonl ships two sample lines. The glob picks
+# up rotation (rename + recreate) and files that appear later.
 apiVersion: eventboat/v1
 kind: Pipeline
 metadata: {name: collector}
@@ -25,20 +26,26 @@ sources:
   logs:
     decoder: json
     file:
-      path: logs/app.jsonl
+      path: logs/*.jsonl
 
 transforms:
   stamp:
     depends_on: [logs]
+    # Static fields (no Starlark needed); explicit fields override any
+    # existing payload key.
+    fields:
+      fields:
+        host: "${constants.host}"
+        app: "${constants.app}"
+  backfill:
+    depends_on: [stamp]
     script: |
-      payload.host = constants.host
-      payload.app = constants.app
       if "ts" not in payload:
           payload.ts = meta.ingest_time
 
 sinks:
   victorialogs:
-    depends_on: [stamp]
+    depends_on: [backfill]
     encoder: json
     batch: {size: 500, timeout_ms: 2000}
     victorialogs:

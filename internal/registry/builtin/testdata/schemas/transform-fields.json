@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "fields": {
+      "type": "object",
+      "description": "static fields written into the payload (${VAR}/${constants.x} substituted at load)"
+    },
+    "from_meta": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "meta keys copied into the payload under the same name; missing keys are skipped"
+    }
+  },
+  "additionalProperties": false
+}

@@ -365,6 +365,43 @@ func TestDecodeTypedNilAndEmpty(t *testing.T) {
 	}
 }
 
+// A pointer field with a default is a tri-state knob: unset takes the default,
+// an explicit false survives it (clean_removed: null=true, false=off).
+func TestDecodeTypedPointerDefaults(t *testing.T) {
+	type cfg struct {
+		Path  string `json:"path" schema:"minLen=1"`
+		Clean *bool  `json:"clean_removed" schema:"default=true,desc=drop removed files' state"`
+	}
+	plan, err := newTypePlan[cfg]("ptr")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(plan.schema, `"clean_removed": {
+      "type": "boolean",
+      "default": true,
+      "description": "drop removed files' state"
+    }`) {
+		t.Fatalf("pointer default missing from schema: %s", plan.schema)
+	}
+	if strings.Contains(plan.schema, `"required": ["path", "clean_removed"]`) {
+		t.Fatal("pointer default field must not be required")
+	}
+	c, err := decodeTyped[cfg](map[string]any{"path": "a"}, plan.defaults)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Clean == nil || !*c.Clean {
+		t.Fatalf("unset pointer default = %v, want true", c.Clean)
+	}
+	c, err = decodeTyped[cfg](map[string]any{"path": "a", "clean_removed": false}, plan.defaults)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Clean == nil || *c.Clean {
+		t.Fatalf("explicit false = %v, want false", c.Clean)
+	}
+}
+
 func TestDecodeTypedRejectsUnknownAndMistyped(t *testing.T) {
 	plan, err := newTypePlan[decodeCfg]("x")
 	if err != nil {

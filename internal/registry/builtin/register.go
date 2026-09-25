@@ -20,6 +20,7 @@ func RegisterAll(reg *registry.Registry) error {
 		registerSQLSource,
 		registerScriptTransform,
 		registerSplitTransform,
+		registerFieldsTransform,
 		registerWasmTransform,
 		registerFileSink,
 		registerHTTPSink,

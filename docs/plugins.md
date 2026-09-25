@@ -31,9 +31,10 @@ Eventboat internals.
 > through `pkg/plugin.RegisterTransform` in a custom build (route 1 above;
 > it fronts `registry.RegisterTransform` / `RegisterTransformT`, see
 > [internal/registry](../internal/registry/registry.go)
-> and the three builtins under
+> and the four builtins under
 > [internal/registry/builtin](../internal/registry/builtin/) —
-> `transform_script.go`, `transform_split.go`, `wasm_transform.go`). A
+> `transform_script.go`, `transform_split.go`, `transform_fields.go`,
+> `wasm_transform.go`). A
 > transform implements `Init(TransformEnv)` / `Apply(*Message)
 > ([]*Message, error)` / `Close`; returning zero outputs filters the message.
 > The gRPC protocol below carries sources and sinks only; out-of-process

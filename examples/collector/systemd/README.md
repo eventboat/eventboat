@@ -11,11 +11,12 @@ Prefer **`create` mode** (rename the file, create a fresh one at the same
 path). The collector holds the old file's descriptor, so it finishes reading
 the rotated file and nothing is lost.
 
-Avoid **`copytruncate`**: the file is rewritten in place, so the collector's
-byte offset no longer matches the file — the stream stalls silently (the
-file-source v2 work turns that into duplicate reads, design
-`docs/design/2026-09-24-log-collection.md` §2.3, but duplicates are still
-avoidable). A sample config:
+Avoid **`copytruncate`** where `create` mode is possible: the file is
+rewritten in place, so the collector's byte offset no longer matches and it
+re-reads the file from the start — handled (a truncated file resets to 0 and
+keeps going; duplicates, never a silent stall, design
+`docs/design/2026-09-24-log-collection.md` §2.3), but duplicates are still
+avoidable. A sample config:
 
 ```conf
 /var/log/app/*.log {
@@ -32,7 +33,7 @@ avoidable). A sample config:
 
 Keep rotated files around long enough for the collector to read them (the
 design's risk table: a file rotated away before it is read is lost) and keep
-`rotate`/`maxsize` aligned with the log rate. Reopening the new file at the
-same path is hardened by the file-source v2 work (§2.3) — its scenario matrix
-(rotation, copytruncate, deleted files) is the acceptance contract — so until
-that lands, keep rotation windows generous.
+`rotate`/`maxsize` aligned with the log rate. The file source covers the
+rotation/copytruncate/deleted-file scenario matrix (§2.3): a `create`-mode
+rotation is read to completion from the old descriptor, and the new file at the
+same path is picked up by the glob.

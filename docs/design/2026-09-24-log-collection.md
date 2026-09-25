@@ -2,7 +2,7 @@
 
 | 状态 Status | 日期 Date | 关联 Links |
 |---|---|---|
-| Draft — P0, P1 implemented | 2026-09-24 | [Architecture deepening](../design/2026-09-23-architecture-deepening.md) (batch-flush direction, §R-B1) · [`competitor-research.md`](../../competitor-research.md) §4 (Fluentd / Fluent Bit) · [Kubernetes deployment](../k8s.md) · [`scripts/bench-gate.sh`](../../scripts/bench-gate.sh) |
+| Draft — P0–P2 implemented | 2026-09-24 | [Architecture deepening](../design/2026-09-23-architecture-deepening.md) (batch-flush direction, §R-B1) · [`competitor-research.md`](../../competitor-research.md) §4 (Fluentd / Fluent Bit) · [Kubernetes deployment](../k8s.md) · [`scripts/bench-gate.sh`](../../scripts/bench-gate.sh) |
 
 This document is the design of record for using Eventboat as the log
 collector in a file-based collection scenario — host files and container logs,
@@ -132,14 +132,14 @@ regardless of caller cancellation; only an append *failure* is a refusal.
 
 | Capability | Design |
 |---|---|
-| Glob | `path` accepts a glob; per-file state map (versioned JSON, backward-compatible with today's `{"offset":N}`) |
-| Identity | `(device, inode)` on Unix, file index on Windows; the symlink path is kept for metadata, the target for identity |
-| Rotation | Same path, new identity → finish the old fd to EOF (emit what remains), then open the new file from 0 |
+| Glob | `path` accepts a glob (`*`/`?`/`[...]`); per-file state, versioned JSON: `{"version":2,"files":{"<id>":{"path":"...","offset":N}}}` (v1 `{"offset":N}` is still applied to a meta-free single path) |
+| Identity | `(device, inode)` on Unix, volume serial number + file index on Windows (path fallback on other platforms); the symlink path is kept for metadata, the target for identity |
+| Rotation | Same path, new identity → finish the old fd to EOF (emit what remains), then open the new file from `start_at` |
 | Truncation | Same identity, `size < offset` → reset to 0 and continue (copytruncate; duplicates are acceptable) |
 | Deleted files | Finish the held fd, then drop state (`clean_removed`) |
-| fd management | `close_inactive_ms` (default 5m), `ignore_older_ms`, scan interval `scan_frequency_ms` (default 250) |
-| Line bound | `max_line_bytes` (default 256 KiB, aligned to VL's default), `oversize: truncate \| dead_letter` — never a silent drop |
-| Metadata | Each message carries `meta.file_path`, `meta.host`; container paths (`/var/log/containers/<pod>_<namespace>_<container>-<id>.log`) are parsed into `meta.namespace/pod/container` without needing the k8s API |
+| fd management | `close_inactive_ms` (default 5m), `ignore_older_ms` (default 0), scan interval `poll_every_ms` (default 250 — the pre-v2 name is kept; it covers the glob rescan and the per-file poll) |
+| Line bound | `max_line_bytes` (default 256 KiB, aligned to VL's default), `oversize: truncate \| skip` — truncate emits the first N bytes (the decode/DLQ path makes it observable), skip drops the line and counts it; never a silent drop, and the read buffer is capped at `max_line_bytes` |
+| Metadata | Each message carries `meta.file_path`, `meta.host` (P2); container paths (`/var/log/containers/<pod>_<namespace>_<container>-<id>.log`) are parsed into `meta.namespace/pod/container` without needing the k8s API (P3) |
 
 ### 2.4 Multiline (P3)
 
@@ -199,8 +199,8 @@ telemetry, **pipeline** for per-pipeline semantics. Principles:
 | `storage.write_batch.max_rows` | Runtime | 256 | group-commit batch size; larger = higher throughput, coarser latency |
 | `storage.write_batch.max_wait_ms` | Runtime | 2 | companion-probe budget before flushing a partial batch; `0` = write-through. Implemented as bounded scheduler yields, not a sleeping timer (P1 note, §2.2) |
 | `storage.checkpoint_interval_ms` | Runtime | 0 (every advance) | **trimmed from P1** (2026-09-25): the engine's `persistMu` already serializes checkpoint writes, and delaying them by an interval makes `SetCheckpoint` non-blocking, weakening the `durableThrough` visibility barrier — it needs engine-side changes (see `docs/developer/02-engine.md`, Persistence), so it ships in a later stage if at all |
-| file `scan_frequency_ms` / `close_inactive_ms` / `ignore_older_ms` | pipeline | 250 / 5m / 0 | fd + scan cost ↔ discovery latency |
-| file `read_buffer_bytes` / `max_line_bytes` / `oversize` | pipeline | 64 KiB / 256 KiB / truncate | memory ↔ oversized-line policy |
+| file `poll_every_ms` / `close_inactive_ms` / `ignore_older_ms` | pipeline | 250 / 5m / 0 | fd + scan cost ↔ discovery latency (the scan interval keeps its pre-v2 name `poll_every_ms`) |
+| file `max_line_bytes` / `oversize` | pipeline | 256 KiB / truncate | memory ↔ oversized-line policy (`truncate` emits the first N bytes and the decode/DLQ path records it; `skip` drops and counts; the read buffer is capped at `max_line_bytes`) |
 | file `multiline.{max_lines,max_bytes,timeout_ms}` | pipeline | 500 / 1 MiB / 2s | aggregation memory ↔ group completeness |
 | transform `script.max_steps` | pipeline | 100 000 (today hard-coded) | per-message CPU bound ↔ script complexity |
 | `victorialogs.{gzip,max_idle_conns,timeout_ms,stream_fields,time_field,msg_field,extra_fields,account_id,project_id}` | pipeline | §2.1 | network/CPU ↔ ingest semantics |

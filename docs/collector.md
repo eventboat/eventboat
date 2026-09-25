@@ -1,8 +1,9 @@
 # Collecting logs with Eventboat (files → VictoriaLogs)
 
 Eventboat's log-collection shape is deliberately small: tail **files** (host
-or container logs) with the `file` source, normalize with a `script`
-transform, and ship **batches** to a VictoriaLogs instance through the
+or container logs) with the `file` source, normalize with a `fields` transform
+(static values plus `meta.*` passthrough) and a `script` transform for
+computed values, and ship **batches** to a VictoriaLogs instance through the
 dedicated `victorialogs` sink. There is no second agent — this is the
 one-selection deployment the design of record describes
 ([Log collection mode](design/2026-09-24-log-collection.md)).
@@ -16,18 +17,23 @@ the reference; the core:
 sources:
   logs:
     decoder: json          # one JSON object per line; malformed lines dead-letter
-    file: {path: logs/app.jsonl}
+    file:
+      path: logs/*.jsonl   # a glob: rotation and files appearing later are picked up
 transforms:
   stamp:
     depends_on: [logs]
+    fields:
+      fields:
+        host: "${constants.host}"   # per-node identity (${VAR}/${constants.x} substituted at load)
+        app: "${constants.app}"
+  backfill:
+    depends_on: [stamp]
     script: |
-      payload.host = constants.host      # per-node identity
-      payload.app = constants.app
       if "ts" not in payload:            # backfill from engine metadata
           payload.ts = meta.ingest_time
 sinks:
   victorialogs:
-    depends_on: [stamp]
+    depends_on: [backfill]
     encoder: json                        # the body must be codec-encoded JSON
     batch: {size: 500, timeout_ms: 2000} # one POST per batch
     victorialogs:
@@ -36,17 +42,60 @@ sinks:
       time_field: ts
 ```
 
-The `file` source tails one file and persists its byte offset through
-`Source.Commit`, so a restart resumes after the committed lines
-(at-least-once: duplicates after a crash, never loss). Glob, rotation and
-truncation detection, multiline aggregation and container-path metadata are
-the file-source v2 work scheduled in the design document
-([§2.3–§2.4](design/2026-09-24-log-collection.md)). The example ships a
-contract suite (`tests/collector.yaml`: the stamp, the timestamp backfill, the
-malformed-line DLQ path) that `eventboat test` runs against the real engine,
-and `internal/inttests/victorialogs` drives the same shape into a live
-VictoriaLogs and queries the rows back through LogsQL (gated by
-`EVENTBOAT_VICTORIALOGS_URL`).
+The `file` source tails a **glob** of files and persists a per-file byte
+offset through `Source.Commit`, so a restart resumes every file after its
+committed lines (at-least-once: duplicates after a crash, never loss).
+Rotation (rename + recreate), copytruncate (in-place truncation), deleted
+files and retargeted links are detected through the platform file identity
+(device + inode on Unix, volume serial + file index on Windows): the matched
+link path is used for glob matching and `meta.file_path`, the identity of the
+opened target decides rotation. Multiline aggregation and container-path
+metadata (`namespace`/`pod`/`container`) are the remaining file-source work
+(P3, design §2.4).
+
+| Key | Default | Meaning |
+|---|---|---|
+| `path` | required | glob (`*`, `?`, `[...]`) of files to tail; a path without metacharacters is one file |
+| `poll_every_ms` | `250` | scan interval: glob rescan plus per-file poll |
+| `start_at` | `beginning` | where a newly discovered file starts (`end` skips what is already written) |
+| `on_eof` | `tail` | `tail` keeps polling for appended lines; `stop` finishes the source once every tracked file is read to its end — the batch/job shape |
+| `close_inactive_ms` | `300000` | close a file's descriptor after this much idle time; it reopens when the file changes (`0` = never close) |
+| `ignore_older_ms` | `0` | skip files whose mtime is older than this when first discovered (`0` = off) |
+| `clean_removed` | `true` | drop the state of files that no longer match the glob once they are drained and closed |
+| `max_line_bytes` | `262144` | maximum line length in bytes (aligned with VictoriaLogs' `-insert.maxLineSizeBytes`; the buffer is capped, an oversized line never blows up memory) |
+| `oversize` | `truncate` | `truncate` emits the first `max_line_bytes` of an oversized line (the decode/DLQ path makes it visible); `skip` drops the line and counts it |
+| `host` | `os.Hostname()` | value carried as `meta.host` |
+
+Every message carries `meta.file_path` (the matched path) and `meta.host`.
+Line and lifecycle semantics:
+
+- **Only newline-terminated lines are emitted**; a half line at EOF waits in
+  memory for its newline (changed in the P2 work — it used to be emitted
+  immediately). `on_eof: stop` emits an unterminated final line as its last
+  message, because a complete batch file may end without a newline.
+- **Rotation** drains the old descriptor to EOF before opening the new file
+  from `start_at`; **copytruncate** restarts at 0 (duplicates are acceptable,
+  a stall is not); a **deleted** file is read to its end from the held
+  descriptor.
+- Idle descriptors are closed after `close_inactive_ms` and reopened on the
+  next growth; a removed file's state is dropped by `clean_removed` once it is
+  drained and closed.
+- The per-file state is
+  `{"version":2,"files":{"<id>":{"path":"...","offset":N}}}`; a v1
+  `{"offset":N}` state is still applied to a single (meta-free) path.
+
+The `fields` transform copies configured values into the payload map; the
+payload must be a map (anything else is a typed transform failure, retried
+then dead-lettered). Application order is payload copy, then `from_meta`
+(missing keys are skipped), then `fields` — so an explicitly configured field
+overrides both the payload and a meta-derived one. `${VAR}` and
+`${constants.x}` substitution runs before the plugin sees the values.
+
+The example ships a contract suite (`tests/collector.yaml`: the stamp, the
+timestamp backfill, the malformed-line DLQ path) that `eventboat test` runs
+against the real engine, and `internal/inttests/victorialogs` drives the same
+shape into a live VictoriaLogs and queries the rows back through LogsQL
+(gated by `EVENTBOAT_VICTORIALOGS_URL`).
 
 ## The `victorialogs` sink
 
@@ -71,9 +120,9 @@ Error mapping follows VictoriaLogs' own semantics:
 
 - **2xx — committed.** VictoriaLogs *skips unparseable lines server-side and
   still answers 200*, which is why the body must be codec-encoded JSON
-  (`encoder: json`) and why the file-source v2 work keeps `max_line_bytes`
-  aligned with VL's `-insert.maxLineSizeBytes`: a raw-text body would lose
-  lines silently.
+  (`encoder: json`) and why the file source keeps `max_line_bytes` aligned
+  with VL's `-insert.maxLineSizeBytes`: a raw-text body would lose lines
+  silently.
 - **4xx — permanent.** VL returns 4xx only when the whole batch is
   unparseable; the edge's delivery policy exhausts and the batch dead-letters.
   Re-sending cannot help.
@@ -91,9 +140,9 @@ Error mapping follows VictoriaLogs' own semantics:
   is its own single-active writer (the general Kubernetes contract is in
   [Deploying Eventboat on Kubernetes](k8s.md)).
 - **VM / bare metal** ([`systemd/`](../examples/collector/systemd)):
-  the unit template plus logrotate guidance — prefer `create` mode;
-  `copytruncate` rewrites the file in place and the tailer's offset no longer
-  matches (duplicates, and a silent stall until the P2 hardening lands).
+  the unit template plus logrotate guidance — `create` mode is preferred;
+  `copytruncate` rewrites the file in place and the tailer restarts at 0 on
+  the next scan (duplicates, no stall; design §2.3).
 - **Mixed estates**: per-role pipeline files under `--config-dir`, with
   per-host values injected through `${VAR}` substitution (the DaemonSet
   template feeds the node name into the `host` constant this way).

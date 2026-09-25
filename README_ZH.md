@@ -83,7 +83,8 @@ sinks:
 - **源：** `kafka`、`http_server`、`cron`、`file`、`sql`（MySQL /
   PostgreSQL / SQLite，keyset 分页 + 可续读水位）。
 - **Transform：** `script`（Starlark）、`split`（JSON 数组逐元素成消息）、
-  `wasm`（见下）——或你自己注册的 transform。
+  `fields`（静态值 + `meta.*` 写入 payload）、`wasm`（见下）——或你自己注册
+  的 transform。
 - **汇：** `kafka`、`http`、`file`、`drop`、`debug`（每条消息一行打到
   stderr）。
 - **编解码：** `json`、`raw`、`csv`、`avro`、`protobuf`——在 `codecs:`

@@ -359,7 +359,8 @@ func TestFileSourceCommitScanBoundedByWatermark(t *testing.T) {
 		t.Fatal(err)
 	}
 	fs := src.(*fileSource)
-	fs.pending = map[int64]int64{1: 10, 2: 25, 3: 40}
+	fs.files = map[string]*trackedFile{"f1": {id: "f1", path: "in.jsonl"}}
+	fs.pending = map[int64]filePending{1: {"f1", 10}, 2: {"f1", 25}, 3: {"f1", 40}}
 	ctx := context.Background()
 	var state []byte
 	for seq := int64(1); seq <= 3; seq++ {
@@ -369,6 +370,9 @@ func TestFileSourceCommitScanBoundedByWatermark(t *testing.T) {
 	}
 	if !strings.Contains(string(state), `"offset":40`) {
 		t.Fatalf("commit state = %s, want offset 40", state)
+	}
+	if !strings.Contains(string(state), `"version":2`) {
+		t.Fatalf("commit state = %s, want the v2 document", state)
 	}
 	if len(fs.pending) != 0 {
 		t.Fatalf("pending holds %d entries after a full drain, want 0", len(fs.pending))

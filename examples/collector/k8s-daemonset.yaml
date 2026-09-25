@@ -93,10 +93,11 @@ data:
     sources:
       logs:
         decoder: json
-        # One file per source today; glob support arrives with the
-        # file-source v2 work (design §2.3). Point this at the workload's
-        # JSON-lines log on the node.
-        file: {path: /var/log/app/app.jsonl}
+        # A glob: rotation (rename and recreate at the same path) is followed
+        # and files that appear later are picked up. Container-path metadata
+        # (namespace/pod/container) is the remaining file-source work
+        # (design §2.4). Point this at the workload's JSON-lines logs.
+        file: {path: /var/log/app/*.jsonl}
     transforms:
       stamp:
         depends_on: [logs]

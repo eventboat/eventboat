@@ -6,23 +6,58 @@
     "path": {
       "type": "string",
       "minLength": 1,
-      "description": "file to tail, one message per line"
+      "description": "glob (*, ?, [...]) of files to tail; one message per line"
     },
     "poll_every_ms": {
       "type": "integer",
       "minimum": 10,
-      "default": 250
+      "default": 250,
+      "description": "scan interval: glob rescan plus per-file poll"
     },
     "start_at": {
       "type": "string",
       "enum": ["beginning", "end"],
-      "default": "beginning"
+      "default": "beginning",
+      "description": "where a newly discovered file starts"
     },
     "on_eof": {
       "type": "string",
       "enum": ["tail", "stop"],
       "default": "tail",
-      "description": "tail keeps polling for appended lines; stop finishes the source once the file is read to its end (complete batch files)"
+      "description": "tail keeps polling for appended lines; stop finishes the source once every tracked file is read to its end (complete batch files)"
+    },
+    "close_inactive_ms": {
+      "type": "integer",
+      "minimum": 0,
+      "default": 300000,
+      "description": "close a file's descriptor after this much idle time (0 = never); it reopens when the file changes"
+    },
+    "ignore_older_ms": {
+      "type": "integer",
+      "minimum": 0,
+      "default": 0,
+      "description": "skip files whose mtime is older than this when first discovered (0 = off)"
+    },
+    "clean_removed": {
+      "type": "boolean",
+      "default": true,
+      "description": "drop the state of files that no longer match the glob once they are drained and closed"
+    },
+    "max_line_bytes": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 262144,
+      "description": "maximum line length in bytes (aligned with VictoriaLogs' default)"
+    },
+    "oversize": {
+      "type": "string",
+      "enum": ["truncate", "skip"],
+      "default": "truncate",
+      "description": "truncate emits the first max_line_bytes of an oversized line; skip drops it and counts"
+    },
+    "host": {
+      "type": "string",
+      "description": "value for meta.host; defaults to os.Hostname()"
     }
   },
   "additionalProperties": false

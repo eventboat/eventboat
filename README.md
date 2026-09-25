@@ -93,7 +93,8 @@ sinks:
 - **Sources:** `kafka`, `http_server`, `cron`, `file`, `sql` (MySQL /
   PostgreSQL / SQLite, keyset pagination with resumable watermarks).
 - **Transforms:** `script` (Starlark), `split` (one message per array
-  element), `wasm` (see below) — or your own registered transform.
+  element), `fields` (static values and `meta.*` copied onto the payload),
+  `wasm` (see below) — or your own registered transform.
 - **Sinks:** `kafka`, `http`, `file`, `drop`, `debug` (one JSON line per
   message on stderr).
 - **Codecs:** `json`, `raw`, `csv`, `avro`, `protobuf` — declared once under
