@@ -169,6 +169,47 @@ hygiene findings.
   failure (edge retry, then dead letter — never silently skipped).
   Registered with the `explain-safe` capability; `examples/collector` now
   uses it for host/app and keeps the script only for the timestamp backfill.
+- **File source multiline aggregation** (log-collection design §2.4, P3): an
+  optional `multiline` block aggregates complete lines into one message.
+  `pattern` is a Go regexp compiled at construction (an invalid one fails
+  verify), classified with `negate` and `match: after|before` (`after`: a hit
+  is a continuation line; `before`: a hit starts a new group); lines are
+  joined with `\n`. A group flushes on a new group-starting line,
+  `timeout_ms` (default 2000; explicit `0` = no timeout), `max_lines` (500) /
+  `max_bytes` (1 MiB) — exceeding a cap flushes the current group and starts
+  a new one with the incoming line — plus rotation, truncation and stop-mode
+  EOF. It deliberately does **not** flush on shutdown: an uncommitted group is
+  re-read from the persisted watermark after a restart (at-least-once, never
+  loss). A group's watermark is the end offset of its LAST line; a
+  whitespace-only group is dropped; `oversize: skip` lines are dropped
+  without breaking the group and `truncate` lines join truncated. Without the
+  block the source behaves exactly as in P2.
+- **Container-path metadata on every file-source message** (design §2.3):
+  when a matched path's basename has the kubelet shape
+  `<pod>_<namespace>_<container>-<id>.log`, the message gains `meta.pod`,
+  `meta.namespace` and `meta.container` — parsed from the path with a regexp,
+  no Kubernetes API and no configuration. Pod/namespace/container names
+  cannot contain underscores and the runtime id is lowercase hex, so the
+  parse is unambiguous; a file that merely resembles the shape just gets
+  harmless extra fields.
+- **Three collection verify lints** (design §2.6.3; warnings, escalated by
+  `--strict` like every lint): `lint_line_bytes_over_vl` (file source
+  `max_line_bytes > 262144` plus a `victorialogs` sink — VL's
+  `-insert.maxLineSizeBytes` default would skip longer lines server-side),
+  `lint_multiline_no_timeout` (explicit `multiline.timeout_ms: 0`), and
+  `lint_collector_batch_one` (file source plus a non-`drop`/`debug` sink whose
+  effective `batch.size` is 1 — unset or explicit). The `fanin`, `codecs` and
+  `branching` examples gained the batch config the last lint asks for, so the
+  examples gate verifies warning-free.
+- **Source health counters** (design §2.6.3, P3): `internal/registry` gains
+  the optional `CounterSource` facet, implemented by the file source as
+  `lines_read`, `lines_skipped`, `lines_truncated`, `rotations` and
+  `multiline_merges`. `Engine.SourceCounters()` snapshots them per node, and
+  the ops status snapshot writes the delta since the previous snapshot to
+  telemetry as `eventboat_source_<counter>_total{pipeline,node}` (instruments
+  are created lazily and cached under a mutex; a counter regression
+  re-baselines instead of writing a negative delta). The registry and engine
+  stay telemetry-free — ops is the one polling seam.
 
 ### Fixed
 

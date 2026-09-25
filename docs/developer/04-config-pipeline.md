@@ -279,6 +279,9 @@ Every diagnostic code that exists in the code, by emitting layer. Severity
 | `lint_when_literal` | warning | edge condition is literally `true`/`false` |
 | `lint_constant_unused` | warning | a declared constant is never referenced |
 | `lint_sql_continuous` | warning | a pull source (sql / pull-capable plugin) used in a continuous pipeline |
+| `lint_line_bytes_over_vl` | warning | file source with `max_line_bytes > 262144` in a pipeline with a `victorialogs` sink: VL's `-insert.maxLineSizeBytes` default would skip longer lines server-side |
+| `lint_multiline_no_timeout` | warning | file source with multiline `timeout_ms` explicitly `0`: no time-based flush, so an isolated trailing group waits for the next group-starting line |
+| `lint_collector_batch_one` | warning | file source plus a non-`drop`/`debug` sink whose effective `batch.size` is 1 (unset, or explicit `1`): the collection shape should batch |
 
 ### Retired codes
 

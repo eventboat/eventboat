@@ -2,7 +2,7 @@
 
 | 状态 Status | 日期 Date | 关联 Links |
 |---|---|---|
-| Draft — P0–P2 implemented | 2026-09-24 | [Architecture deepening](../design/2026-09-23-architecture-deepening.md) (batch-flush direction, §R-B1) · [`competitor-research.md`](../../competitor-research.md) §4 (Fluentd / Fluent Bit) · [Kubernetes deployment](../k8s.md) · [`scripts/bench-gate.sh`](../../scripts/bench-gate.sh) |
+| Draft — P0–P3 implemented | 2026-09-24 | [Architecture deepening](../design/2026-09-23-architecture-deepening.md) (batch-flush direction, §R-B1) · [`competitor-research.md`](../../competitor-research.md) §4 (Fluentd / Fluent Bit) · [Kubernetes deployment](../k8s.md) · [`scripts/bench-gate.sh`](../../scripts/bench-gate.sh) |
 
 This document is the design of record for using Eventboat as the log
 collector in a file-based collection scenario — host files and container logs,
@@ -144,11 +144,19 @@ regardless of caller cancellation; only an append *failure* is a refusal.
 ### 2.4 Multiline (P3)
 
 `multiline: { pattern, negate, match: after|before, max_lines, max_bytes,
-timeout_ms }` per file source. Aggregation flushes on: a new group-starting
-line, `timeout_ms`, rotation/truncation, and shutdown. The watermark for a
-group is the **end offset of its last line**; a crash between aggregation and
-commit re-reads the group (duplicates, never loss). Line/byte caps bound
-memory; exceeding them flushes early and counts.
+timeout_ms }` per file source (defaults 500 lines / 1 MiB / 2s; an explicit
+`timeout_ms: 0` means no time-based flush and is what
+`lint_multiline_no_timeout` warns about). Aggregation flushes on: a new
+group-starting line, `timeout_ms`, `max_lines`/`max_bytes`, rotation or
+truncation, and stop-mode EOF — deliberately **not on shutdown**: a group that
+was not flushed was not committed, so a restart re-reads it from the persisted
+watermark (at-least-once, never loss). The watermark for a group is the **end
+offset of its last line**; a crash between aggregation and commit re-reads the
+group (duplicates, never loss). Lines are joined with `\n`; a group made only
+of whitespace is dropped at flush; a line dropped by `oversize: skip` does not
+affect grouping, a `truncate` line joins the group truncated. Line/byte caps
+bound memory; exceeding them flushes the current group early and starts a new
+one with the incoming line.
 
 ### 2.5 Deployment shapes
 
@@ -231,8 +239,9 @@ telemetry, **pipeline** for per-pipeline semantics. Principles:
 - **Verify lints** (pipeline knobs; warnings, `--strict` escalates):
   - `lint_line_bytes_over_vl` — `max_line_bytes > 262144` with a
     `victorialogs` sink: VL will skip longer lines.
-  - `lint_multiline_no_timeout` — multiline pattern without `timeout_ms`:
-    unbounded aggregation.
+  - `lint_multiline_no_timeout` — multiline with an **explicit**
+    `timeout_ms: 0`: no time-based flush, so an isolated trailing group waits
+    for the next group-starting line (the 2s default is not a problem).
   - `lint_collector_batch_one` — file source + sink `batch.size: 1`: the
     collection shape wants batching.
 - **Runtime load validation**: non-negative integers, `max_wait_ms ≥ 0`,
@@ -263,8 +272,8 @@ telemetry, **pipeline** for per-pipeline semantics. Principles:
 | D4 | Memory pooling is scoped to raw/scratch buffers; decoded maps are excluded | Sink encoder scratch, spool row marshalling and file read buffers are safe to reuse if ownership is tracked to the terminal state (commit/DLQ). `Decoded`/`Meta` are shared across fan-out branches (invariant 8) and can be retained by DLQ records, Starlark COW bindings, wasm/gRPC serialization — pooling them needs per-message lifetimes the code does not track. Expected win: 10–30 % on the in-memory path, near zero on the durable path; it is not the collection lever. |
 | D5 | Metadata travels as `meta.*`; a declarative `fields` transform copies what the pipeline wants into the payload; the sink never merges meta | The engine deliberately encodes `Decoded` only. Sink-side merging would make the sink parse/rewrite payloads — a codec concern. `fields` (static + meta passthrough, `${VAR}` substitution) removes Starlark boilerplate for the common case. |
 | D6 | Rotation identity is `(device, inode)`, symlink path kept for metadata | Survives rename+recreate and copytruncate; matches how container logs are laid out; no k8s API needed for pod/namespace/container. |
-| D7 | Multiline watermark = end offset of the last line in the group; flush on timeout/rotation/shutdown | Keeps the existing pending-offset machinery; a crash re-reads the incomplete group (duplicates, never loss). |
-| D8 | Oversized lines: bounded and counted, never silently dropped | VL's own default silently skips > 256 KiB; our `oversize: truncate\|dead_letter` makes the choice explicit and observable. |
+| D7 | Multiline watermark = end offset of the last line in the group; flush on new group/timeout/caps/rotation/truncation/stop-EOF, **not** on shutdown | Keeps the existing pending-offset machinery; a crash or a shutdown re-reads the uncommitted group (duplicates, never loss) — flushing at shutdown would commit a group the file could still extend. |
+| D8 | Oversized lines: bounded and counted, never silently dropped | VL's own default silently skips > 256 KiB; our `oversize: truncate\|skip` makes the choice explicit and observable (truncate emits the first N bytes and the decode/DLQ path records it; skip drops and counts). |
 | D9 | `max_in_flight` is the outage buffer; `spool_retention` is not | During an outage the checkpoint stalls, so retention never trims; the admission gate is what bounds the backlog. Sizing formula in §2.6.2. |
 | D10 | Knobs default-on where they matter; expose only genuine tradeoffs, each with a metric and a guardrail | Keeps tuning an operator activity, not a prerequisite; the typed-config/registry machinery makes each knob schema-validated, LSP-completed and verifiable at near-zero cost. |
 

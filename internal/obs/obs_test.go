@@ -27,6 +27,7 @@ func TestPrometheusExposition(t *testing.T) {
 	o.RecordJobStart("p1", "schedule")
 	o.RecordJobEnd("p1", "success", 0, 3, 3, 0)
 	o.RecordOverlapSkip("p1")
+	o.RecordSourceCounter("p1", "logs", "lines_read", 7)
 	o.SetGauges("p1", 2, 4, false)
 
 	h := o.Handler()
@@ -50,6 +51,8 @@ func TestPrometheusExposition(t *testing.T) {
 		"eventboat_in_flight_messages",
 		"eventboat_spool_depth",
 		"eventboat_spool_append_seconds",
+		"eventboat_source_lines_read_total",
+		`node="logs"`,
 		`pipeline="p1"`,
 	} {
 		if !strings.Contains(body, want) {
@@ -80,12 +83,47 @@ func TestNilObsIsInert(t *testing.T) {
 	o.RecordSpoolFailure("p")
 	o.RecordBackpressure("p", "s")
 	o.RecordDlqFailure("p")
+	o.RecordSourceCounter("p", "n", "lines_read", 1)
 	if o.Handler() != nil {
 		t.Error("nil obs must not expose a handler")
 	}
 	_ = o.Shutdown(context.Background())
 	if o.Tracer() == nil {
 		t.Error("nil obs must still provide a (noop) tracer")
+	}
+}
+
+// Source counters are created lazily per counter name and cached (the counter
+// set is a source-plugin contract, not part of the static instrument list);
+// a non-positive delta is ignored.
+func TestSourceCounterLazyInstrument(t *testing.T) {
+	o, err := Setup(context.Background(), Config{Prometheus: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = o.Shutdown(context.Background()) }()
+
+	o.RecordSourceCounter("p", "in", "lines_read", 3)
+	o.RecordSourceCounter("p", "in", "lines_read", 4)
+	o.RecordSourceCounter("p", "in", "lines_read", 0) // ignored
+	o.counterMu.Lock()
+	first, ok := o.sourceCounters["lines_read"]
+	o.counterMu.Unlock()
+	if !ok || first == nil {
+		t.Fatal("lines_read instrument was not created and cached")
+	}
+
+	h := o.Handler()
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "/metrics", nil))
+	line := ""
+	for _, l := range strings.Split(rec.Body.String(), "\n") {
+		if strings.HasPrefix(l, "eventboat_source_lines_read_total{") {
+			line = l
+		}
+	}
+	if !strings.HasSuffix(line, " 7") {
+		t.Fatalf("exposition line = %q, want a total of 7", line)
 	}
 }
 

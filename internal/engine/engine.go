@@ -1274,6 +1274,22 @@ func (e *Engine) CommitSnapshot() (outstanding int, committedThrough int64, arri
 	return e.commit.snapshot()
 }
 
+// SourceCounters snapshots the optional registry.CounterSource counters of
+// every source node (node → counter → value). Sources without the facet are
+// absent. The engine is a poll-side seam only: ops diffs the values and
+// writes the deltas to telemetry, so neither the engine nor the registry
+// imports the obs package (log-collection design §2.6.3). The sources map is
+// written only by New, before the engine is handed out, so the read is safe.
+func (e *Engine) SourceCounters() map[string]map[string]int64 {
+	out := make(map[string]map[string]int64, len(e.sources))
+	for name, src := range e.sources {
+		if cs, ok := src.(registry.CounterSource); ok {
+			out[name] = cs.Counters()
+		}
+	}
+	return out
+}
+
 func cloneMeta(m map[string]any) map[string]any {
 	out := make(map[string]any, len(m)+4)
 	for k, v := range m {

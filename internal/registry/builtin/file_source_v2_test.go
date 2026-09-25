@@ -293,7 +293,7 @@ func TestFileSourceV2OversizeTruncate(t *testing.T) {
 		t.Fatalf("lines = %v", got)
 	}
 	fs.mu.Lock()
-	truncated, skipped := fs.oversizeTruncated, fs.oversizeSkipped
+	truncated, skipped := fs.linesTruncated.Load(), fs.linesSkipped.Load()
 	fs.mu.Unlock()
 	if truncated != 1 || skipped != 0 {
 		t.Fatalf("oversize counters = truncated %d / skipped %d, want 1/0", truncated, skipped)
@@ -315,7 +315,7 @@ func TestFileSourceV2OversizeSkip(t *testing.T) {
 		t.Fatalf("lines = %v, want [second]", got)
 	}
 	fs.mu.Lock()
-	truncated, skipped := fs.oversizeTruncated, fs.oversizeSkipped
+	truncated, skipped := fs.linesTruncated.Load(), fs.linesSkipped.Load()
 	fs.mu.Unlock()
 	if truncated != 0 || skipped != 1 {
 		t.Fatalf("oversize counters = truncated %d / skipped %d, want 0/1", truncated, skipped)

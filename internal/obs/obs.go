@@ -4,13 +4,15 @@
 // configured) — plus a TracerProvider (OTLP when configured, noop
 // otherwise). Metric names carry the eventboat_ prefix; the implemented set
 // is the review's list of 25 ("写下的 = 实现的") plus the P1 spool-append
-// histogram. All helpers are nil-receiver safe: a nil *Obs means telemetry is
-// disabled.
+// histogram; per-source health counters (eventboat_source_*) are created
+// lazily by RecordSourceCounter because the counter set is a plugin contract.
+// All helpers are nil-receiver safe: a nil *Obs means telemetry is disabled.
 package obs
 
 import (
 	"context"
 	"net/http"
+	"sync"
 	"time"
 
 	promc "github.com/prometheus/client_golang/prometheus"
@@ -76,6 +78,13 @@ type Obs struct {
 	InFlight       metric.Float64Gauge
 	SpoolDepth     metric.Float64Gauge
 	PipelinePaused metric.Float64Gauge
+
+	// sourceCounters caches the lazily created eventboat_source_<counter>_total
+	// instruments (the counter set is a per-plugin contract, so it is not part
+	// of the static set above). Guarded by counterMu; a failed creation caches
+	// a nil counter so the next call does not retry it.
+	counterMu      sync.Mutex
+	sourceCounters map[string]metric.Int64Counter
 }
 
 // Setup builds the providers. A disabled Prometheus and empty endpoint
@@ -418,6 +427,38 @@ func (o *Obs) SetGauges(pipeline string, inFlight, spoolDepth int, paused bool) 
 		}
 		o.PipelinePaused.Record(ctx, v, pa)
 	}
+}
+
+// RecordSourceCounter adds delta to the named source health counter
+// (eventboat_source_<counter>_total, attributes pipeline+node). The
+// instrument is created lazily on first use and cached under a mutex: the
+// counter set belongs to the source plugin's contract, so it cannot be part
+// of the static instrument list. delta <= 0 is ignored (ops writes
+// increments only). Nil-receiver safe.
+func (o *Obs) RecordSourceCounter(pipeline, node, counter string, delta int64) {
+	if o == nil || o.meter == nil || counter == "" || delta <= 0 {
+		return
+	}
+	o.counterMu.Lock()
+	c, ok := o.sourceCounters[counter]
+	if !ok {
+		if o.sourceCounters == nil {
+			o.sourceCounters = map[string]metric.Int64Counter{}
+		}
+		var err error
+		c, err = o.meter.Int64Counter("eventboat_source_"+counter+"_total",
+			metric.WithDescription("Source health counter "+counter+" (delta polled by ops)"))
+		if err != nil {
+			c = nil // cache the failure: a bad name cannot succeed on retry
+		}
+		o.sourceCounters[counter] = c
+	}
+	o.counterMu.Unlock()
+	if c == nil {
+		return
+	}
+	c.Add(context.Background(), delta, metric.WithAttributes(
+		attribute.String("pipeline", pipeline), attribute.String("node", node)))
 }
 
 // count is the shared single-event counter shape.

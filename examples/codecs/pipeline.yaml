@@ -39,4 +39,5 @@ sinks:
   avro-out:
     depends_on: [total]
     encoder: orders-avro
+    batch: {size: 10, timeout_ms: 200}
     file: {path: output/orders.avro}

@@ -50,8 +50,7 @@ files and retargeted links are detected through the platform file identity
 (device + inode on Unix, volume serial + file index on Windows): the matched
 link path is used for glob matching and `meta.file_path`, the identity of the
 opened target decides rotation. Multiline aggregation and container-path
-metadata (`namespace`/`pod`/`container`) are the remaining file-source work
-(P3, design §2.4).
+metadata (`namespace`/`pod`/`container`) are built in (design §2.4 / §2.3).
 
 | Key | Default | Meaning |
 |---|---|---|
@@ -64,9 +63,21 @@ metadata (`namespace`/`pod`/`container`) are the remaining file-source work
 | `clean_removed` | `true` | drop the state of files that no longer match the glob once they are drained and closed |
 | `max_line_bytes` | `262144` | maximum line length in bytes (aligned with VictoriaLogs' `-insert.maxLineSizeBytes`; the buffer is capped, an oversized line never blows up memory) |
 | `oversize` | `truncate` | `truncate` emits the first `max_line_bytes` of an oversized line (the decode/DLQ path makes it visible); `skip` drops the line and counts it |
+| `multiline` | off | aggregate multi-line records (stack traces) into one message — see [Multiline](#multiline) |
 | `host` | `os.Hostname()` | value carried as `meta.host` |
 
 Every message carries `meta.file_path` (the matched path) and `meta.host`.
+When the basename has the Kubernetes container-log shape
+`<pod>_<namespace>_<container>-<id>.log`, the message additionally carries
+`meta.pod`, `meta.namespace` and `meta.container` — parsed **automatically
+from the path** (a regexp; no k8s API access, no configuration). Pod,
+namespace and container names cannot contain underscores and the runtime id
+is lowercase hex, so the parse is unambiguous; a host file that merely looks
+like the shape just gets harmless extra fields, which is why the parse is
+always on. Feed them to `fields.from_meta` (or a script) to make them payload
+fields and to VictoriaLogs' `_stream_fields`:
+`stream_fields: host,app,namespace,pod`.
+
 Line and lifecycle semantics:
 
 - **Only newline-terminated lines are emitted**; a half line at EOF waits in
@@ -83,6 +94,55 @@ Line and lifecycle semantics:
 - The per-file state is
   `{"version":2,"files":{"<id>":{"path":"...","offset":N}}}`; a v1
   `{"offset":N}` state is still applied to a single (meta-free) path.
+
+### Multiline
+
+Text logs (Java stacks, Go panics, Python tracebacks) need several lines per
+event. `multiline` classifies every complete line with a Go regexp and joins
+the group with `\n` into **one** message:
+
+```yaml
+sources:
+  logs:
+    decoder: raw               # a stack trace is not JSON; raw passes it through
+    file:
+      path: /var/log/app/*.log
+      multiline:
+        pattern: '^\S'         # matches group-START lines (a line starting
+                               # at column 0: a timestamp or log level)
+        negate: true           # ... so a negated hit is a continuation line
+        match: after           # after = a (negated) hit continues the group
+        max_lines: 500         # caps (defaults); exceeding one flushes the
+        max_bytes: 1048576     # current group and starts a new one with the
+        timeout_ms: 2000       # incoming line; timeout flushes a group when
+                               # no new line arrived (0 = no timeout — the
+                               # lint_multiline_no_timeout warning)
+```
+
+The equivalent `before` shape, where the pattern matches the first line of a
+group and everything else continues it:
+
+```yaml
+      multiline:
+        pattern: '^\d{4}-\d{2}-\d{2}'
+        match: before
+```
+
+Rules to rely on:
+
+- A group flushes on a new group-starting line, `timeout_ms`, `max_lines`,
+  `max_bytes`, rotation/truncation and stop-mode EOF. It does **not** flush on
+  shutdown: an uncommitted group is re-read from the watermark after a restart
+  (duplicates, never loss).
+- The watermark of a group is the end offset of its **last** line, so a
+  restart never re-reads an emitted group.
+- A group made only of whitespace lines is dropped at flush.
+- A group never outlives its descriptor: closing an idle file
+  (`close_inactive_ms`) flushes the open group first, so keep
+  `close_inactive_ms` well above the inter-line gap for slow stack traces.
+- `oversize: skip` drops the line **without** breaking the group;
+  `oversize: truncate` joins the truncated content.
+- Without `multiline` every line is one message, exactly as before.
 
 The `fields` transform copies configured values into the payload map; the
 payload must be a map (anything else is a typed transform failure, retried
@@ -128,6 +188,28 @@ Error mapping follows VictoriaLogs' own semantics:
   Re-sending cannot help.
 - **5xx / network error / timeout — transient.** Retried per edge policy,
   then dead-lettered. VL pushes back instead of dropping while overloaded.
+
+## Metrics
+
+The file source exposes monotonic health counters through
+`registry.CounterSource`. Every status snapshot polls them and writes the
+**delta** since the previous snapshot to telemetry, so each counter surfaces
+as `eventboat_source_<counter>_total{pipeline,node}` on `/metrics` (and
+through the OTLP exporter when configured). A counter that goes backwards (a
+source restart, a redeploy) re-baselines instead of writing a negative delta.
+
+| Counter | Meaning |
+|---|---|
+| `lines_read` | complete lines parsed (blank lines and oversize lines included) |
+| `lines_skipped` | lines dropped by `oversize: skip` |
+| `lines_truncated` | lines emitted truncated by `oversize: truncate` |
+| `rotations` | files replaced at a matched path (identity change: rename + recreate) |
+| `multiline_merges` | continuation lines appended to an open multiline group |
+
+Use them to size the knobs (design §2.6.2): a rising `lines_skipped` says
+`max_line_bytes`/`oversize` needs attention, `rotations` with gaps in
+`lines_read` says logrotate retention is too aggressive, and
+`multiline_merges` shows how much the aggregator is actually merging.
 
 ## Deployment shapes
 

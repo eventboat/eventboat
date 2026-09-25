@@ -96,6 +96,17 @@ type Source interface {
 	Close() error
 }
 
+// CounterSource is the optional health-counter facet of a source: a monotonic
+// snapshot of per-source counters (lines read/skipped/truncated, rotations,
+// merges). Ops polls it and writes deltas to telemetry, so the registry stays
+// a leaf and knows nothing about metrics (log-collection design §2.6.3).
+// Counter names are part of the plugin's contract and are documented per
+// plugin; a source that does not implement this interface is simply absent
+// from the snapshot.
+type CounterSource interface {
+	Counters() map[string]int64
+}
+
 // PullSource is a source with job-pipeline pull semantics (redesign-v3.md
 // §5.8, M2 review R1): the engine calls Pull instead of Run. Pull emits rows
 // synchronously (the engine's admission gate applies backpressure between

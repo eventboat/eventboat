@@ -10,9 +10,11 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/eventboat/eventboat/internal/registry"
@@ -28,7 +30,22 @@ type fileSourceConfig struct {
 	CleanRemoved  *bool  `json:"clean_removed" schema:"default=true,desc=drop the state of files that no longer match the glob once they are drained and closed"`
 	MaxLineBytes  int    `json:"max_line_bytes" schema:"min=1,default=262144,desc=maximum line length in bytes (aligned with VictoriaLogs' default)"`
 	Oversize      string `json:"oversize" schema:"enum=truncate|skip,default=truncate,desc=truncate emits the first max_line_bytes of an oversized line; skip drops it and counts"`
-	Host          string `json:"host" schema:"optional,desc=value for meta.host; defaults to os.Hostname()"`
+	// Multiline is optional: without it every line is one message, exactly as
+	// before (the nil path is the v1 behavior, unchanged).
+	Multiline *fileMultilineConfig `json:"multiline" schema:"optional,desc=aggregate multi-line records (e.g. stack traces) into one message"`
+	Host      string               `json:"host" schema:"optional,desc=value for meta.host; defaults to os.Hostname()"`
+}
+
+// fileMultilineConfig is the multiline aggregation contract (log-collection
+// design §2.4): complete lines are classified by pattern (optionally negated)
+// and joined into one message until a new group starts or a bound fires.
+type fileMultilineConfig struct {
+	Pattern   string `json:"pattern" schema:"minLen=1,desc=Go regexp classifying lines (see match/negate)"`
+	Negate    bool   `json:"negate" schema:"default=false,desc=invert the pattern result before match is applied"`
+	Match     string `json:"match" schema:"enum=after|before,default=after,desc=after: a hit is a continuation line; before: a hit starts a new group"`
+	MaxLines  int    `json:"max_lines" schema:"min=1,default=500,desc=flush an open group at this many lines"`
+	MaxBytes  int    `json:"max_bytes" schema:"min=1,default=1048576,desc=flush an open group at this many bytes"`
+	TimeoutMs *int   `json:"timeout_ms" schema:"min=0,default=2000,desc=flush an open group this long after its last line (0 = no timeout)"`
 }
 
 func registerFileSource(reg *registry.Registry) error {
@@ -41,6 +58,10 @@ func registerFileSource(reg *registry.Registry) error {
 		if host == "" {
 			host, _ = os.Hostname()
 		}
+		ml, err := buildMultiline(c.Multiline)
+		if err != nil {
+			return nil, err
+		}
 		return &fileSource{
 			path:          c.Path,
 			pollEvery:     time.Duration(c.PollEvery) * time.Millisecond,
@@ -51,10 +72,37 @@ func registerFileSource(reg *registry.Registry) error {
 			cleanRemoved:  cleanRemoved,
 			maxLineBytes:  c.MaxLineBytes,
 			oversize:      c.Oversize,
+			multiline:     ml,
 			host:          host,
 			warnf:         log.Printf,
 		}, nil
 	})
+}
+
+// buildMultiline compiles the multiline block at construction time: an
+// invalid pattern is a factory error (verify reports it), and an explicitly
+// zero timeout_ms stays zero — "no timeout" is a deliberate choice the
+// lint_multiline_no_timeout lint warns about, not a value to silently default.
+func buildMultiline(c *fileMultilineConfig) (*multilineConfig, error) {
+	if c == nil {
+		return nil, nil
+	}
+	re, err := regexp.Compile(c.Pattern)
+	if err != nil {
+		return nil, fmt.Errorf("file source: multiline.pattern %q: %w", c.Pattern, err)
+	}
+	timeoutMs := 2000
+	if c.TimeoutMs != nil {
+		timeoutMs = *c.TimeoutMs
+	}
+	return &multilineConfig{
+		pattern:  re,
+		negate:   c.Negate,
+		before:   c.Match == "before",
+		maxLines: c.MaxLines,
+		maxBytes: c.MaxBytes,
+		timeout:  time.Duration(timeoutMs) * time.Millisecond,
+	}, nil
 }
 
 // fileSource tails one file or a glob of files line by line. Commit state is
@@ -74,6 +122,19 @@ func registerFileSource(reg *registry.Registry) error {
 // trailing line waits in memory and is completed by the next write (the stop
 // mode emits it as its final message when the EOF is the end of a complete
 // batch file).
+//
+// Multiline (P3, design §2.4) is off unless configured: complete lines are
+// classified by pattern/negate/match and joined with "\n" into one message.
+// The watermark of a group is the end offset of its LAST line, so a restart
+// never re-reads an emitted group and a crash re-reads an uncommitted one
+// (at-least-once). A group flushes on a new group-starting line, timeout_ms,
+// max_lines, max_bytes, rotation/truncation and stop-mode EOF — deliberately
+// NOT on Close: an uncommitted group is re-read after a restart.
+//
+// Every message carries meta.file_path and meta.host; when the basename has
+// the container-log shape <pod>_<namespace>_<container>-<id>.log, meta.pod /
+// meta.namespace / meta.container are parsed from the path (no k8s API; a
+// host file that happens to match the shape just gets harmless extra fields).
 //
 // Completion (v1.24 contract): with on_eof:stop the source returns nil once
 // every tracked file is at EOF and a full scan produced nothing — the shape
@@ -96,6 +157,7 @@ type fileSource struct {
 	cleanRemoved  bool
 	maxLineBytes  int
 	oversize      string
+	multiline     *multilineConfig // nil = one message per line (v1 behavior)
 	host          string
 	warnf         func(format string, args ...any)
 
@@ -111,8 +173,24 @@ type fileSource struct {
 	nextSeq       int64
 	lastCommitted int64 // highest srcSeq already folded by Commit
 
-	oversizeTruncated int64
-	oversizeSkipped   int64
+	// Health counters (registry.CounterSource). All writes happen under mu;
+	// the atomics exist so ops can poll Counters() without taking the lock
+	// the poll loop holds across emit (backpressure must not block status).
+	linesRead       atomic.Int64
+	linesSkipped    atomic.Int64
+	linesTruncated  atomic.Int64
+	rotations       atomic.Int64
+	multilineMerges atomic.Int64
+}
+
+// multilineConfig is the compiled multiline block.
+type multilineConfig struct {
+	pattern  *regexp.Regexp
+	negate   bool
+	before   bool // match == "before": a hit starts a group instead of continuing one
+	maxLines int
+	maxBytes int
+	timeout  time.Duration // 0 = no timeout flush (explicit timeout_ms: 0)
 }
 
 // trackedFile is one discovered file. offset is the next unread byte (it only
@@ -134,6 +212,17 @@ type trackedFile struct {
 	lastRead     time.Time
 	removed      bool // no longer matched by the glob
 	reopen       bool // a read error dropped the descriptor; force a reopen
+
+	// Multiline group state (zero unless multiline is configured): the joined
+	// lines, the end offset of the LAST line in the group (the watermark
+	// recorded when the group flushes) and the time the last line was added.
+	// The buffer is reused across groups; flush clones before emitting.
+	group      []byte
+	groupLines int
+	groupBytes int64
+	groupLast  time.Time
+	groupEnd   int64
+	groupOpen  bool
 }
 
 type filePending struct {
@@ -277,6 +366,18 @@ func (s *fileSource) poll(ctx context.Context, emit func(registry.Message) error
 			e.removed = false
 		}
 		if e.f == nil {
+			// Groups are flushed before a descriptor closes, so an open group
+			// here means a flush path was missed: flush it now rather than
+			// leave read-but-uncommitted lines behind.
+			if e.groupOpen {
+				em, err := s.flushGroupLocked(e, emit)
+				if em {
+					emitted = true
+				}
+				if err != nil {
+					return emitted, err
+				}
+			}
 			continue
 		}
 		em, err := s.drainLocked(e, emit, now)
@@ -286,8 +387,26 @@ func (s *fileSource) poll(ctx context.Context, emit func(registry.Message) error
 		if err != nil {
 			return emitted, err
 		}
+		if e.removed && e.groupOpen && e.partialBytes == 0 && e.offset >= e.size {
+			// A file that no longer matches the glob is final at EOF: flush
+			// its open group in the poll that noticed the rotation, so the
+			// old content cannot be lost to clean_removed (design §2.4).
+			em, err := s.flushGroupLocked(e, emit)
+			if em {
+				emitted = true
+			}
+			if err != nil {
+				return emitted, err
+			}
+		}
 	}
-	s.reapLocked(now)
+	em, err := s.reapLocked(now, emit)
+	if em {
+		emitted = true
+	}
+	if err != nil {
+		return emitted, err
+	}
 	return emitted, nil
 }
 
@@ -350,6 +469,7 @@ func (s *fileSource) discoverLocked(path string) *trackedFile {
 	if oldID, ok := s.byPath[path]; ok && oldID != id {
 		if old, ok := s.files[oldID]; ok {
 			old.removed = true // rotated away: drain the old descriptor, then reap
+			s.rotations.Add(1)
 		}
 	}
 	s.byPath[path] = id
@@ -359,7 +479,9 @@ func (s *fileSource) discoverLocked(path string) *trackedFile {
 	if e.f == nil {
 		if e.offset > fi.Size() {
 			// Truncated while the descriptor was closed: restart from 0
-			// (copytruncate; duplicates are acceptable).
+			// (copytruncate; duplicates are acceptable). The open group was
+			// flushed when the descriptor closed, so nothing is carried
+			// across the reset.
 			e.offset, e.committed = 0, 0
 		}
 		if _, err := f.Seek(e.offset, io.SeekStart); err != nil {
@@ -400,17 +522,25 @@ func (s *fileSource) newTrackedLocked(id, path string, size int64) *trackedFile 
 	return e
 }
 
-// drainLocked reads one open file to EOF, emitting complete lines. It returns
+// drainLocked reads one open file to EOF, feeding complete lines through the
+// aggregator (or emitting them one by one when multiline is off). It returns
 // whether anything was emitted and the first refusal error.
 func (s *fileSource) drainLocked(e *trackedFile, emit func(registry.Message) error, now time.Time) (bool, error) {
 	if fi, err := e.f.Stat(); err == nil {
 		if fi.Size() < e.offset {
-			// copytruncate: the file was rewritten in place. Restart from 0
-			// (duplicates are acceptable, a stalled tail is not).
+			// copytruncate: the file was rewritten in place. Flush the open
+			// group FIRST — its lines belong to the pre-truncation content
+			// and the offset reset below would otherwise re-read them — then
+			// restart from 0 (duplicates are acceptable, a stalled tail is
+			// not).
+			em, err := s.flushGroupLocked(e, emit)
+			if err != nil {
+				return em, err
+			}
 			e.offset, e.committed = 0, 0
 			e.partial, e.partialBytes, e.oversize = nil, 0, false
 			if _, err := e.f.Seek(0, io.SeekStart); err != nil {
-				return false, nil
+				return em, nil
 			}
 		}
 		e.size, e.mtime = fi.Size(), fi.ModTime()
@@ -421,7 +551,7 @@ func (s *fileSource) drainLocked(e *trackedFile, emit func(registry.Message) err
 		n, rerr := e.f.Read(s.scratch)
 		if n > 0 {
 			e.lastRead = now
-			em, err := s.consumeLocked(e, s.scratch[:n], emit)
+			em, err := s.consumeLocked(e, s.scratch[:n], now, emit)
 			if em {
 				emitted = true
 			}
@@ -433,22 +563,50 @@ func (s *fileSource) drainLocked(e *trackedFile, emit func(registry.Message) err
 			if errors.Is(rerr, io.EOF) {
 				break
 			}
-			// Read failure (file replaced mid-read, lock violation): drop the
+			// Read failure (file replaced mid-read, lock violation): flush the
+			// open group (its lines are read but uncommitted, and the reopen
+			// seeks to the read watermark, not the group start), drop the
 			// descriptor and let the next scan reopen it from the watermark.
+			em, ferr := s.flushGroupLocked(e, emit)
+			if ferr != nil {
+				return emitted || em, ferr
+			}
 			s.closeLocked(e)
 			e.reopen = true
-			return emitted, nil
+			return emitted || em, nil
 		}
 	}
 
 	if s.onEOF == "stop" && e.partialBytes > 0 {
-		// stop reads COMPLETE files: an unterminated last line is emitted as
-		// the final message at EOF (tail would wait for its newline).
+		// stop reads COMPLETE files: an unterminated last line is fed as the
+		// final line at EOF (tail would wait for its newline).
 		oversize := e.oversize
 		lineBytes := e.partialBytes
 		e.offset += lineBytes
-		em, err := s.emitLineLocked(e, e.partial, lineBytes, oversize, emit)
+		em, err := s.feedLineLocked(e, e.partial, lineBytes, oversize, now, emit)
 		e.partial, e.partialBytes, e.oversize = nil, 0, false
+		if em {
+			emitted = true
+		}
+		if err != nil {
+			return emitted, err
+		}
+	}
+	if s.onEOF == "stop" && e.partialBytes == 0 && e.offset >= e.size && e.groupOpen {
+		// stop reads COMPLETE files: a trailing group is flushed at EOF so
+		// the batch run commits every line before it reports exhausted.
+		em, err := s.flushGroupLocked(e, emit)
+		if em {
+			emitted = true
+		}
+		if err != nil {
+			return emitted, err
+		}
+	}
+	if s.multiline != nil && e.groupOpen && s.multiline.timeout > 0 && now.Sub(e.groupLast) >= s.multiline.timeout {
+		// The timeout flush runs on every poll: a group whose file produced
+		// no new data must still be emitted (design §2.4).
+		em, err := s.flushGroupLocked(e, emit)
 		if em {
 			emitted = true
 		}
@@ -462,7 +620,7 @@ func (s *fileSource) drainLocked(e *trackedFile, emit func(registry.Message) err
 // consumeLocked parses one read chunk into lines. The unterminated tail stays
 // in e.partial (capped at maxLineBytes; the full line length is tracked in
 // partialBytes) so memory stays bounded no matter how long a single line is.
-func (s *fileSource) consumeLocked(e *trackedFile, chunk []byte, emit func(registry.Message) error) (bool, error) {
+func (s *fileSource) consumeLocked(e *trackedFile, chunk []byte, now time.Time, emit func(registry.Message) error) (bool, error) {
 	emitted := false
 	for _, b := range chunk {
 		if b != '\n' {
@@ -479,10 +637,10 @@ func (s *fileSource) consumeLocked(e *trackedFile, chunk []byte, emit func(regis
 			continue
 		}
 		// A complete line: advance the offset past it (newline included) and
-		// emit it under the configured oversize policy.
+		// feed it through the policy and (when configured) the aggregator.
 		lineBytes := e.partialBytes + 1
 		e.offset += lineBytes
-		em, err := s.emitLineLocked(e, e.partial, lineBytes, e.oversize, emit)
+		em, err := s.feedLineLocked(e, e.partial, lineBytes, e.oversize, now, emit)
 		e.partial, e.partialBytes, e.oversize = nil, 0, false
 		if em {
 			emitted = true
@@ -494,32 +652,101 @@ func (s *fileSource) consumeLocked(e *trackedFile, chunk []byte, emit func(regis
 	return emitted, nil
 }
 
-// emitLineLocked applies the oversize policy and, when the line is emitted,
-// records its end offset in pending so Commit folds it into the file's
-// watermark. lineBytes is the full on-disk line length (the oversized
-// remainder included), so a restart never re-reads an emitted line.
-func (s *fileSource) emitLineLocked(e *trackedFile, line []byte, lineBytes int64, oversize bool, emit func(registry.Message) error) (bool, error) {
+// feedLineLocked is the single entry for every complete line: it counts the
+// line, applies the oversize policy and, when multiline is configured, routes
+// it through the group classifier (design §2.4). A line dropped by
+// oversize: skip has no effect on the open group.
+func (s *fileSource) feedLineLocked(e *trackedFile, line []byte, lineBytes int64, oversize bool, now time.Time, emit func(registry.Message) error) (bool, error) {
+	s.linesRead.Add(1)
 	if oversize {
 		if s.oversize == "skip" {
-			s.oversizeSkipped++
+			s.linesSkipped.Add(1)
 			s.warnOversize(e, lineBytes)
 			return false, nil
 		}
-		s.oversizeTruncated++
+		s.linesTruncated.Add(1)
 		s.warnOversize(e, lineBytes)
 	} else {
 		line = bytes.TrimRight(line, "\r")
+	}
+
+	if s.multiline == nil {
 		if len(bytes.TrimSpace(line)) == 0 {
 			return false, nil // blank line: consumed, not emitted (v1 behavior)
 		}
+		return s.emitMessageLocked(e, line, emit)
 	}
-	end := e.offset
+
+	// Multiline: classify the line. A blank line is a candidate like any
+	// other; a group made only of whitespace is dropped at flush.
+	hit := s.multiline.pattern.Match(line)
+	if s.multiline.negate {
+		hit = !hit
+	}
+	continuation := hit
+	if s.multiline.before {
+		continuation = !hit
+	}
+	if e.groupOpen && continuation {
+		// The caps flush the open group early and start a new one with this
+		// line (design §2.4); a single line over max_bytes still becomes its
+		// own group, because the next line triggers the same check.
+		if e.groupLines >= s.multiline.maxLines || e.groupBytes+int64(len(line))+1 > int64(s.multiline.maxBytes) {
+			em, err := s.flushGroupLocked(e, emit)
+			if err != nil {
+				return em, err
+			}
+			s.startGroupLocked(e, line, now)
+			return em, nil
+		}
+		s.multilineMerges.Add(1)
+		e.group = append(e.group, '\n')
+		e.group = append(e.group, line...)
+		e.groupLines++
+		e.groupBytes = int64(len(e.group))
+		e.groupLast = now
+		e.groupEnd = e.offset
+		return false, nil
+	}
+	// A new group starts here: flush the open one first.
+	em, err := s.flushGroupLocked(e, emit)
+	if err != nil {
+		return em, err
+	}
+	s.startGroupLocked(e, line, now)
+	return em, nil
+}
+
+func (s *fileSource) startGroupLocked(e *trackedFile, line []byte, now time.Time) {
+	e.group = append(e.group[:0], line...)
+	e.groupLines = 1
+	e.groupBytes = int64(len(e.group))
+	e.groupLast = now
+	e.groupEnd = e.offset
+	e.groupOpen = true
+}
+
+// flushGroupLocked emits the open group as ONE message and records the end
+// offset of its LAST line in pending, so a restart resumes after the whole
+// group. A group made only of whitespace lines is consumed without a message.
+// Flush triggers: a new group-starting line, max_lines/max_bytes, timeout_ms,
+// rotation/truncation and stop-mode EOF — never Close: an uncommitted group
+// is re-read after a restart (at-least-once, never loss).
+func (s *fileSource) flushGroupLocked(e *trackedFile, emit func(registry.Message) error) (bool, error) {
+	if !e.groupOpen {
+		return false, nil
+	}
+	buf, end := e.group, e.groupEnd
+	e.group, e.groupLines, e.groupBytes, e.groupLast, e.groupEnd, e.groupOpen = nil, 0, 0, time.Time{}, 0, false
+	if len(bytes.TrimSpace(buf)) == 0 {
+		return false, nil
+	}
 	s.nextSeq++
 	seq := s.nextSeq
 	s.pending[seq] = filePending{id: e.id, end: end}
 	msg := registry.Message{
-		Raw:     bytes.Clone(line),
-		Meta:    map[string]any{"file_path": e.path, "host": s.host},
+		Raw:     bytes.Clone(buf),
+		Meta:    s.messageMeta(e),
 		SrcName: "file",
 		SrcSeq:  seq,
 	}
@@ -529,14 +756,60 @@ func (s *fileSource) emitLineLocked(e *trackedFile, line []byte, lineBytes int64
 	return true, nil
 }
 
+// emitMessageLocked emits one single-line message and records its end offset
+// in pending so Commit folds it into the file's watermark.
+func (s *fileSource) emitMessageLocked(e *trackedFile, line []byte, emit func(registry.Message) error) (bool, error) {
+	end := e.offset
+	s.nextSeq++
+	seq := s.nextSeq
+	s.pending[seq] = filePending{id: e.id, end: end}
+	msg := registry.Message{
+		Raw:     bytes.Clone(line),
+		Meta:    s.messageMeta(e),
+		SrcName: "file",
+		SrcSeq:  seq,
+	}
+	if err := emit(msg); err != nil {
+		return true, err
+	}
+	return true, nil
+}
+
+// messageMeta builds the per-message meta map: the matched path, the
+// configured host and — when the basename has the container-log shape
+// <pod>_<namespace>_<container>-<id>.log — the parsed Kubernetes fields. The
+// parse is purely path-derived (no k8s API); a host file that happens to
+// match the shape just gets harmless extra fields (design §2.3, P3).
+func (s *fileSource) messageMeta(e *trackedFile) map[string]any {
+	meta := map[string]any{"file_path": e.path, "host": s.host}
+	if pod, namespace, container, ok := parseContainerPath(e.path); ok {
+		meta["pod"], meta["namespace"], meta["container"] = pod, namespace, container
+	}
+	return meta
+}
+
+// containerLogName matches the container-log basename the kubelet writes:
+// pod, namespace and container names cannot contain underscores, and the
+// runtime id is lowercase hex (64 chars for Docker/containerd; any length of
+// hex is accepted, so the id itself is not captured).
+var containerLogName = regexp.MustCompile(`^([^_]+)_([^_]+)_([^_]+)-[0-9a-f]+\.log$`)
+
+func parseContainerPath(path string) (pod, namespace, container string, ok bool) {
+	m := containerLogName.FindStringSubmatch(filepath.Base(path))
+	if m == nil {
+		return "", "", "", false
+	}
+	return m[1], m[2], m[3], true
+}
+
 // warnOversize logs at the first few oversized lines and at powers of two
 // after that, so a pathological file cannot turn the warning into a second
-// data stream. The exact counts stay available for tests (S4 wires metrics).
+// data stream. The exact counts are exposed through Counters().
 func (s *fileSource) warnOversize(e *trackedFile, lineBytes int64) {
 	if s.warnf == nil {
 		return
 	}
-	n := s.oversizeTruncated + s.oversizeSkipped
+	n := s.linesTruncated.Load() + s.linesSkipped.Load()
 	if n <= 3 || n&(n-1) == 0 {
 		s.warnf("file source: %s: line of %d bytes exceeds max_line_bytes=%d (%s)",
 			e.path, lineBytes, s.maxLineBytes, s.oversize)
@@ -544,13 +817,17 @@ func (s *fileSource) warnOversize(e *trackedFile, lineBytes int64) {
 }
 
 // reapLocked closes descriptors that have been idle for close_inactive and
-// forgets removed files according to clean_removed. Closing discards the
+// forgets removed files according to clean_removed. An open multiline group
+// is flushed before its descriptor closes (a group never outlives its
+// descriptor: the timeout would flush it eventually, but close is the last
+// moment the lines can be emitted without a re-read). Closing discards the
 // in-memory half-line; a reopen seeks back to the read watermark and re-reads
 // it from the file, so nothing is lost while the file remains.
-func (s *fileSource) reapLocked(now time.Time) {
+func (s *fileSource) reapLocked(now time.Time, emit func(registry.Message) error) (bool, error) {
 	if s.closeInactive == 0 && !s.cleanRemoved {
-		return
+		return false, nil
 	}
+	emitted := false
 	for _, e := range s.files {
 		if e.f == nil {
 			if e.removed && s.cleanRemoved {
@@ -561,11 +838,19 @@ func (s *fileSource) reapLocked(now time.Time) {
 		if s.closeInactive == 0 || now.Sub(e.lastRead) < s.closeInactive {
 			continue
 		}
+		em, err := s.flushGroupLocked(e, emit)
+		if em {
+			emitted = true
+		}
+		if err != nil {
+			return emitted, err
+		}
 		s.closeLocked(e)
 		if e.removed && s.cleanRemoved {
 			s.forgetLocked(e)
 		}
 	}
+	return emitted, nil
 }
 
 func (s *fileSource) closeLocked(e *trackedFile) {
@@ -660,6 +945,9 @@ func (s *fileSource) marshalStateLocked() []byte {
 	return st
 }
 
+// Close releases every descriptor. It deliberately does NOT flush an open
+// multiline group: the group is uncommitted, so a restart re-reads it from
+// the persisted watermark (at-least-once, never loss; design §2.4).
 func (s *fileSource) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -670,6 +958,25 @@ func (s *fileSource) Close() error {
 		}
 	}
 	return nil
+}
+
+// Counters implements registry.CounterSource: the monotonic health counters
+// ops polls into telemetry. The names are the plugin's contract and are
+// documented in docs/collector.md:
+//
+//	lines_read       complete lines parsed (blank and oversize included)
+//	lines_skipped    oversize: skip drops
+//	lines_truncated  oversize: truncate emissions
+//	rotations        files replaced at a matched path (identity change)
+//	multiline_merges continuation lines appended to an open group
+func (s *fileSource) Counters() map[string]int64 {
+	return map[string]int64{
+		"lines_read":       s.linesRead.Load(),
+		"lines_skipped":    s.linesSkipped.Load(),
+		"lines_truncated":  s.linesTruncated.Load(),
+		"rotations":        s.rotations.Load(),
+		"multiline_merges": s.multilineMerges.Load(),
+	}
 }
 
 // hasGlobMeta reports whether path carries glob metacharacters. A meta-free

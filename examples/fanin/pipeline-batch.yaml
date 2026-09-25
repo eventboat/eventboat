@@ -35,5 +35,6 @@ sinks:
   audit:
     depends_on: [stamp]
     encoder: json
+    batch: { size: 10, timeout_ms: 200 }
     file:
       path: output/audit.jsonl

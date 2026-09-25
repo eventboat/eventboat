@@ -1068,6 +1068,90 @@ func lint(p *Pipeline, file string, add func(config.Diagnostic)) {
 				Hint:    hint})
 		}
 	}
+	lintCollector(p, file, add)
+}
+
+// vlDefaultMaxLineBytes is VictoriaLogs' -insert.maxLineSizeBytes default: a
+// longer line is skipped server-side while the request still answers 200, so
+// the mismatch is invisible without the lint (design §2.6.3).
+const vlDefaultMaxLineBytes = 262144
+
+// lintCollector implements the log-collection guardrails of design §2.6.3.
+// All three fire only on pipelines that actually have a file source; the
+// file/multiline blocks are read from the raw plugin config because the lint
+// runs before (and independently of) the plugin factory, and "explicitly set"
+// is exactly the distinction the raw map preserves.
+func lintCollector(p *Pipeline, file string, add func(config.Diagnostic)) {
+	hasFileSource := false
+	hasVLSink := false
+	for _, name := range p.Order {
+		n := p.Nodes[name]
+		if n.Section == config.SectionSource && n.Config.Plugin == "file" && n.Config.Grpc == nil {
+			hasFileSource = true
+		}
+		if n.Section == config.SectionSink && n.Config.Plugin == "victorialogs" {
+			hasVLSink = true
+		}
+	}
+	if !hasFileSource {
+		return
+	}
+	for _, name := range p.Order {
+		n := p.Nodes[name]
+		switch {
+		case n.Section == config.SectionSource && n.Config.Plugin == "file" && n.Config.Grpc == nil:
+			pc, _ := n.Config.PluginConfig.(map[string]any)
+			if hasVLSink {
+				if v, ok := rawInt(pc["max_line_bytes"]); ok && v > vlDefaultMaxLineBytes {
+					add(config.Diagnostic{Severity: "warning", Code: "lint_line_bytes_over_vl", File: file,
+						Line: n.Config.Line,
+						Message: fmt.Sprintf("source %q raises max_line_bytes to %d but the pipeline ships to victorialogs: lines longer than %d are skipped server-side (the request still answers 200)",
+							name, v, vlDefaultMaxLineBytes),
+						Hint: "keep max_line_bytes <= 262144, or raise -insert.maxLineSizeBytes on the VictoriaLogs side to match"})
+				}
+			}
+			if ml, ok := pc["multiline"].(map[string]any); ok {
+				if v, present := rawInt(ml["timeout_ms"]); present && v == 0 {
+					add(config.Diagnostic{Severity: "warning", Code: "lint_multiline_no_timeout", File: file,
+						Line: n.Config.Line,
+						Message: fmt.Sprintf("source %q sets multiline.timeout_ms: 0: an open group has no time-based flush, so an isolated trailing group waits for the next group-starting line (or max_lines/max_bytes)",
+							name),
+						Hint: "omit timeout_ms (default 2000) or set a positive value; 0 is only safe when every group is closed by a following line"})
+				}
+			}
+		case n.Section == config.SectionSink && n.Config.Plugin != "drop" && n.Config.Plugin != "debug":
+			// lint_collector_batch_one: a real sink whose effective batch.size
+			// is 1 (unset, or explicitly 1 — a batch block without size keeps
+			// the framework default).
+			size := 1 // framework.BatchSizeDefault, not repeated in typed config
+			if n.Config.Batch != nil {
+				size = n.Config.Batch.Size
+			}
+			if size == 1 {
+				add(config.Diagnostic{Severity: "warning", Code: "lint_collector_batch_one", File: file,
+					Line: n.Config.Line,
+					Message: fmt.Sprintf("sink %q keeps the effective batch.size at 1 in a pipeline with a file source: the collection shape should ship batches (one POST/write per batch)",
+						name),
+					Hint: "set batch: {size: 500, timeout_ms: 2000} (or another size) on the sink"})
+			}
+		}
+	}
+}
+
+// rawInt reads an integer from a raw YAML-decoded config value (integral
+// scalars decode as int; a JSON round trip would give float64). ok is false
+// when the key is absent or not numeric.
+func rawInt(v any) (int, bool) {
+	switch t := v.(type) {
+	case int:
+		return t, true
+	case int64:
+		return int(t), true
+	case float64:
+		return int(t), true
+	default:
+		return 0, false
+	}
 }
 
 // resolveCodec validates the codec a decoder/encoder references: declared

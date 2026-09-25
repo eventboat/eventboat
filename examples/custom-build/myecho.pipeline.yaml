@@ -12,5 +12,6 @@ sinks:
   echoed:
     depends_on: [ingest]
     encoder: json
+    batch: {size: 10, timeout_ms: 200}
     myecho:
       path: output/echoed.out.jsonl

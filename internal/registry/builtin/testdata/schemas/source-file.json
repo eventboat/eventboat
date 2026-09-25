@@ -55,6 +55,48 @@
       "default": "truncate",
       "description": "truncate emits the first max_line_bytes of an oversized line; skip drops it and counts"
     },
+    "multiline": {
+      "type": "object",
+      "required": ["pattern"],
+      "properties": {
+        "pattern": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Go regexp classifying lines (see match/negate)"
+        },
+        "negate": {
+          "type": "boolean",
+          "default": false,
+          "description": "invert the pattern result before match is applied"
+        },
+        "match": {
+          "type": "string",
+          "enum": ["after", "before"],
+          "default": "after",
+          "description": "after: a hit is a continuation line; before: a hit starts a new group"
+        },
+        "max_lines": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 500,
+          "description": "flush an open group at this many lines"
+        },
+        "max_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 1.048576e+06,
+          "description": "flush an open group at this many bytes"
+        },
+        "timeout_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 2000,
+          "description": "flush an open group this long after its last line (0 = no timeout)"
+        }
+      },
+      "additionalProperties": false,
+      "description": "aggregate multi-line records (e.g. stack traces) into one message"
+    },
     "host": {
       "type": "string",
       "description": "value for meta.host; defaults to os.Hostname()"

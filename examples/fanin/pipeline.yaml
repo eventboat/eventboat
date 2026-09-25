@@ -28,5 +28,9 @@ sinks:
   audit:
     depends_on: [stamp]
     encoder: json
+    # One write per batch: the collection shape (verify's
+    # lint_collector_batch_one warns when a file-sourced pipeline leaves the
+    # effective batch.size at 1).
+    batch: { size: 10, timeout_ms: 200 }
     file:
       path: output/audit.jsonl

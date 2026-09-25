@@ -25,10 +25,12 @@ sinks:
   eu-out:
     depends_on: { enrich: { when: 'payload.region == "eu"' } }
     encoder: json
+    batch: { size: 10, timeout_ms: 200 }
     file:
       path: output/eu.jsonl
   us-out:
     depends_on: { enrich: { when: 'payload.region == "us"' } }
     encoder: json
+    batch: { size: 10, timeout_ms: 200 }
     file:
       path: output/us.jsonl
