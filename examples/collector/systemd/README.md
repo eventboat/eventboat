@@ -13,8 +13,9 @@ the rotated file and nothing is lost.
 
 Avoid **`copytruncate`** where `create` mode is possible: the file is
 rewritten in place, so the collector's byte offset no longer matches and it
-re-reads the file from the start — handled (a truncated file resets to 0 and
-keeps going; duplicates, never a silent stall, design
+re-reads the file from the start — handled, including a rewrite that already
+regrew past the old offset (a size check plus a consumed-bytes fingerprint
+detect it; duplicates, never a silent stall or loss, design
 `docs/design/2026-09-24-log-collection.md` §2.3), but duplicates are still
 avoidable. A sample config:
 

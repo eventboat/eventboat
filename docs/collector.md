@@ -61,7 +61,7 @@ metadata (`namespace`/`pod`/`container`) are built in (design §2.4 / §2.3).
 | `close_inactive_ms` | `300000` | close a file's descriptor after this much idle time; it reopens when the file changes (`0` = never close) |
 | `ignore_older_ms` | `0` | skip files whose mtime is older than this when first discovered (`0` = off) |
 | `clean_removed` | `true` | drop the state of files that no longer match the glob once they are drained and closed |
-| `max_line_bytes` | `262144` | maximum line length in bytes (aligned with VictoriaLogs' `-insert.maxLineSizeBytes`; the buffer is capped, an oversized line never blows up memory) |
+| `max_line_bytes` | `262144` | maximum **raw** line length in bytes (the read buffer is capped; an oversized line never blows up memory). The sink has its own guard on the **encoded** line with the same default — keep both `<=` VictoriaLogs' `-insert.maxLineSizeBytes` |
 | `oversize` | `truncate` | `truncate` emits the first `max_line_bytes` of an oversized line (the decode/DLQ path makes it visible); `skip` drops the line and counts it |
 | `multiline` | off | aggregate multi-line records (stack traces) into one message — see [Multiline](#multiline) |
 | `host` | `os.Hostname()` | value carried as `meta.host` |
@@ -99,7 +99,9 @@ Line and lifecycle semantics:
 
 Text logs (Java stacks, Go panics, Python tracebacks) need several lines per
 event. `multiline` classifies every complete line with a Go regexp and joins
-the group with `\n` into **one** message:
+the group with `\n` into **one** message. Text is not JSON, so the group must
+be wrapped into an object before the sink — VictoriaLogs' jsonline endpoint
+ingests objects only, and the sink guard refuses anything else:
 
 ```yaml
 sources:
@@ -117,7 +119,24 @@ sources:
         timeout_ms: 2000       # incoming line; timeout flushes a group when
                                # no new line arrived (0 = no timeout — the
                                # lint_multiline_no_timeout warning)
+transforms:
+  wrap:
+    depends_on: [logs]
+    fields:
+      wrap_field: msg          # non-map payload -> {msg: <the stack trace>}
+      fields: {app: nginx}
+      from_meta: [file_path, host]
+sinks:
+  victorialogs:
+    depends_on: [wrap]
+    encoder: json
+    victorialogs: {url: http://127.0.0.1:9428, stream_fields: host,app, time_field: ts}
 ```
+
+`wrap_field` only applies when the payload is not a map (a JSON-decoded line
+is already an object and passes through untouched), which is exactly the text
+and multiline case. `lint_vl_nonobject_payload` warns when a `raw` decoder can
+reach a VictoriaLogs target without such a wrapper.
 
 The equivalent `before` shape, where the pattern matches the first line of a
 group and everything else continues it:
@@ -144,12 +163,14 @@ Rules to rely on:
   `oversize: truncate` joins the truncated content.
 - Without `multiline` every line is one message, exactly as before.
 
-The `fields` transform copies configured values into the payload map; the
-payload must be a map (anything else is a typed transform failure, retried
-then dead-lettered). Application order is payload copy, then `from_meta`
-(missing keys are skipped), then `fields` — so an explicitly configured field
-overrides both the payload and a meta-derived one. `${VAR}` and
-`${constants.x}` substitution runs before the plugin sees the values.
+The `fields` transform copies configured values into the payload map; a
+non-map payload is a typed transform failure (retried then dead-lettered)
+**unless** `wrap_field` is set, in which case the payload becomes
+`{wrap_field: <payload>}` first (the text/multiline shape above). Application
+order is payload copy, then `from_meta` (missing keys are skipped), then
+`fields` — so an explicitly configured field overrides both the payload and a
+meta-derived one. `${VAR}` and `${constants.x}` substitution runs before the
+plugin sees the values.
 
 The example ships a contract suite (`tests/collector.yaml`: the stamp, the
 timestamp backfill, the malformed-line DLQ path) that `eventboat test` runs
@@ -178,11 +199,13 @@ omitting one lets VictoriaLogs apply its own default.
 
 Error mapping follows VictoriaLogs' own semantics:
 
-- **2xx — committed.** VictoriaLogs *skips unparseable lines server-side and
-  still answers 200*, which is why the body must be codec-encoded JSON
-  (`encoder: json`) and why the file source keeps `max_line_bytes` aligned
-  with VL's `-insert.maxLineSizeBytes`: a raw-text body would lose lines
-  silently.
+- **2xx — committed.** VictoriaLogs *skips unparseable or oversized lines
+  server-side and still answers 200*, which is why the sink validates every
+  encoded line before shipping: it must be a JSON **object**, the Raw fallback
+  must be valid JSON, and it must fit the sink's `max_line_bytes` (default
+  262144, VL's `-insert.maxLineSizeBytes`). A violation fails the batch into
+  the dead-letter queue with the message id and a bounded fragment — never a
+  silent 200.
 - **4xx — permanent.** VL returns 4xx only when the whole batch is
   unparseable; the edge's delivery policy exhausts and the batch dead-letters.
   Re-sending cannot help.
@@ -224,7 +247,10 @@ Use them to size the knobs (design §2.6.2): a rising `lines_skipped` says
 - **VM / bare metal** ([`systemd/`](../examples/collector/systemd)):
   the unit template plus logrotate guidance — `create` mode is preferred;
   `copytruncate` rewrites the file in place and the tailer restarts at 0 on
-  the next scan (duplicates, no stall; design §2.3).
+  the next scan — detected either because the size fell below the consumed
+  extent or because the consumed-bytes fingerprint changed (a rewrite that
+  regrew past the old offset), so duplicates are possible but no line is lost
+  (design §2.3).
 - **Mixed estates**: per-role pipeline files under `--config-dir`, with
   per-host values injected through `${VAR}` substitution (the DaemonSet
   template feeds the node name into the `host` constant this way).

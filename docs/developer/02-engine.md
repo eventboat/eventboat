@@ -164,6 +164,24 @@ overrides per edge (`internal/ir/ir.go`): `Required` (default **true**),
   just-committed seqs plus the per-source frontier snapshot become the
   callback payload. Callbacks run *outside* the tracker lock (they do store
   I/O; the lock must not convoy on fsync).
+- **The hole barrier (adversarial review 2026-09-26).** A seq with no
+  outstanding entry stops the scan unless it carries a `removed` mark — the
+  record `forceTerminal` leaves when the abandon path deliberately terminates
+  a message (its durable dead letter is already written). An unmarked absence
+  is the `AppendSpool → arrived` window: the row is durable but not yet
+  registered, so it is **not** committed and the checkpoint must not cross it.
+  Treating that absence as committed let a crash replay from beyond a row that
+  was never delivered, which no-cursor sources (cron, http_server) cannot
+  re-emit. Marks are consumed by the sweep and bounded by the in-flight
+  window. The straggler branch (a `forceTerminal` racing an in-flight
+  `arrived`) still delivers the late terminal event and now also sweeps the
+  source refs under the cursor.
+- **Restart seeding.** `resumeCheckpoint` moves the cursor and the
+  persistence barriers to the recovered checkpoint: rows at or below it are
+  committed by definition and are never registered in the new run, so the
+  barrier must start past them (otherwise the prefix would stall on the first
+  pre-checkpoint seq and `WaitCommit`/`Quiesced` would wait for a flush that
+  already happened). A fresh tracker starts its cursor at seq 1.
 - **Ordered `srcRefs` FIFO.** Each source emission is recorded as
   `(spool seq, node, srcSeq)`. Arrival is near-ordered (each source
   goroutine appends and registers back-to-back), but two sources racing
@@ -305,6 +323,14 @@ disables companion collection (write-through). Observed batch sizes are
 available through the optional `WriteOptions.OnBatch(rows, waited)` hook; the
 store stays a leaf and never imports telemetry (§2.6.3 is the tuning
 surface).
+
+**Bounds and fairness.** `storage.write_batch.max_rows` is capped at 2000
+(a Runtime load error above it; the store clamps defensively): 2000 rows is
+18000 SQL bindings, and a larger group would exceed the driver's parameter
+limit, fail the whole transaction and refuse every waiter in a loop. A
+checkpoint or source-state request whose value is already durable (a later
+group carried a higher one) is resolved *before* its group's transaction, so a
+failing sibling statement cannot refuse a caller whose value is safe.
 
 ## Recovery
 

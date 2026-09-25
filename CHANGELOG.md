@@ -256,6 +256,37 @@ hygiene findings.
 
 ### Fixed
 
+- **The checkpoint could cross a durable-but-undelivered row** (adversarial
+  review of the log-collection plan, red team B): `advanceLocked` treated a
+  missing outstanding entry as committed, so a spool seq that was appended but
+  not yet `arrived` (the admission window) could be swept over and the
+  checkpoint persisted beyond it; a crash then replayed from beyond a row that
+  had never been delivered — cursor sources re-emit it, but `cron` and
+  `http_server` have no cursor and lost it. An unmarked absence is now a
+  **barrier** (only `forceTerminal`'s deliberate removals carry a mark and are
+  crossable), a restart seeds the cursor and the persistence barriers from the
+  recovered checkpoint (`resumeCheckpoint`), the straggler guard also sweeps
+  the source refs under the cursor (a stalled per-source frontier re-sent
+  committed messages after a restart), and `storage.write_batch.max_rows` is
+  capped at 2000 — 4000 rows bound 36000 SQL parameters, past the driver's
+  limit, so every waiter was refused and the source re-emitted into the same
+  failure. A superseded checkpoint/source-state waiter is resolved before its
+  transaction, so a failing sibling statement cannot refuse a caller whose
+  value is already durable. Tests: the gated-store reproduction (the
+  checkpoint does not cross; a restart replays; releasing the row does not
+  wedge), the rewritten barrier/straggler tests, the clamp and the
+  superseded-waiter case; the eight invariants are untouched and the P1 gate
+  shape still measures 25.6K rows/s.
+- **copytruncate lost lines when the rewrite regrew past the read offset**
+  (adversarial review, own attack): the `size < offset` check cannot see a
+  rewrite whose new content is already longer, so the descriptor stayed
+  mid-file and the new content's first lines were never read (a manual-poll
+  reproduction lost a whole line). The source now fingerprints the last
+  consumed bytes (`tailFingerprintBytes`) and resets to 0 on a mismatch, and
+  the size check covers the partial line's extent; four regression tests cover
+  the regrown rewrite, truncation into the partial, pure appends (no false
+  positive) and a rewrite while the descriptor was closed.
+
 - **Commit-tracker straggler registration** (found by the P1 group-commit
   benchmark): a spool seq whose `arrived()` landed after the contiguous-prefix
   sweep had already passed it — two sources between `AppendSpool` and
@@ -267,8 +298,8 @@ hygiene findings.
   messages under the SQLite throughput benchmark. `commitTracker.add` now
   delivers the terminal event when a below-cursor seq's branches drain
   (`TestCommitTrackerStragglerDeliversTerminalEvent`); the sweep's hole
-  tolerance is unchanged, so burned seqs from failed batches still cannot pin
-  the prefix.
+  tolerance was later replaced by the hole barrier in the adversarial-review
+  fix below.
 
 - **Branch isolation (new invariant 8, `TestInvariant_BranchIsolation`)**:
   fan-out siblings share the underlying `msg.Decoded` / `msg.Meta` maps, and

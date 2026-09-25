@@ -83,6 +83,7 @@ object per line.
 | `max_idle_conns` | `2` | transport connection reuse (one sink goroutine by design) |
 | `timeout_ms` | `10000` | request timeout |
 | `account_id` / `project_id` | — | tenant headers |
+| `max_line_bytes` | `262144` | guard on the **encoded** line (VL jsonline skips longer lines while answering 200); the sink also requires each line to be a JSON object and validates the Raw fallback |
 
 **Error mapping** (VL semantics verified against the docs and issues):
 
@@ -135,7 +136,7 @@ regardless of caller cancellation; only an append *failure* is a refusal.
 | Glob | `path` accepts a glob (`*`/`?`/`[...]`); per-file state, versioned JSON: `{"version":2,"files":{"<id>":{"path":"...","offset":N}}}` (v1 `{"offset":N}` is still applied to a meta-free single path) |
 | Identity | `(device, inode)` on Unix, volume serial number + file index on Windows (path fallback on other platforms); the symlink path is kept for metadata, the target for identity |
 | Rotation | Same path, new identity → finish the old fd to EOF (emit what remains), then open the new file from `start_at` |
-| Truncation | Same identity, `size < offset` → reset to 0 and continue (copytruncate; duplicates are acceptable) |
+| Truncation | Same identity, the size falls below the consumed extent (`offset+partialBytes`) **or** the consumed-bytes fingerprint no longer matches → reset to 0 and continue (copytruncate, including a rewrite that regrew past the old offset; duplicates are acceptable) |
 | Deleted files | Finish the held fd, then drop state (`clean_removed`) |
 | fd management | `close_inactive_ms` (default 5m), `ignore_older_ms` (default 0), scan interval `poll_every_ms` (default 250 — the pre-v2 name is kept; it covers the glob rescan and the per-file poll) |
 | Line bound | `max_line_bytes` (default 256 KiB, aligned to VL's default), `oversize: truncate \| skip` — truncate emits the first N bytes (the decode/DLQ path makes it observable), skip drops the line and counts it; never a silent drop, and the read buffer is capped at `max_line_bytes` |
@@ -245,9 +246,10 @@ telemetry, **pipeline** for per-pipeline semantics. Principles:
   - `lint_collector_batch_one` — file source + sink `batch.size: 1`: the
     collection shape wants batching.
 - **Runtime load validation**: non-negative integers, `max_wait_ms ≥ 0`,
-  helpful hint text; a value that is syntactically valid but operationally
-  dangerous gets a warning in the effective-values line at startup
-  (`storage: batch 256 rows / 2 ms, checkpoint every advance`).
+  `max_rows ≤ 2000`, helpful hint text. **The startup effective-values echo
+  planned here was not implemented** (P4 review, 2026-09-25): `eventboat verify`
+  plus `docs/tuning.md` are the effective-value reference today; an echo would
+  need a startup log surface the daemon does not have yet.
 - **Metrics → knob map** (the tuning doc's decision table): file rows read /
   skipped / truncated, rotations, multiline merges, spool append latency,
   commit latency histogram, backpressure events, sink batch size and latency,
@@ -319,7 +321,7 @@ before the fix) and the baseline gofmt break (`29b63ed`).
 |---|---|
 | Tail edge cases (rotation races, inode reuse, partial lines, multiline across rotation) are where Fluent Bit/Filebeat spent years | The P2 scenario matrix is the acceptance contract for correctness (no line loss; duplicates allowed); the spool + DLQ + replay is the safety net the competitors lack; document exact semantics rather than chasing parity. |
 | Files rotated away before they are read | Keep the fd until EOF after rotation (Unix keeps the inode alive); document logrotate retention (`maxsize`, delete policy) needed for pathological rates. |
-| VL returns 200 while skipping invalid lines | Bodies are codec-encoded JSON (structurally valid); `max_line_bytes` aligned with VL's limit; monitor `vl_http_errors_total` and alert. |
+| VL returns 200 while skipping invalid lines | The sink validates every encoded line (JSON object, Raw fallback valid JSON, encoded size within its `max_line_bytes`) and fails the batch into the DLQ with the message id instead of trusting the 200; monitor `vl_too_long_lines_skipped_total` (oversized) and `vl_http_errors_total` (unparseable) for anything the guard could not see. |
 | Duplicates (at-least-once, crash replay, copytruncate re-reads) | Documented contract; VL stores duplicates — operations dashboards should expect them after restarts. No dedup in this program. |
 | Group-commit latency and orphan rows | Bounded wait (default 2 ms); cancellation rule in §2.2; explicit tests. |
 | Single-writer lease on network filesystems | hostPath/local disk or block-backed PVC; documented in `docs/k8s.md`. |
@@ -362,3 +364,70 @@ before the fix) and the baseline gofmt break (`29b63ed`).
 - **No dedup / exactly-once**: at-least-once stays the contract.
 - **No Planner-style write semantics** (upsert/SCD2): out of scope for log
   collection (already rejected in `competitor-research.md` §9.3).
+
+---
+
+## 8. Adversarial review (2026-09-26)
+
+The program was attacked before delivery by three red teams (the sink/lints/
+docs surface, the store/commit-tracker surface, and the file-source surface),
+each required to produce reproducible counterexamples rather than opinions.
+The review broke the "it is deliverable" claim in four places; all four were
+fixed, re-verified, and the fixes themselves re-attacked.
+
+**Fixed findings.**
+
+- **Silent loss through the sink's 200 (C).** The sink shipped the
+  *re-encoded* JSON, and `json.Marshal`'s HTML escaping turned `<` into six
+  bytes: a 100 KB line became 599 KB, past VL's `-insert.maxLineSizeBytes`, and
+  VL skipped it while answering 200 — the engine committed, the DLQ stayed
+  empty. Non-object JSON values (arrays, strings, numbers, null) were skipped
+  the same way. Fix (`e62b09b`): HTML escaping off, and the sink validates
+  every encoded line (JSON object, Raw fallback valid JSON, encoded size
+  within its `max_line_bytes`) and fails the batch into the DLQ with the
+  message id.
+- **Text logs could not be ingested at all (C).** `decoder: raw` produced a
+  JSON string, and no shape existed to wrap it into the object VL requires
+  (`fields` rejected non-map payloads; a Starlark root reassignment does not
+  reach the host). Fix: `fields.wrap_field` wraps a non-map payload, verified
+  end to end against a live VictoriaLogs with a multiline stack trace.
+- **Checkpoint crossed a durable-but-unregistered row (B).** The commit
+  tracker treated a missing outstanding entry as committed, so the
+  `AppendSpool → arrived` window could let the persisted checkpoint pass a row
+  that was never delivered; a crash then lost it for good on no-cursor sources
+  (cron, http_server). Fix (`aee2560`): intentional removals are marked, an
+  unmarked absence is a barrier, and a restart seeds the cursor and the
+  persistence barriers from the recovered checkpoint. The same review found
+  the straggler's source refs were never swept (stalled per-source frontier)
+  and `max_rows` had no upper bound (4000 rows → 36000 SQL bindings → a
+  permanent refusal loop); both fixed.
+- **copytruncate silently lost lines when the rewrite regrew past the read
+  offset (own attack).** The `size < offset` check cannot see a rewrite whose
+  new content is already longer; the descriptor stayed mid-file and the new
+  content's first lines were never read. Fix: the source fingerprints the last
+  consumed bytes (`tailFingerprintBytes`) and resets to 0 on a mismatch, plus
+  the size check now covers the partial line's extent. Four regression tests
+  (regrown rewrite, truncation into the partial, pure append no-false-
+  positive, rewrite while closed).
+
+**Also fixed from the review.** `eventboat_source_*` counters were only
+recorded when `ops.Status` was polled — never in a scrape-only deployment, and
+impossible for `run --config`; the engine now samples the deltas itself
+(throttled). The three collector lints were recalibrated (an `http` sink
+targeting `/insert/jsonline` is recognized; a raw decoder reaching VL without
+a wrapper warns; the batch lint only fires downstream of a file source). The
+shipped collector example's contract suite now passes from its own directory
+(the sample input moved out of the watched glob; the examples gate runs every
+suite from both the repo root and the example directory).
+
+**What the attacks could not break.** The group-commit store's Close/cancel
+semantics, seq assignment, coalescing monotonicity, batch-failure refusal and
+resource lifetime; the sink's gzip/tenant/parameter encoding; the eight
+reliability invariants; the engine's per-source frontier logic; the knob
+defaults and metric names as documented.
+
+**Accepted residual risks.** A guard refusal dead-letters the whole batch
+(one bad line carries its siblings; `batch.size` and the guard bound the
+blast radius). The guard names only the first offending message. Inode reuse
+on a rotated-away path can misalign a same-identity file (documented in §5).
+The re-attack pass found no further defects in the fixes.

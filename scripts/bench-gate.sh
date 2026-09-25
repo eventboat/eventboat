@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Loose performance regression gate (redesign-v3-review-beta.md R-B7).
 # Guards against ORDER-OF-MAGNITUDE regressions, not noise: limits are
-# ~5-15x the reference dev machine baselines (i5-14600KF; see the review
+# ~5-25x the reference dev machine baselines (i5-14600KF; see the review
 # appendix) to absorb shared-runner variance.
 set -euo pipefail
 
@@ -33,7 +33,7 @@ check ./internal/engine BenchmarkCommitThroughput/mem 100000
 # The engine benchmarks are sensitive to how many sub-benchmarks share the
 # process (calibration rounds accumulate), so each check must stay its own
 # `go test` process — which is what ns() does. Limits are deliberately loose
-# (15-25x): a shared 2-vCPU runner cannot reproduce these shapes, but a
+# (5-25x): a shared 2-vCPU runner cannot reproduce these shapes, but a
 # regression to per-message commits or a lost group commit still trips them.
 check ./internal/store BenchmarkAppendSpool/sqlite 250000
 check ./internal/store BenchmarkAppendSpool/sqlite_serial 1000000

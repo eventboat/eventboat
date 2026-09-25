@@ -94,21 +94,25 @@ data:
       logs:
         decoder: json
         # A glob: rotation (rename and recreate at the same path) is followed
-        # and files that appear later are picked up. Container-path metadata
-        # (namespace/pod/container) is the remaining file-source work
-        # (design §2.4). Point this at the workload's JSON-lines logs.
+        # and files that appear later are picked up. Container logs can point
+        # this at /var/log/containers/*.log: the path-derived
+        # namespace/pod/container metadata is automatic (design §2.3).
         file: {path: /var/log/app/*.jsonl}
     transforms:
       stamp:
         depends_on: [logs]
+        # Static fields + the file path, no Starlark needed.
+        fields:
+          fields: {host: "${constants.host}", app: "${constants.app}"}
+          from_meta: [file_path]
+      backfill:
+        depends_on: [stamp]
         script: |
-          payload.host = constants.host
-          payload.app = constants.app
           if "ts" not in payload:
               payload.ts = meta.ingest_time
     sinks:
       victorialogs:
-        depends_on: [stamp]
+        depends_on: [backfill]
         encoder: json
         batch: {size: 500, timeout_ms: 2000}
         victorialogs:

@@ -143,10 +143,13 @@ pipeline sets `dlq.retention`.
 ### Group commit: `storage.write_batch.*`
 
 The store has one writer goroutine; a batch is formed from the appends queued
-at the same moment, and `max_rows` (256) is a **ceiling**, not a trigger. A
-single hot file emits one line at a time (`one_source` shape), so its group is
-a group of one — raising `max_rows` cannot help; the serial accept path is the
-limit (~8 K lines/s on the reference machine). Many concurrent files are where
+at the same moment, and `max_rows` (256) is a **ceiling**, not a trigger. The
+Runtime loader rejects values above **2000** (a 4000-row group would bind 36000
+SQL parameters, past the driver's limit, and every waiter would be refused in a
+loop); the store clamps to the same bound defensively. A single hot file emits
+one line at a time (`one_source` shape), so its group is a group of one —
+raising `max_rows` cannot help; the serial accept path is the limit
+(~8 K lines/s on the reference machine). Many concurrent files are where
 grouping fills: group commit brought parallel appends from ~71 µs to
 ~11–13 µs each on the reference machine. `max_wait_ms` is a probe budget of
 scheduler yields, not a sleep: `0` writes through, larger values only help if
@@ -154,14 +157,29 @@ companions exist.
 
 ### Line bound
 
-Keep `max_line_bytes <=` VictoriaLogs' `-insert.maxLineSizeBytes` (both default
-to 256 KiB). A line above VL's limit is **skipped server-side while VL still
-answers 200**: no eventboat counter moves, and the only visible trace is
-VictoriaLogs' `vl_http_errors_total`. With `oversize: truncate` the truncated
-line is still a valid JSON object (the envelope is ours), so VL stores a
-shorter event; with `oversize: skip` eventboat counts it in
-`eventboat_source_lines_skipped_total` and never ships it. If you lower VL's
-limit, lower ours too.
+`max_line_bytes` bounds the **raw line** in the file; the sink ships the
+**encoded** JSON, which can be larger (escape sequences expand: `<`, `>` and
+`&` are no longer HTML-escaped, but control characters still are), so the sink
+has its own `max_line_bytes` guard (default 262144, the same value) on the
+**encoded** line and refuses a batch whose line would exceed it. VictoriaLogs
+skips a line above its `-insert.maxLineSizeBytes` **while still answering
+200**, which is why the guard exists: without it a raw line under the limit
+could be re-encoded past VL's and disappear silently. Keep the source and sink
+bounds `<=` VL's (they all default to 256 KiB). With `oversize: truncate` a
+truncated line is usually no longer valid JSON for `decoder: json`, so it
+dead-letters at decode and VL stores nothing (that is the observable path, not
+a shorter event); with `oversize: skip` eventboat counts it in
+`eventboat_source_lines_skipped_total` and never ships it. A line the sink
+guard refuses dead-letters with the message id and a bounded fragment, so
+nothing is lost: fix the producer and `replay`. If you lower VL's limit, lower
+ours too.
+
+Text logs (`decoder: raw`, multiline stack traces) must become a JSON
+**object** before the sink: VL's jsonline endpoint only ingests objects. Use
+the `fields` transform with `wrap_field` to wrap the payload, e.g.
+`fields: {wrap_field: msg, fields: {host: "${HOSTNAME}"}, from_meta: [file_path]}`.
+Without a wrapper the sink refuses the line (the guard catches the JSON
+string) instead of shipping something VL silently drops.
 
 ### Multiline timeout
 
@@ -181,14 +199,18 @@ a hard crash is the set of rows that were accepted but not yet durable and
 delivered — bounded by `limits.max_in_flight` plus the rows already beyond the
 durable checkpoint. Lowering `max_in_flight` and `multiline.timeout_ms`
 shrinks that window; a faster commit path (sink latency) shrinks it too.
-`copytruncate` rotation re-reads the file from 0 by design — prefer logrotate
-`create` mode.
+`copytruncate` rotation is detected — a size shrink below the consumed extent,
+or the consumed-bytes fingerprint no longer matching — and re-reads the file
+from 0 (duplicates, never loss); `create` mode is still preferable because it
+avoids the duplicates.
 
 ## Symptom → metric → knob
 
 Metric names are the Prometheus exposition at `/metrics`; `eventboat_source_*`
-counters are per `{pipeline,node}` and exported as deltas of the source
-plugin's own counters (a source restart re-baselines them).
+counters are per `{pipeline,node}`: the engine samples the source plugin's
+monotonic counters every second (`Options.SourceCounterInterval`) and exports
+positive deltas, so they are live without any status poll (a source restart
+re-baselines them).
 
 | Symptom | Look at | Likely cause | Knobs |
 |---|---|---|---|
@@ -199,7 +221,7 @@ plugin's own counters (a source restart re-baselines them).
 | **Disk keeps growing** | `eventboat_spool_depth` (rows beyond checkpoint), data-dir size, `eventboat_dead_letter_total` | sink is behind (checkpoint stalls, retention cannot trim) or dead letters accumulate | fix the sink; steady state: lower `storage.spool_retention`; dead letters: set `dlq.retention` (opt-in); outage backlog: lower `limits.max_in_flight` |
 | **Memory high / GC pressure** | `eventboat_in_flight_messages`, `eventboat_spool_depth` (only under `--ephemeral`), process RSS (the `/metrics` registry is Eventboat's own — no `go_*` runtime collectors) | the outage buffer, multiline groups or edge buffers are large | lower `limits.max_in_flight`; lower `multiline.max_lines`/`max_bytes`; lower edge `buffer.max_events`; `telemetry.span_sample_rate: 0` + Runtime `telemetry.sample_ratio: 0`; `GOGC`/`GOMEMLIMIT` live in the deployment manifest, not in Eventboat config |
 | **Commit latency too high** | `eventboat_commit_latency_seconds` p95/p99, `eventboat_spool_append_seconds` | batching waits (store group commit, sink batch, edge retries) | lower sink `batch.size`/`batch.timeout_ms`; lower `storage.write_batch.max_wait_ms` (even `0`); lower `delivery.timeout_ms`; lower `multiline.timeout_ms` — each buys latency with throughput |
-| **Lines skipped or truncated** | `eventboat_source_lines_skipped_total`, `eventboat_source_lines_truncated_total`, `eventboat_decode_errors_total`, `vl_http_errors_total` | a producer writes lines above `max_line_bytes`, or ours exceeds VL's limit (server-side silent skip) | align `max_line_bytes` with VL's `-insert.maxLineSizeBytes`; choose `oversize: skip` vs `truncate`; fix the producer if the size is unexpected |
+| **Lines skipped or truncated** | `eventboat_source_lines_skipped_total`, `eventboat_source_lines_truncated_total`, `eventboat_decode_errors_total`, `vl_too_long_lines_skipped_total` / `vl_http_errors_total` (VL side) | a producer writes lines above `max_line_bytes`, the encoded line exceeds the sink guard, or VL skips a line server-side (silent 200) | align the source and sink `max_line_bytes` with VL's `-insert.maxLineSizeBytes`; choose `oversize: skip` vs `truncate`; fix the producer if the size is unexpected; a sink-guard refusal is a DLQ entry naming the message id |
 | **Lines stop/stall after rotation** | `eventboat_source_rotations_total` rising while `eventboat_source_lines_read_total` is flat; host fd count | too-slow discovery, fd pressure, or the rotated file was deleted before it was drained | lower `poll_every_ms`; lower `close_inactive_ms` (or set `0` on modest file counts); check logrotate retention (`maxsize`, delete policy) keeps rotated files long enough |
 | **Duplicates grow after a restart** | `eventboat_spool_depth` before the crash, duplicate rows in VL queries | uncommitted rows were re-read (at-least-once), or `copytruncate` re-read from 0 | lower `limits.max_in_flight` and `multiline.timeout_ms` to shrink the window; prefer logrotate `create`; duplicates are the contract, not loss |
 | **Dead letters grow** | `eventboat_dead_letter_total{pipeline,node,reason_class}` by class, `eventboat_dlq_write_failures_total` | `decode`: malformed lines; `delivery`: sink rejects after retries; `encode`: payload not encodable | fix the producer or the sink; size `dlq.retention` against the backlog; a nonzero `dlq_write_failures` blocks commits — act immediately |
@@ -216,9 +238,13 @@ scrape picks up the last recorded value — poll `GET /admin/status.json`
 them fresh. A single `run --config` process has no HTTP surface and exports
 via OTLP only. VL-side metrics live on VictoriaLogs' own `/metrics`.
 
-**VictoriaLogs' `vl_http_errors_total` is the only face of lines VictoriaLogs
-rejects or skips while still answering 200.** Eventboat cannot see those.
-Alert on it, and keep `max_line_bytes <= -insert.maxLineSizeBytes`.
+**VictoriaLogs skips or rejects lines while still answering 200**, and only
+its own counters show it: too-long lines move `vl_too_long_lines_skipped_total`,
+unparseable lines move `vl_http_errors_total{path="/insert/jsonline"}`.
+Eventboat's sink guard refuses an encoded line that would trip either (size or
+object-ness) and dead-letters it instead, so the only remaining 200-skips come
+from data VL itself cannot store. Alert on both counters and keep the source
+and sink `max_line_bytes <= -insert.maxLineSizeBytes`.
 
 Minimal alert set (thresholds are starting points; tune per estate):
 
@@ -227,7 +253,7 @@ Minimal alert set (thresholds are starting points; tune per estate):
 | Backpressure sustained | `rate(eventboat_backpressure_events_total[5m]) > 0` for 10 min with `eventboat_in_flight_messages` near `limits.max_in_flight` | the sink is slower than the host's log rate | check `eventboat_sink_write_duration_seconds`, VL health, then the symptom table |
 | DLQ growth | any `increase(eventboat_dead_letter_total[5m])`, and `eventboat_dlq_write_failures_total > 0` | bad lines or a rejecting sink; write failures block commits | inspect `dlq_query` with `reason_class`; fix producer/sink |
 | Source stall | `increase(eventboat_source_lines_read_total[5m]) == 0` while logs are expected | tail stopped discovering/reading (rotation, fd, filesystem) | check `eventboat_source_rotations_total`, `poll_every_ms`, host fd limits |
-| VL errors | `rate(vl_http_errors_total[5m]) > 0` | lines skipped/refused server-side with 200 responses | compare `max_line_bytes` with `-insert.maxLineSizeBytes`; check VL disk/capacity |
+| VL errors | `rate(vl_http_errors_total[5m]) > 0` or `rate(vl_too_long_lines_skipped_total[5m]) > 0` | lines skipped/refused server-side with 200 responses (the sink guard should have caught them first) | compare the source/sink `max_line_bytes` with `-insert.maxLineSizeBytes`; check VL disk/capacity |
 | Spool failures | `increase(eventboat_spool_failures_total[5m]) > 0` | a message could not be made durable (not delivered) | check the data dir, disk full, store errors in the log |
 | Spool replay window | `eventboat_spool_depth` growing without a sink outage | checkpoint not advancing | check `eventboat_sink_write_duration_seconds` and the store log line |
 | Data-dir free space | free space on `storage.data_dir` below 20% | the spool grew — the pipeline will refuse writes when it is full | find why the checkpoint stopped; add disk (lowering `storage.spool_retention` does not trim while the checkpoint stalls) |
