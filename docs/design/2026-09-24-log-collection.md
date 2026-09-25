@@ -2,7 +2,7 @@
 
 | 状态 Status | 日期 Date | 关联 Links |
 |---|---|---|
-| Draft — P0–P4 implemented | 2026-09-24 | [Architecture deepening](../design/2026-09-23-architecture-deepening.md) (batch-flush direction, §R-B1) · [`competitor-research.md`](../../competitor-research.md) §4 (Fluentd / Fluent Bit) · [Kubernetes deployment](../k8s.md) · [`scripts/bench-gate.sh`](../../scripts/bench-gate.sh) |
+| Implemented (P0–P4) — all five stages landed | 2026-09-24 | [Architecture deepening](../design/2026-09-23-architecture-deepening.md) (batch-flush direction, §R-B1) · [`competitor-research.md`](../../competitor-research.md) §4 (Fluentd / Fluent Bit) · [Kubernetes deployment](../k8s.md) · [`scripts/bench-gate.sh`](../../scripts/bench-gate.sh) |
 
 This document is the design of record for using Eventboat as the log
 collector in a file-based collection scenario — host files and container logs,
@@ -290,15 +290,26 @@ commit; `CHANGELOG.md` entries at commit time (per repo convention).
 
 | Stage | Scope | Acceptance gate |
 |---|---|---|
-| **P0** | `victorialogs` sink (batch JSONL, params, tenant, gzip, error mapping); collection example pipeline; DaemonSet + systemd templates; `docs/collector.md` | unit tests for body/params/error mapping; `eventboat test` contract case; env-gated integration test against a real VictoriaLogs (query back via `/select/logsql/query`) |
-| **P1** | group commit: single writer, multi-row `AppendSpool`, coalesced `SetCheckpoint`/`SetSourceState`; `storage.write_batch.*`, `storage.checkpoint_interval_ms`; append/commit metrics | eight invariants green unchanged; orphan-row-on-cancel test; kill -9 mid-batch leaves no unregistered rows; durable end-to-end ≥ 20 K rows/s on the reference machine (recorded) |
-| **P2** | file source v2: glob, inode identity, rotation/truncation, symlinks, per-file state, `close_inactive`/`ignore_older`, `max_line_bytes`/`oversize`, `file_path`/host metadata; `fields` transform | scenario matrix green: kill -9 / rotation / copytruncate / symlink / deleted-file; restart resumes per file; state format v1→v2 compat test |
-| **P3** | multiline aggregation; container-path metadata; verify lints (§2.6.3); collection metrics | stack-trace aggregation test; lint tests; metrics asserted against `/metrics` |
-| **P4** | `docs/tuning.md` (symptom → metric → knob table, sizing formulas); dashboard/alert notes (incl. `vl_http_errors_total`); `scripts/bench-collect.sh` | doc index updated; bench script runs and prints reference numbers |
+| **P0** (`ca5d489`) | `victorialogs` sink (batch JSONL, params, tenant, gzip, error mapping); collection example pipeline; DaemonSet + systemd templates; `docs/collector.md` | unit tests for body/params/error mapping; `eventboat test` contract case; env-gated integration test against a real VictoriaLogs (query back via `/select/logsql/query`) |
+| **P1** (`3fcbb5c`) | group commit: single writer, multi-row `AppendSpool`, coalesced `SetCheckpoint`/`SetSourceState`; `storage.write_batch.*`; append metrics (`storage.checkpoint_interval_ms` was trimmed — §2.6.2) | eight invariants green unchanged; orphan-row-on-cancel test; kill -9 mid-batch leaves no unregistered rows; durable end-to-end ≥ 20 K rows/s on the reference machine (recorded) |
+| **P2** (`76ea576`) | file source v2: glob, inode identity, rotation/truncation, symlinks, per-file state, `close_inactive`/`ignore_older`, `max_line_bytes`/`oversize`, `file_path`/host metadata; `fields` transform | scenario matrix green: kill -9 / rotation / copytruncate / symlink / deleted-file; restart resumes per file; state format v1→v2 compat test |
+| **P3** (`78356aa`) | multiline aggregation; container-path metadata; verify lints (§2.6.3); collection metrics | stack-trace aggregation test; lint tests; metrics asserted against `/metrics` |
+| **P4** (`bad6876`) | `docs/tuning.md` (symptom → metric → knob table, sizing formulas); alert notes (incl. `vl_http_errors_total`); `scripts/bench-collect.sh` | doc index updated; bench script runs and prints reference numbers |
 
 Order rationale: P0 makes the destination reachable; P1 is the prerequisite
 for any real log rate; P2/P3 are the correctness work; P4 makes the tuning
 surface usable.
+
+**Final acceptance (2026-09-25).** The frozen tree passed the full suite with
+`-count=1`, `-race` across store, engine, registry/builtin, ops, ir, verify and
+cli, and `golangci-lint` with zero issues; every shipped example verifies with
+zero warnings; the gated integration test was re-run against a live VictoriaLogs
+(v1.52.0) and still ingests and queries the collected rows back; cross-compilation
+passes for linux, darwin and freebsd; the P1 gate shape measured 20.4–25.4 K
+rows/s and the P4 collection benchmark 7.4–8.7 K lines/s (512 B) / 4.65–6.1 K
+lines/s (4 KiB) on the reference machine. Two pre-existing defects were found
+and fixed on the way: the commit-tracker straggler (P1, reproduced at HEAD
+before the fix) and the baseline gofmt break (`29b63ed`).
 
 ---
 
