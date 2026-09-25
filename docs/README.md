@@ -31,6 +31,7 @@ checklist, which is repo-only).
 - [WASM transforms](wasm.md)
 - [Kubernetes deployment](k8s.md)
 - [Collecting logs (files → VictoriaLogs)](collector.md)
+- [Tuning log collection (files → VictoriaLogs)](tuning.md)
 - [Naming checklist](naming-checklist.md) — internal working notes
 
 ## Design archive — `docs/design/`

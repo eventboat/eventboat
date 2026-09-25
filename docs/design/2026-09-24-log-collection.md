@@ -2,7 +2,7 @@
 
 | 状态 Status | 日期 Date | 关联 Links |
 |---|---|---|
-| Draft — P0–P3 implemented | 2026-09-24 | [Architecture deepening](../design/2026-09-23-architecture-deepening.md) (batch-flush direction, §R-B1) · [`competitor-research.md`](../../competitor-research.md) §4 (Fluentd / Fluent Bit) · [Kubernetes deployment](../k8s.md) · [`scripts/bench-gate.sh`](../../scripts/bench-gate.sh) |
+| Draft — P0–P4 implemented | 2026-09-24 | [Architecture deepening](../design/2026-09-23-architecture-deepening.md) (batch-flush direction, §R-B1) · [`competitor-research.md`](../../competitor-research.md) §4 (Fluentd / Fluent Bit) · [Kubernetes deployment](../k8s.md) · [`scripts/bench-gate.sh`](../../scripts/bench-gate.sh) |
 
 This document is the design of record for using Eventboat as the log
 collector in a file-based collection scenario — host files and container logs,
@@ -259,6 +259,10 @@ telemetry, **pipeline** for per-pipeline semantics. Principles:
 - **Evidence discipline**: `scripts/bench-collect.sh` (source → VL-shaped
   sink, configurable line size and rate) so operators tune on their own
   hardware; the CI `bench-gate.sh` remains a loose regression gate.
+  **Landed (P4, 2026-09-25):** `BenchmarkCollectE2E` and the script are in the
+  tree (one process per shape — the S2 sensitivity), the reference numbers
+  live in both the script header and `docs/tuning.md`, which is the tuning
+  surface's operator page.
 
 ---
 

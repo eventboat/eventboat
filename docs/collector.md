@@ -254,6 +254,6 @@ was already shipped.
 
 `batch.size` is the throughput lever (one POST per batch; a sink has exactly
 one goroutine by design). The symptom → metric → knob tables, sizing formulas
-and the guardrails for the new knobs live in the design document
-([§2.6](design/2026-09-24-log-collection.md)); start there before changing
-anything.
+and the guardrails live in [Tuning log collection](tuning.md) — start there
+before changing anything. The design rationale behind the surface is in
+[§2.6](design/2026-09-24-log-collection.md) of the design document.

@@ -18,8 +18,9 @@ OTLP/HTTP push); the metric set is fixed and enumerated in
 One MeterProvider, two readers (`internal/obs/obs.go`): Prometheus
 exposition at `/metrics` and, when `telemetry.otlp_endpoint` is set, an
 OTLP/HTTP push reader (10s interval). Fully disabled telemetry costs nothing
-(noop providers; every `Obs` helper is nil-receiver safe). All 28
-instruments carry the `eventboat_` prefix:
+(noop providers; every `Obs` helper is nil-receiver safe). Every instrument
+carries the `eventboat_` prefix (the static set below, plus the per-source
+counters created lazily on first use):
 
 ### Counters
 
@@ -45,6 +46,7 @@ instruments carry the `eventboat_` prefix:
 | `eventboat_job_rows_read_total` | pipeline | rows read by job runs |
 | `eventboat_job_rows_delivered_total` | pipeline | rows delivered by job runs |
 | `eventboat_plugin_restarts_total` | plugin | supervisor respawns of crashed gRPC plugin processes (`grpc.restart: restart`) |
+| `eventboat_source_<counter>_total` | pipeline, node | per-source health counters, created lazily on first use: the `file` source's `lines_read`, `lines_skipped`, `lines_truncated`, `rotations` and `multiline_merges` (ops diffs the plugin's monotonic totals on each status snapshot and writes only positive deltas; a source restart re-baselines) |
 
 `reason_class` is the dead-letter class the engine **recorded with the
 message** (`store.DeadLetter.Class`) — `decode`, `codec`, `encode`,
@@ -63,6 +65,7 @@ became `codec`, and an `"encode:"` failure is now `encode`, never `other`).
 | `eventboat_sink_write_duration_seconds` | pipeline, node | sink batch writes (each attempt) |
 | `eventboat_job_duration_seconds` | pipeline, status | job run wall-clock |
 | `eventboat_commit_latency_seconds` | pipeline | accept-to-commit latency |
+| `eventboat_spool_append_seconds` | pipeline | durable spool append latency, group-commit wait included (P1) |
 
 ### Gauges
 

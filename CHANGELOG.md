@@ -210,6 +210,28 @@ hygiene findings.
   are created lazily and cached under a mutex; a counter regression
   re-baselines instead of writing a negative delta). The registry and engine
   stay telemetry-free — ops is the one polling seam.
+- **`docs/tuning.md` — the operator's tuning reference** (design §2.6, P4):
+  the two-layer knob map (Runtime `storage.*`/`telemetry.*` vs pipeline
+  semantics) with every implemented default and its direction, the sizing
+  rules (`max_in_flight ≈ peak rows/s × tolerated outage seconds`; spool disk
+  ≈ retention × row size × 2–3; `spool_retention` is the crash-replay window,
+  not an outage buffer; `max_line_bytes ≤` VL's `-insert.maxLineSizeBytes`;
+  the trimmed `checkpoint_interval_ms` recorded as absent), the symptom →
+  metric → knob decision table over the real `eventboat_*` instruments, the
+  monitoring/alerting section (including VictoriaLogs' `vl_http_errors_total`,
+  the only visible face of server-side skipped lines), the measurement
+  discipline (one process per shape; `bench-gate.sh` is a loose gate), the
+  guardrails and the deliberately-not-exposed list.
+- **`scripts/bench-collect.sh` and `BenchmarkCollectE2E`** (design §2.6.3,
+  P4): the end-to-end collection benchmark — a real file source tails a temp
+  file through the real engine and group-commit SQLite spool into the real
+  `victorialogs` sink, whose endpoint is a process-local HTTP server (no
+  VictoriaLogs needed). `EVENTBOAT_BENCH_LINE_BYTES` / `EVENTBOAT_BENCH_LINES`
+  / `EVENTBOAT_BENCH_RATE` shape the run; the script runs 512 B and 4 KiB
+  shapes, each in its own `go test` process (shared-process history shifts
+  these numbers — the S2 finding), prints the command and the result of each,
+  and carries the reference-machine numbers in its header, mirrored into
+  `docs/tuning.md`.
 
 ### Fixed
 
