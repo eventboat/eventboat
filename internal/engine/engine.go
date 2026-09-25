@@ -554,6 +554,13 @@ func (e *Engine) persistCheckpoint(committedThrough int64, frontiers map[string]
 	// lags the in-memory one, and trimming ahead of what a restart would
 	// replay from would turn at-least-once into loss. A failed trim is
 	// logged and retried by the next window (the sweep range only grows).
+	//
+	// The next window boundary is the next multiple of the retention span:
+	// the schedule is the same whether or not a restart resumed from a
+	// recovered checkpoint, and a large jump trims everything below
+	// persistedThrough-retention in one sweep. (Before the hole barrier the
+	// first sweep crossed the never-appended seq 0, anchoring the boundaries
+	// the same way; now it is explicit.)
 	if pt := e.persistedThrough; pt >= e.retentionDue {
 		if cutoff := pt - e.Opts.SpoolRetention; cutoff > 0 {
 			if _, err := e.Store.DeleteSpoolThrough(e.IR.Config.Name, cutoff); err != nil && e.Opts.Logf != nil {
@@ -565,7 +572,7 @@ func (e *Engine) persistCheckpoint(committedThrough int64, frontiers map[string]
 		// trimming them cannot affect the invariants — but the rows are gone
 		// from `replay` for good, which is why the sweep never runs unset.
 		e.trimDeadLetters()
-		e.retentionDue = pt + e.Opts.SpoolRetention
+		e.retentionDue = (pt/e.Opts.SpoolRetention + 1) * e.Opts.SpoolRetention
 	}
 	for name, frontier := range frontiers {
 		if c, ok := e.committers[name]; ok {
@@ -606,6 +613,27 @@ func (e *Engine) durableThrough() int64 {
 	e.persistMu.Lock()
 	defer e.persistMu.Unlock()
 	return e.flushAttempted
+}
+
+// resumeCheckpoint seeds the commit tracker's prefix cursor and the engine's
+// persistence barriers with the durable checkpoint a restart recovered (the
+// rows at or below it are committed and are never registered in this run).
+// Without it the hole barrier would stop at the first pre-checkpoint seq and
+// WaitCommit/Quiesced would wait for a flush that has already happened.
+func (e *Engine) resumeCheckpoint(cp int64) {
+	if cp <= 0 {
+		return
+	}
+	e.commit.resumeFrom(cp)
+	e.persistMu.Lock()
+	if cp > e.persistedThrough {
+		e.persistedThrough = cp
+	}
+	if cp > e.flushAttempted {
+		e.flushAttempted = cp
+	}
+	e.persistMu.Unlock()
+	e.Metrics.CheckpointPtr.Store(cp)
 }
 
 // codec resolves a codec by name: named `codecs:` declarations come
@@ -697,6 +725,12 @@ func (e *Engine) replaySpool() error {
 	if err != nil {
 		return fmt.Errorf("engine: read checkpoint: %w", err)
 	}
+	// Rows at or below the recovered checkpoint are committed by definition
+	// and this run never registers them (the scan below starts beyond it):
+	// seed the prefix cursor and the persistence barriers so the BF1 hole
+	// barrier starts past them and WaitCommit/Quiesced do not wait for a
+	// flush that already happened.
+	e.resumeCheckpoint(cp)
 	err = e.Store.ReplayFrom(e.IR.Config.Name, cp, func(seq int64, msg registry.Message, ingestTime time.Time) error {
 		node, intoNode, ok := e.replayEntry(msg)
 		if !ok {

@@ -18,6 +18,17 @@ type commitTracker struct {
 	arrivedMax   int64         // highest seq appended (and pre-registered)
 	committedPtr int64         // next candidate seq for the contiguous prefix
 
+	// removed marks spool seqs whose outstanding entry was INTENTIONALLY
+	// deleted without a terminal branch event (forceTerminal: the abandon
+	// path wrote a durable dead letter first). The sweep may cross a seq that
+	// has no outstanding entry only when it is marked here; an unmarked
+	// absence is a message in the AppendSpool→arrived window — durable but
+	// not yet registered — and the checkpoint must not cross it (BF1: the
+	// old "absence = committed" rule let a crash skip that row; a no-cursor
+	// source could not re-emit it). Marks are consumed by the sweep and are
+	// bounded by the in-flight window, like the srcRefs queue.
+	removed map[int64]bool
+
 	// srcRefs is the FIFO of source emissions awaiting their commit sweep,
 	// ordered by spool seq (this run only). Arrival is near-ordered: each
 	// source goroutine appends and registers back-to-back, but two sources
@@ -48,9 +59,14 @@ func newCommitTracker(pipeline string, sources []string, onCommit func(int64), o
 	t := &commitTracker{
 		pipeline:    pipeline,
 		outstanding: map[int64]int{},
+		removed:     map[int64]bool{},
 		srcs:        map[string]*srcTracker{},
-		onCommit:    onCommit,
-		onAdvance:   onAdvance,
+		// Spool seqs start at 1: the first candidate for the contiguous
+		// prefix is 1, not the zero value (which no row can carry and which
+		// the hole barrier must not stop at).
+		committedPtr: 1,
+		onCommit:     onCommit,
+		onAdvance:    onAdvance,
 	}
 	for _, s := range sources {
 		t.srcs[s] = newSrcTracker()
@@ -118,16 +134,25 @@ func (t *commitTracker) add(seq int64, delta int) {
 	justCommit, advanced, through, frontiers := t.advanceLocked()
 	if straggler {
 		// Straggler registration: the seq landed after the contiguous-prefix
-		// sweep had already passed it (the AppendSpool→arrived window under
-		// concurrent sources; group commit widens it, since a batch's
-		// waiters wake in completion order, not seq order). advanceLocked
-		// never looks below committedPtr, so without this branch the
-		// message's terminal event is lost: its admission slot, accept-time
-		// entry and commit count leak while openBranches silently reads
-		// zero. The sweep has already treated the seq as committed for
+		// sweep had already passed it — the forceTerminal→arrived race (the
+		// abandon path force-terminates a message while its arrival is still
+		// in flight, and the sweep then crosses the seq on the mark).
+		// advanceLocked never looks below committedPtr, so without this
+		// branch the message's terminal event is lost: its admission slot,
+		// accept-time entry and commit count leak while openBranches silently
+		// reads zero. The sweep has already treated the seq as committed for
 		// checkpoint purposes, so only the per-message hook is owed here.
 		delete(t.outstanding, seq)
 		justCommit = append(justCommit, seq)
+		// The sweep also never sweeps the straggler's source refs (BF3: the
+		// per-source frontier stalled below the checkpoint and the refs /
+		// arrivedAt entries leaked). Pop everything left under the cursor
+		// here; a moved frontier marks the advance observable so
+		// persistCheckpoint posts it.
+		var swept bool
+		frontiers, swept = t.sweepSrcRefsLocked(t.committedPtr - 1)
+		advanced = advanced || swept
+		through = t.committedPtr - 1
 	}
 	t.mu.Unlock()
 	t.invoke(justCommit, advanced, through, frontiers)
@@ -136,7 +161,9 @@ func (t *commitTracker) add(seq int64, delta int) {
 // forceTerminal removes a message from the outstanding set without a terminal
 // branch event (canceled runs dead-letter outstanding messages directly,
 // M2 review R2). It reports whether the message was actually outstanding.
-// The checkpoint prefix may then advance past it.
+// The checkpoint prefix may then advance past it: the removal is recorded in
+// the removed marks so the sweep knows the absence is intentional, not a
+// message still between AppendSpool and arrived.
 func (t *commitTracker) forceTerminal(seq int64) bool {
 	t.mu.Lock()
 	if _, open := t.outstanding[seq]; !open {
@@ -145,6 +172,7 @@ func (t *commitTracker) forceTerminal(seq int64) bool {
 	}
 	t.openBranches -= posBranches(t.outstanding[seq])
 	delete(t.outstanding, seq)
+	t.removed[seq] = true
 	justCommit, advanced, through, frontiers := t.advanceLocked()
 	t.mu.Unlock()
 	t.invoke(justCommit, advanced, through, frontiers)
@@ -156,24 +184,49 @@ func (t *commitTracker) done(seq int64) { t.add(seq, -1) }
 
 // advanceLocked runs the contiguous-prefix scan under t.mu and returns the
 // callback payload; it must not itself invoke the callbacks.
+//
+// A seq with no outstanding entry is passable only when it carries a removed
+// mark (forceTerminal: intentionally terminated, already dead-lettered
+// durably). An unmarked absence is a hole — the row was appended but its
+// admission has not run arrived() yet — and the scan stops there: treat the
+// hole as committed and a crash would replay from beyond a row that was never
+// delivered (BF1; with a cursor source the watermark re-sends it, but cron and
+// http_server have no cursor and the row is lost forever). The window is
+// narrow but the old "absence = committed" rule made it a loss.
 func (t *commitTracker) advanceLocked() (justCommit []int64, advanced bool, through int64, frontiers map[string]int64) {
 	for t.committedPtr <= t.arrivedMax {
-		if n, open := t.outstanding[t.committedPtr]; !open || n <= 0 {
-			if open {
-				delete(t.outstanding, t.committedPtr)
-				justCommit = append(justCommit, t.committedPtr)
-			}
-			t.committedPtr++
-			advanced = true
-			continue
+		n, open := t.outstanding[t.committedPtr]
+		if open && n > 0 {
+			break // live branches: the prefix stops at the lowest one
 		}
-		break
+		if !open && !t.removed[t.committedPtr] {
+			break // the hole barrier: durable but not yet registered
+		}
+		if open {
+			// Drained but not yet swept: this is the normal terminal path.
+			justCommit = append(justCommit, t.committedPtr)
+		}
+		// The mark (when present) has been consumed, and a stale mark from a
+		// racing re-registration cannot outlive its seq.
+		delete(t.outstanding, t.committedPtr)
+		delete(t.removed, t.committedPtr)
+		t.committedPtr++
+		advanced = true
 	}
-	if len(justCommit) == 0 && !advanced {
+	if !advanced {
 		return
 	}
 	through = t.committedPtr - 1
+	frontiers, _ = t.sweepSrcRefsLocked(through)
+	return
+}
+
+// sweepSrcRefsLocked pops the srcRefs prefix at or below through and advances
+// the matching per-source frontiers; it returns the post-sweep frontier map
+// and whether any ref was popped. Callers hold t.mu.
+func (t *commitTracker) sweepSrcRefsLocked(through int64) (map[string]int64, bool) {
 	committed := map[string][]int64{}
+	swept := false
 	// Pop the swept prefix off the srcRefs FIFO (head-first; addSrcRef keeps
 	// the queue ordered). Re-slicing drops the entry without a second
 	// structure, and append reclaims the consumed capacity on its next
@@ -182,17 +235,18 @@ func (t *commitTracker) advanceLocked() (justCommit []int64, advanced bool, thro
 		ref := t.srcRefs[0].srcRef
 		t.srcRefs = t.srcRefs[1:]
 		committed[ref.node] = append(committed[ref.node], ref.srcSeq)
+		swept = true
 	}
 	for node, seqs := range committed {
 		if st, ok := t.srcs[node]; ok {
 			st.committed(seqs)
 		}
 	}
-	frontiers = make(map[string]int64, len(t.srcs))
+	frontiers := make(map[string]int64, len(t.srcs))
 	for node, st := range t.srcs {
 		frontiers[node] = st.frontier()
 	}
-	return
+	return frontiers, swept
 }
 
 // invoke runs the commit callbacks WITHOUT holding t.mu (beta hardening:
@@ -236,6 +290,22 @@ func posBranches(v int) int {
 		return v
 	}
 	return 0
+}
+
+// resumeFrom moves the prefix cursor to the durable checkpoint of a restart:
+// seqs at or below committedThrough are committed (the recovered run replays
+// strictly beyond them) and this run never registers them, so the hole
+// barrier must start at committedThrough+1. arrivedMax is raised to match,
+// keeping committedThrough <= arrivedMax true from the first snapshot.
+func (t *commitTracker) resumeFrom(committedThrough int64) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if committedThrough+1 > t.committedPtr {
+		t.committedPtr = committedThrough + 1
+	}
+	if t.committedPtr-1 > t.arrivedMax {
+		t.arrivedMax = t.committedPtr - 1
+	}
 }
 
 // snapshot reports counters for tests and status output. The outstanding

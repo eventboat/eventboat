@@ -23,12 +23,23 @@ var ErrClosed = errors.New("store: closed")
 const (
 	defaultWriteBatchRows = 256
 	defaultWriteBatchWait = 2 * time.Millisecond
+	// maxWriteBatchRows caps MaxRows: one spool row binds 9 SQL variables,
+	// and a multi-row INSERT past the driver's variable limit fails the whole
+	// transaction, rejecting every waiter in it. The refused source re-emits,
+	// the same oversized batch forms again and fails again — a livelock, not
+	// a transient error. 2000 rows is 18000 bindings, measured to commit; the
+	// driver rejects 36000 (4000 rows). runtimecfg validates the same bound
+	// before the value reaches the store; normalized clamps as the defense
+	// for options built directly in code.
+	maxWriteBatchRows = 2000
 )
 
 // WriteOptions tunes the SQLite group-commit writer.
 type WriteOptions struct {
 	// MaxRows caps one group-commit transaction's spool rows (the
-	// storage.write_batch.max_rows knob). Values <= 0 mean the default (256).
+	// storage.write_batch.max_rows knob). Values <= 0 mean the default (256);
+	// values above maxWriteBatchRows are clamped to it (18000 SQL bindings —
+	// see maxWriteBatchRows).
 	MaxRows int
 
 	// MaxWait is the ceiling on how long a queued write may wait for
@@ -56,10 +67,16 @@ func DefaultWriteOptions() WriteOptions {
 }
 
 // normalized applies the defaults: a non-positive MaxRows means the default
-// batch size; a negative MaxWait means write-through (0).
+// batch size; a negative MaxWait means write-through (0); a MaxRows beyond the
+// SQL-variable budget is clamped rather than rejected, because an options
+// value built in code (not through runtimecfg) must not be able to livelock
+// the writer with a batch that can never commit.
 func (o WriteOptions) normalized() WriteOptions {
 	if o.MaxRows <= 0 {
 		o.MaxRows = defaultWriteBatchRows
+	}
+	if o.MaxRows > maxWriteBatchRows {
+		o.MaxRows = maxWriteBatchRows
 	}
 	if o.MaxWait < 0 {
 		o.MaxWait = 0
@@ -445,6 +462,14 @@ func (w *writer) execute(batch []*writeReq) {
 // contract (nothing durable, safe to re-emit).
 func (w *writer) commitGroup(ctx context.Context, appends []*writeReq, stmts *writeStatements) {
 	start := time.Now()
+	if stmts != nil {
+		// A waiter an earlier transaction already satisfied is resolved
+		// BEFORE the transaction: its value is durable, so it must not be
+		// rejected when an unrelated statement of this group fails and rolls
+		// the transaction back (the coalescing promise: "a superseded caller
+		// still succeeds").
+		w.resolveSatisfied(stmts)
+	}
 	errTx := w.withTx(ctx, len(appends), func(tx *sql.Tx) error {
 		if len(appends) > 0 {
 			if err := insertSpoolRows(ctx, tx, appends); err != nil {
@@ -481,6 +506,37 @@ func (w *writer) commitGroup(ctx context.Context, appends []*writeReq, stmts *wr
 		for _, r := range stmts.rest {
 			r.resolve(errTx)
 		}
+	}
+}
+
+// resolveSatisfied succeeds and unlinks the coalesced waiters an earlier
+// transaction already satisfied: a checkpoint at or below the durable high
+// water mark, a source state at or below its stored frontier. They must not
+// ride this transaction at all — a failing sibling statement (or the commit
+// itself) would otherwise reject them with an error for a value that is
+// already durable. Runs on the writer goroutine, before the transaction, so
+// the high-water marks it reads are the writer's own. execStatements keeps
+// its skip checks as defense for any entry that slips through.
+func (w *writer) resolveSatisfied(stmts *writeStatements) {
+	for i := range stmts.checkpoints {
+		cp := &stmts.checkpoints[i]
+		if cp.seq > w.cpSeqs[cp.pipeline] {
+			continue
+		}
+		for _, r := range cp.waiters {
+			r.resolve(nil)
+		}
+		cp.waiters = nil
+	}
+	for i := range stmts.sourceStates {
+		ss := &stmts.sourceStates[i]
+		if ss.srcSeq > w.srcSeqs[sourceKey(ss.pipeline, ss.source)] {
+			continue
+		}
+		for _, r := range ss.waiters {
+			r.resolve(nil)
+		}
+		ss.waiters = nil
 	}
 }
 

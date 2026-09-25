@@ -3,6 +3,7 @@ package runtimecfg
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -108,6 +109,21 @@ func TestWriteBatchConfig(t *testing.T) {
 	}
 	if _, err = write("kind: Runtime\nstorage:\n  write_batch:\n    max_rows: -1\n"); err == nil {
 		t.Error("negative max_rows accepted")
+	}
+	// The upper bound: one row binds 9 SQL variables; a larger batch makes
+	// the whole INSERT uncommittable, so the operator's config is rejected
+	// with the bound and the reason (BF2).
+	if _, err = write("kind: Runtime\nstorage:\n  write_batch:\n    max_rows: 2001\n"); err == nil {
+		t.Error("max_rows above the SQL-variable budget accepted")
+	} else if !strings.Contains(err.Error(), "2000") {
+		t.Errorf("max_rows bound error = %v, want the 2000-row upper bound named", err)
+	}
+	st, err = write("kind: Runtime\nstorage:\n  write_batch:\n    max_rows: 2000\n")
+	if err != nil {
+		t.Fatalf("max_rows at the upper bound rejected: %v", err)
+	}
+	if st.WriteBatch.MaxRows != 2000 {
+		t.Fatalf("max_rows at the upper bound = %d, want 2000", st.WriteBatch.MaxRows)
 	}
 	if _, err = write("kind: Runtime\nstorage:\n  write_batch:\n    max_wait_ms: -1\n"); err == nil {
 		t.Error("negative max_wait_ms accepted")

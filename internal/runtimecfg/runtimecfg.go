@@ -49,13 +49,25 @@ type WriteBatch struct {
 	// MaxRows caps one multi-row spool INSERT (write_batch.max_rows). Larger
 	// batches amortize the transaction; the group is bounded by how many
 	// callers are blocked on the store at once, so this is a ceiling, not a
-	// trigger. Must be >= 1.
+	// trigger. Must be in [1, maxWriteBatchRows]: one spool row binds 9 SQL
+	// variables, and past 2000 rows (18000 bindings) the driver's variable
+	// limit rejects the statement — failing the whole group and rejecting
+	// every waiter, which a re-emitting source turns into a livelock.
 	MaxRows int `yaml:"max_rows"`
 	// MaxWaitMs is the ceiling on how long a queued write may wait for
 	// companions before its group commits (write_batch.max_wait_ms). 0 =
 	// write-through. Must be >= 0.
 	MaxWaitMs int `yaml:"max_wait_ms"`
 }
+
+// maxWriteBatchRows is the upper bound on storage.write_batch.max_rows: one
+// spool row binds 9 SQL variables, so 2000 rows is 18000 bindings — under the
+// SQLite driver's variable limit (measured: 18000 commits, 36000 fails).
+// Beyond it one INSERT cannot commit, the whole group is refused, and a
+// re-emitting source re-forms the same batch: a livelock. Kept in sync with
+// internal/store's maxWriteBatchRows, which clamps values built directly in
+// code; this validation rejects the operator's config loudly instead.
+const maxWriteBatchRows = 2000
 
 type Admin struct {
 	Listen string `yaml:"listen"`
@@ -143,6 +155,9 @@ func Load(path string) (Config, error) {
 	}
 	if cfg.Storage.WriteBatch.MaxRows < 1 {
 		return defaults, fmt.Errorf("runtime config %s: storage.write_batch.max_rows must be >= 1 (rows per group-commit batch)", file)
+	}
+	if cfg.Storage.WriteBatch.MaxRows > maxWriteBatchRows {
+		return defaults, fmt.Errorf("runtime config %s: storage.write_batch.max_rows must be <= %d (one row binds 9 SQL variables; a larger batch exceeds the driver's variable limit, so the whole group fails and a re-emitting source repeats the same oversized batch — a livelock, not a transient error)", file, maxWriteBatchRows)
 	}
 	if cfg.Storage.WriteBatch.MaxWaitMs < 0 {
 		return defaults, fmt.Errorf("runtime config %s: storage.write_batch.max_wait_ms must be >= 0 (milliseconds; 0 = write-through)", file)

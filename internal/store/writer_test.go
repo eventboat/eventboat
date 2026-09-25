@@ -256,6 +256,61 @@ func TestGroupCommitMaxRowsCapsBatch(t *testing.T) {
 	}
 }
 
+// TestGroupCommitMaxRowsClampedCommits: an options value beyond the
+// SQL-variable budget (4000 rows = 36000 bindings, which the driver rejects)
+// must be clamped to maxWriteBatchRows, not formed into an uncommittable
+// statement: the whole group used to be refused and a re-emitting source
+// re-formed the same oversized batch — a livelock, not a transient failure.
+// One parked group of 4000 appends spills into two clamped transactions and
+// every waiter succeeds.
+func TestGroupCommitMaxRowsClampedCommits(t *testing.T) {
+	st := openGroupCommitStore(t, 4000, time.Second)
+	if got := st.w.opts.MaxRows; got != maxWriteBatchRows {
+		t.Fatalf("store MaxRows = %d, want the clamp to %d", got, maxWriteBatchRows)
+	}
+	t.Logf("MaxRows 4000 clamped to %d (18000 SQL bindings)", maxWriteBatchRows)
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var calls atomic.Int32
+	hook := func(int) error {
+		if calls.Add(1) == 1 {
+			close(started)
+			<-release
+		}
+		return nil
+	}
+	st.w.testBatchHook.Store(&hook)
+
+	now := time.Now()
+	go func() { _, _ = st.AppendSpool("p", writerTestMessage("first"), now) }()
+	<-started
+
+	const n = 4000
+	errs := make([]error, n)
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			_, errs[i] = st.AppendSpool("p", writerTestMessage(fmt.Sprintf("m-%d", i)), now)
+		}(i)
+	}
+	waitQueueLen(t, st.w, n)
+	close(release)
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("append %d failed under the clamp: %v", i, err)
+		}
+	}
+	if rows := spoolCount(t, st); rows != n+1 {
+		t.Fatalf("spool rows = %d, want %d (no group may be lost to an uncommittable statement)", rows, n+1)
+	}
+	t.Logf("%d appends committed through the clamped %d-row batches; spool holds %d rows", n+1, maxWriteBatchRows, n+1)
+}
+
 // TestGroupCommitFailureFailsWholeBatch: a failing group-commit transaction
 // refuses every waiter it carried (the refusal contract: nothing durable, the
 // source re-emits), and leaves no row behind.
@@ -296,6 +351,80 @@ func TestGroupCommitFailureFailsWholeBatch(t *testing.T) {
 	if rows := spoolCount(t, st); rows != 1 {
 		t.Fatalf("spool rows after recovery = %d, want 1", rows)
 	}
+}
+
+// TestGroupCommitSupersededCheckpointSurvivesFailingBatch: a coalesced
+// checkpoint whose value an earlier transaction already wrote is satisfied by
+// that durable value — it must resolve successfully even when an unrelated
+// member of its group fails the transaction, because the plan's promise is
+// "a superseded caller still succeeds". Before the fix, execStatements
+// skipped the upsert but commitGroup resolved every waiter of the rolled-back
+// transaction with the error.
+func TestGroupCommitSupersededCheckpointSurvivesFailingBatch(t *testing.T) {
+	st := openGroupCommitStore(t, 16, time.Second)
+
+	// The durable high-water mark: checkpoint 10 already landed.
+	if err := st.SetCheckpoint("p", 10); err != nil {
+		t.Fatal(err)
+	}
+
+	// Every transaction from here on fails, but the writer parks inside its
+	// first (seed) transaction so the superseded checkpoint and a rest
+	// request (a dead letter) queue into ONE group behind it.
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var calls atomic.Int32
+	injected := errors.New("injected batch failure")
+	hook := func(int) error {
+		if calls.Add(1) == 1 {
+			close(started)
+			<-release
+			return nil
+		}
+		return injected
+	}
+	st.w.testBatchHook.Store(&hook)
+
+	now := time.Now()
+	seed := make(chan error, 1)
+	go func() {
+		_, err := st.AppendSpool("p", writerTestMessage("seed"), now)
+		seed <- err
+	}()
+	<-started
+
+	cpErr := make(chan error, 1)
+	dlErr := make(chan error, 1)
+	go func() { cpErr <- st.SetCheckpoint("p", 5) }() // superseded by 10
+	go func() {
+		dlErr <- st.WriteDeadLetter(DeadLetter{
+			Pipeline: "p", MessageID: "m", Node: "out", Reason: "x",
+			Raw: []byte(`{}`), CreatedAt: now,
+		})
+	}()
+	waitQueueLen(t, st.w, 2)
+	close(release)
+
+	if err := <-seed; err != nil {
+		t.Fatalf("seed append: %v", err)
+	}
+	if err := <-cpErr; err != nil {
+		t.Fatalf("superseded checkpoint rejected with the failing batch: %v", err)
+	}
+	if err := <-dlErr; !errors.Is(err, injected) {
+		t.Fatalf("rest waiter err = %v, want the injected batch failure", err)
+	}
+	if cp, _ := st.Checkpoint("p"); cp != 10 {
+		t.Fatalf("checkpoint = %d, want 10 (the durable high-water mark is untouched)", cp)
+	}
+	dls, err := st.DeadLetters("p")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(dls) != 0 {
+		t.Fatalf("failed batch left %d dead letters behind", len(dls))
+	}
+	t.Logf("superseded checkpoint resolved nil while the rest of the group failed with %q; checkpoint stayed 10, no dead letters", injected)
 }
 
 // TestCloseRefusesInFlightAppends: Close must never leave a writer caller
@@ -521,13 +650,22 @@ func TestPlanWriteBatchFolds(t *testing.T) {
 }
 
 // TestWriteOptionsNormalized pins the option defaults: a zero MaxRows means
-// the 256-row default, a negative MaxWait means write-through.
+// the 256-row default, a negative MaxWait means write-through, and a MaxRows
+// past the SQL-variable budget is clamped to maxWriteBatchRows (BF2: the
+// clamp is the defense for options built in code, runtimecfg rejects the
+// operator's value loudly).
 func TestWriteOptionsNormalized(t *testing.T) {
 	if got := (WriteOptions{}).normalized(); got.MaxRows != 256 || got.MaxWait != 0 {
 		t.Fatalf("zero options = %+v", got)
 	}
 	if got := (WriteOptions{MaxRows: 8, MaxWait: -time.Second}).normalized(); got.MaxRows != 8 || got.MaxWait != 0 {
 		t.Fatalf("negative wait = %+v", got)
+	}
+	if got := (WriteOptions{MaxRows: 4000}).normalized(); got.MaxRows != maxWriteBatchRows {
+		t.Fatalf("over-budget MaxRows = %+v, want the clamp to %d", got, maxWriteBatchRows)
+	}
+	if got := (WriteOptions{MaxRows: maxWriteBatchRows}).normalized(); got.MaxRows != maxWriteBatchRows {
+		t.Fatalf("at-budget MaxRows = %+v, want %d unchanged", got, maxWriteBatchRows)
 	}
 	if got := DefaultWriteOptions(); got.MaxRows != 256 || got.MaxWait != 2*time.Millisecond {
 		t.Fatalf("default options = %+v", got)
