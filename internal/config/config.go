@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/eventboat/eventboat/internal/framework"
+	"github.com/eventboat/eventboat/internal/schema"
 )
 
 // Section identifies which of the three topology sections a node belongs to.
@@ -255,16 +255,16 @@ type EdgeAttrs struct {
 // edge defaults.
 func (p *Pipeline) MaterializeEdgeDefaults() {
 	if p.EdgeDefaults.Delivery == nil {
-		p.EdgeDefaults.Delivery = &Delivery{Retries: framework.DeliveryRetriesDefault, Backoff: framework.DeliveryBackoffDefault}
+		p.EdgeDefaults.Delivery = &Delivery{Retries: schema.DeliveryRetriesDefault, Backoff: schema.DeliveryBackoffDefault}
 	} else if p.EdgeDefaults.Delivery.Backoff == "" {
-		p.EdgeDefaults.Delivery.Backoff = framework.DeliveryBackoffDefault
+		p.EdgeDefaults.Delivery.Backoff = schema.DeliveryBackoffDefault
 	}
 	if p.EdgeDefaults.Required == nil {
 		required := true
 		p.EdgeDefaults.Required = &required
 	}
 	if p.EdgeDefaults.Buffer == nil {
-		p.EdgeDefaults.Buffer = &BufferConfig{Type: "memory", MaxEvents: framework.BufferMaxDefault}
+		p.EdgeDefaults.Buffer = &BufferConfig{Type: "memory", MaxEvents: schema.BufferMaxDefault}
 	}
 }
 

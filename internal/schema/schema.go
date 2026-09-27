@@ -1,4 +1,4 @@
-// Package framework is the single source of the framework vocabulary
+// Package schema is the single source of the pipeline document schema
 // (candidate 06, design §3.5): the per-section framework fields, the
 // top-level allowed keys, the edge attributes (per container), the reserved
 // plugin names and the node-level default constants.
@@ -7,7 +7,7 @@
 // lists exists elsewhere. The registry's reserved-name set and config's node
 // whitelists come from the same source, so a name like grpc or version can no
 // longer register as a plugin that config would parse as a framework field.
-package framework
+package schema
 
 // Sections are the three topology sections, in the parse/listing order.
 var Sections = []string{"sources", "transforms", "sinks"}

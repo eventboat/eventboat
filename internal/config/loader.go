@@ -12,8 +12,8 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/eventboat/eventboat/internal/framework"
 	"github.com/eventboat/eventboat/internal/fsname"
+	"github.com/eventboat/eventboat/internal/schema"
 )
 
 // Result carries the outcome of loading one configuration file.
@@ -151,7 +151,7 @@ func LoadBytesIn(file, baseDir string, data []byte) *Result {
 	res.Pipeline = p
 
 	allowedTop := map[string]bool{}
-	for _, k := range framework.TopLevelKeys {
+	for _, k := range schema.TopLevelKeys {
 		allowedTop[k] = true
 	}
 	for _, kv := range mappingPairs(root) {
@@ -160,7 +160,7 @@ func LoadBytesIn(file, baseDir string, data []byte) *Result {
 			res.Diagnostics = append(res.Diagnostics, Diagnostic{
 				Severity: "error", Code: "cfg_unknown_top_section", File: file, Line: kv.line,
 				Message: fmt.Sprintf("unknown top-level key %q", key),
-				Hint:    "supported top-level keys: " + strings.Join(framework.TopLevelKeys, ", "),
+				Hint:    "supported top-level keys: " + strings.Join(schema.TopLevelKeys, ", "),
 			})
 		}
 	}
@@ -190,11 +190,11 @@ func LoadBytesIn(file, baseDir string, data []byte) *Result {
 			nameReported = true // the type error already names the field
 		} else {
 			for k := range meta {
-				if !framework.Has(framework.MetadataFields, k) {
+				if !schema.Has(schema.MetadataFields, k) {
 					res.Diagnostics = append(res.Diagnostics, Diagnostic{
 						Severity: "error", Code: "cfg_unknown_field", File: file, Line: lines.line("metadata", k),
 						Message: fmt.Sprintf("unknown metadata field %q", k),
-						Hint:    "allowed metadata fields: " + strings.Join(framework.MetadataFields, ", "),
+						Hint:    "allowed metadata fields: " + strings.Join(schema.MetadataFields, ", "),
 					})
 				}
 			}
@@ -468,11 +468,11 @@ func parseRun(file string, raw map[string]any, p *Pipeline, lines *lineIndex, re
 		return
 	}
 	for k := range rm {
-		if !framework.Has(framework.RunFields, k) {
+		if !schema.Has(schema.RunFields, k) {
 			res.Diagnostics = append(res.Diagnostics, Diagnostic{
 				Severity: "error", Code: "cfg_unknown_field", File: file, Line: lines.line("run"),
 				Message: fmt.Sprintf("unknown run field %q", k),
-				Hint:    "allowed: " + strings.Join(framework.RunFields, ", "),
+				Hint:    "allowed: " + strings.Join(schema.RunFields, ", "),
 			})
 		}
 	}

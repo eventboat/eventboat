@@ -18,7 +18,7 @@ import (
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
 
-	"github.com/eventboat/eventboat/internal/framework"
+	"github.com/eventboat/eventboat/internal/schema"
 )
 
 // Kind enumerates the four plugin sections.
@@ -217,10 +217,10 @@ type Codec interface {
 // framework fields or edge attributes (redesign-v3-review.md R5). script,
 // split and wasm are NOT reserved — they are the built-in transform plugin
 // names, ordinary members of the transform namespace (spec v1.19). The set
-// comes from internal/framework, the single source of the vocabulary
+// comes from internal/schema, the single source of the vocabulary
 // (candidate 06): a name like grpc or version registers nowhere and could
 // never load, so the registry refuses it.
-func reserved(name string) bool { return framework.Reserved(name) }
+func reserved(name string) bool { return schema.Reserved(name) }
 
 type sourceEntry struct {
 	name         string

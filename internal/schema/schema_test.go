@@ -1,4 +1,4 @@
-package framework
+package schema
 
 import (
 	"reflect"

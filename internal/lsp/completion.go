@@ -7,19 +7,19 @@ import (
 	"strings"
 
 	"github.com/eventboat/eventboat/internal/config"
-	"github.com/eventboat/eventboat/internal/framework"
+	"github.com/eventboat/eventboat/internal/schema"
 )
 
 // Completion context analysis is line/indent-based over the document text
 // (YAML structural parsing of half-typed documents is unreliable; the
 // heuristics target the pipeline shape: top-level sections -> node names ->
 // framework fields / plugin blocks -> plugin fields). Data sources are the
-// registry catalog, plugin JSON Schemas and internal/framework — the same
+// registry catalog, plugin JSON Schemas and internal/schema — the same
 // authorities verify enforces (candidate 06: the LSP carries no copy of the
 // vocabulary).
 
 // frameworkDocs documents the framework fields offered by completion (the
-// field lists themselves come from internal/framework).
+// field lists themselves come from internal/schema).
 var frameworkDocs = map[string]string{
 	"mode":       "run mode: continuous (default) | job (§5.8 schedules/parameters) | batch (run to completion, then exit)",
 	"schedule":   "5-field cron for job pipelines; requires run.mode: job",
@@ -243,8 +243,8 @@ func (s *Server) completionsFor(text string, line, character int) []completionIt
 
 	// Top level.
 	if encl == nil {
-		out := make([]completionItem, 0, len(framework.TopLevelKeys))
-		for _, k := range framework.TopLevelKeys {
+		out := make([]completionItem, 0, len(schema.TopLevelKeys))
+		for _, k := range schema.TopLevelKeys {
 			out = append(out, completionItem{Label: k, Kind: kindField, Detail: "top-level section", InsertText: k + ":"})
 		}
 		return filter(out)
@@ -293,9 +293,9 @@ func (s *Server) completionsFor(text string, line, character int) []completionIt
 	if nodeIdx < 0 {
 		return nil
 	}
-	frameworkKeys := framework.SectionFields(section)
+	frameworkKeys := schema.SectionFields(section)
 	isFramework := func(k string) bool {
-		return framework.Has(frameworkKeys, k)
+		return schema.Has(frameworkKeys, k)
 	}
 
 	// Collect keys already used inside the current node (avoid dupes).
@@ -432,25 +432,25 @@ func declaredCodecItems(text string) []completionItem {
 
 // pluginFieldItems lists one plugin's schema properties.
 func (s *Server) pluginFieldItems(section, plugin string) []completionItem {
-	var schema string
+	var schemaJSON string
 	switch section {
 	case "sources":
 		if m, ok := s.reg.LookupSource(plugin); ok {
-			schema = m.Schema
+			schemaJSON = m.Schema
 		}
 	case "transforms":
 		if m, ok := s.reg.LookupTransform(plugin); ok {
-			schema = m.Schema
+			schemaJSON = m.Schema
 		}
 	case "sinks":
 		if m, ok := s.reg.LookupSink(plugin); ok {
-			schema = m.Schema
+			schemaJSON = m.Schema
 		}
 	}
-	if schema == "" {
+	if schemaJSON == "" {
 		return nil
 	}
-	props, _ := parseSchemaProperties(schema)
+	props, _ := parseSchemaProperties(schemaJSON)
 	names := make([]string, 0, len(props))
 	for k := range props {
 		names = append(names, k)

@@ -129,7 +129,7 @@ replay transports sit behind it.
 **Framework vocabulary** **(settled)** — the single source of the framework
 surface: per-section framework fields, top-level keys, edge attributes,
 reserved plugin names and node-level defaults. It lives in the leaf package
-`internal/framework`, imported by config, registry and the LSP; no copy of
+`internal/schema`, imported by config, registry and the LSP; no copy of
 the lists exists elsewhere.
 
 **Declaration order** **(settled)** — `Pipeline.Order` is the YAML document

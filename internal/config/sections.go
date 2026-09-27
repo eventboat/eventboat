@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/eventboat/eventboat/internal/framework"
+	"github.com/eventboat/eventboat/internal/schema"
 )
 
 func parseSection(file string, raw map[string]any, sectionKey string, section Section, p *Pipeline, lines *lineIndex, res *Result, order []string) {
@@ -81,11 +81,11 @@ func parseNode(file, name string, section Section, nodeRaw any, line, pluginLine
 		})
 		return nil
 	}
-	whitelist := framework.SectionFields(string(section))
+	whitelist := schema.SectionFields(string(section))
 
 	var pluginKeys []string
 	for key := range m {
-		if framework.Has(whitelist, key) {
+		if schema.Has(whitelist, key) {
 			continue
 		}
 		if key == "depends_on" && section == SectionSource {
@@ -106,7 +106,7 @@ func parseNode(file, name string, section Section, nodeRaw any, line, pluginLine
 			})
 			continue
 		}
-		if key == framework.FromKey {
+		if key == schema.FromKey {
 			res.Diagnostics = append(res.Diagnostics, Diagnostic{
 				Severity: "error", Code: "cfg_from_renamed", File: file, Line: line,
 				Message: fmt.Sprintf("node %q declares \"from\"; it was renamed to \"depends_on\"", name),
@@ -267,7 +267,7 @@ func parseNode(file, name string, section Section, nodeRaw any, line, pluginLine
 	if n.Decoder == "" && section == SectionSource {
 		// Materialized at load (candidate 06): downstream layers read the
 		// typed field instead of re-applying the json default.
-		n.Decoder = framework.DecoderDefault
+		n.Decoder = schema.DecoderDefault
 	}
 	if v, ok := m["encoder"]; ok && section == SectionSink {
 		s, ok := v.(string)
@@ -281,7 +281,7 @@ func parseNode(file, name string, section Section, nodeRaw any, line, pluginLine
 		}
 	}
 	if n.Encoder == "" && section == SectionSink {
-		n.Encoder = framework.EncoderDefault
+		n.Encoder = schema.EncoderDefault
 	}
 	if v, ok := m["workers"]; ok {
 		n.Workers = asInt(v, 0)
@@ -290,11 +290,11 @@ func parseNode(file, name string, section Section, nodeRaw any, line, pluginLine
 				Severity: "error", Code: "cfg_workers_range", File: file, Line: line,
 				Message: fmt.Sprintf("workers of node %q must be >= 1", name), Hint: "",
 			})
-			n.Workers = framework.WorkersDefault
+			n.Workers = schema.WorkersDefault
 		}
 	}
 	if n.Workers == 0 {
-		n.Workers = framework.WorkersDefault
+		n.Workers = schema.WorkersDefault
 	}
 	if v, ok := m["order_key"]; ok && section == SectionSink {
 		s, ok := v.(string)
@@ -323,7 +323,7 @@ func parseNode(file, name string, section Section, nodeRaw any, line, pluginLine
 					})
 				}
 			}
-			b := &Batch{Size: framework.BatchSizeDefault}
+			b := &Batch{Size: schema.BatchSizeDefault}
 			if v, ok := bm["size"]; ok {
 				b.Size = asInt(v, 0)
 				if b.Size < 1 {
@@ -426,19 +426,19 @@ func parseDependsOn(file, node string, raw any, line int, res *Result) []Edge {
 // parseEdgeAttrs validates one edge attribute block. container is
 // "depends_on" (one edge element; from non-nil) or "edge_defaults" (the
 // pipeline-level defaults; from nil): the allowed sets come from
-// internal/framework, and edge_defaults rejects when/route — a global default
+// internal/schema, and edge_defaults rejects when/route — a global default
 // predicate is a footgun and a default route is meaningless (candidate 06).
 func parseEdgeAttrs(file, container string, from *string, attrs map[string]any, line int, res *Result) Edge {
 	e := Edge{Line: line}
 	if from != nil {
 		e.From = *from
 	}
-	allowed := framework.EdgeDependsOnAttrs
+	allowed := schema.EdgeDependsOnAttrs
 	if container == "edge_defaults" {
-		allowed = framework.EdgeDefaultsAttrs
+		allowed = schema.EdgeDefaultsAttrs
 	}
 	for k := range attrs {
-		if framework.Has(allowed, k) {
+		if schema.Has(allowed, k) {
 			continue
 		}
 		if container == "edge_defaults" && (k == "when" || k == "route") {
@@ -546,7 +546,7 @@ func parseEdgeAttrs(file, container string, from *string, attrs map[string]any, 
 					})
 				}
 			}
-			buf := &BufferConfig{Type: "memory", MaxEvents: framework.BufferMaxDefault}
+			buf := &BufferConfig{Type: "memory", MaxEvents: schema.BufferMaxDefault}
 			if v, ok := bm["type"].(string); ok && v != "" {
 				if v != "memory" {
 					res.Diagnostics = append(res.Diagnostics, Diagnostic{
@@ -563,7 +563,7 @@ func parseEdgeAttrs(file, container string, from *string, attrs map[string]any, 
 						Severity: "error", Code: "cfg_buffer_range", File: file, Line: line,
 						Message: "buffer.max_events must be >= 1", Hint: "",
 					})
-					buf.MaxEvents = framework.BufferMaxDefault
+					buf.MaxEvents = schema.BufferMaxDefault
 				}
 			}
 			e.Buffer = buf
@@ -585,7 +585,7 @@ func parseEdgeAttrs(file, container string, from *string, attrs map[string]any, 
 					})
 				}
 			}
-			d := &Delivery{Retries: framework.DeliveryRetriesDefault, Backoff: framework.DeliveryBackoffDefault}
+			d := &Delivery{Retries: schema.DeliveryRetriesDefault, Backoff: schema.DeliveryBackoffDefault}
 			if v, ok := dm["retries"]; ok {
 				d.Retries = asInt(v, -1)
 				if d.Retries < 0 {

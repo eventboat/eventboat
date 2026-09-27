@@ -30,7 +30,7 @@ transforms).
 
 In YAML, the plugin name *is* the key of a node's block; everything else at
 node level must be a framework field from the per-section whitelist
-(`internal/framework`, the single source config, the registry and the LSP
+(`internal/schema`, the single source config, the registry and the LSP
 all read — candidate 06):
 
 ```yaml

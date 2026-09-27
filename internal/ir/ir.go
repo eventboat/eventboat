@@ -1246,7 +1246,7 @@ func lintCollector(p *Pipeline, file string, add func(config.Diagnostic)) {
 				if !downstreamOfFile {
 					continue
 				}
-				size := 1 // framework.BatchSizeDefault, not repeated in typed config
+				size := 1 // schema.BatchSizeDefault, not repeated in typed config
 				if n.Config.Batch != nil {
 					size = n.Config.Batch.Size
 				}

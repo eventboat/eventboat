@@ -33,7 +33,7 @@ tool and the admin UI all render the same structs.
    and finally manifest reads for every external (`grpc:`) node. The
    whitelists, the top-level keys, the edge attributes, the reserved plugin
    names and the node-level default constants all come from the single leaf
-   package `internal/framework` (candidate 06) — config, registry and the LSP
+   package `internal/schema` (candidate 06) — config, registry and the LSP
    read one vocabulary, so a name like `grpc` or `version` cannot register as
    a plugin that config would parse as a framework field.
 
@@ -53,7 +53,7 @@ a human reads.
 `sources`, `transforms`, `sinks` — each node is `name: {plugin block, ...framework
 fields}`. `depends_on` edges join them. Sources and sinks are required; the
 transforms section is optional. Exact node-level whitelists
-(`internal/framework`, read by `internal/config/sections.go`) —
+(`internal/schema`, read by `internal/config/sections.go`) —
 
 | Section | Allowed framework fields |
 |---|---|

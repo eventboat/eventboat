@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 
-	"github.com/eventboat/eventboat/internal/framework"
+	"github.com/eventboat/eventboat/internal/schema"
 )
 
 // hover answers textDocument/hover: the token under the cursor resolved
@@ -84,22 +84,22 @@ func (s *Server) hoverValue(text string, line, character int) string {
 	// A field inside a plugin block: find the enclosing plugin key.
 	if section != "" {
 		if plugin := enclosingPlugin(stack, section); plugin != "" {
-			var schema string
+			var schemaJSON string
 			switch section {
 			case "sources":
 				if m, ok := s.reg.LookupSource(plugin); ok {
-					schema = m.Schema
+					schemaJSON = m.Schema
 				}
 			case "transforms":
 				if m, ok := s.reg.LookupTransform(plugin); ok {
-					schema = m.Schema
+					schemaJSON = m.Schema
 				}
 			case "sinks":
 				if m, ok := s.reg.LookupSink(plugin); ok {
-					schema = m.Schema
+					schemaJSON = m.Schema
 				}
 			}
-			if props, err := parseSchemaProperties(schema); err == nil {
+			if props, err := parseSchemaProperties(schemaJSON); err == nil {
 				if p, ok := props[word]; ok {
 					out := "`" + word + "`: " + p.Type
 					if p.Required {
@@ -136,7 +136,7 @@ func sectionOfStack(stack []stackEntry) string {
 // enclosingPlugin finds the nearest non-framework key under a node — the
 // plugin block the cursor is inside ("" when none).
 func enclosingPlugin(stack []stackEntry, section string) string {
-	fields := framework.SectionFields(section)
+	fields := schema.SectionFields(section)
 	for i := len(stack) - 1; i >= 0; i-- {
 		e := stack[i]
 		if e.indent == 0 {
@@ -145,7 +145,7 @@ func enclosingPlugin(stack []stackEntry, section string) string {
 		if isSection(e.key) {
 			continue
 		}
-		if !framework.Has(fields, e.key) {
+		if !schema.Has(fields, e.key) {
 			return e.key
 		}
 	}
